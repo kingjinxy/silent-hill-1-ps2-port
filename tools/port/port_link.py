@@ -139,13 +139,18 @@ def main():
 
     objs = {name: [p for p in (ee_object(o) for o in ld_objects(ld)) if p] for name, ld in scripts.items()}
 
-    # Port runtime sources.
+    # Port runtime sources, and Sony/Konami library code recompiled by tools/port/recomp_all.sh.
     port_objs = []
     for src in sorted(glob.glob("src/port/*.c")):
         obj = os.path.join(OUT, "port", os.path.basename(src) + ".o")
         os.makedirs(os.path.dirname(obj), exist_ok=True)
         run([CC, "-c", *PORT_CFLAGS, src, "-o", obj])
         port_objs.append(obj)
+    run(["tools/port/recomp_all.sh"])
+    for src in sorted(glob.glob(OUT + "/recomp/*.c")):
+        run([CC, "-c", "-O2", "-G0", "-std=gnu89", "-fno-builtin", "-nostdinc", "-Iinclude", src, "-o", src[:-2] + ".o"])
+        run([CC, "-c", "-G0", src[:-2] + ".data.s", "-o", src[:-2] + ".data.o"])
+        port_objs += [src[:-2] + ".o", src[:-2] + ".data.o"]
 
     parts = []
     for name in sorted(n for n in objs if n.startswith("map")):

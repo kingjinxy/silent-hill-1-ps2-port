@@ -163,8 +163,10 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 | libetc | 3 | VSync, callbacks |
 | ours | 3 | `g_MapOverlayHdr` (current-map pointer), `g_FsBuffer18/20` (arena) |
 
-- [ ] libgte + libkmath (on the software GTE; can be tested against the PS1 libraries the same way
-      as the GTE)
+- [x] libgte + libkmath: recompiled from Sony's/Konami's PS1 objects by `tools/port/recomp.py`
+      (`tools/port/recomp_all.sh`); `InitGeom` hand-written (`src/port/libgte_port.c`). Verified
+      against the PS1 originals with `tools/port/lib_test` (48 functions, 384 tests, 0 diffs).
+      `GsTMDfast*` (also libgte) still to test, with libgs
 
 ### Step 4 — Graphics (libgpu → GS)
 

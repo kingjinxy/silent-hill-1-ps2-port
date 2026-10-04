@@ -492,3 +492,49 @@ that GCC 15 doesn't produce. It's a standalone bss-gap variable, so the port sim
 
 Result: no duplicate definitions (game vs ps2sdk/newlib), 193 undefined symbols, grouped by the
 Sony library that defined them on PS1 — table in the Planning Doc ("HAL inventory").
+
+---
+
+## 2026-10-04 — libgte and libkmath via a static recompiler
+
+The game needs 45 libgte functions (~1,700 instructions) and Konami's libkmath (11 functions, ~400
+instructions; `src/bodyprog/libkmath/libkmath.s`); libgs is another ~2,100. Rather than hand-port
+these (and risk small numeric differences the game is sensitive to), they're recompiled from the
+PS1 machine code.
+
+### `tools/port/recomp.py` (+ `include/port/recomp.h`)
+
+Reads a PS1 relocatable object (pyelftools), decodes MIPS-I itself, and writes `<obj>.c` plus
+`<obj>.data.s` (the object's data sections, relocated words as `.word sym+addend`, assembled for
+the EE). Each function becomes `void rc_<name>(RcRegs* r)` over a shared register file, one label
+per instruction; global functions get a wrapper with the original name, sized from the PSY-Q
+prototypes, that sets up registers and an emulated stack (args 5+ at sp+16, as o32 expects).
+Semantics kept: branch delay slots (condition evaluated before the slot), load delays when the next
+instruction reads the loaded register, HI/LO and MIPS DIV-by-zero results, unaligned lwl/lwr/swl/swr,
+COP2 via `gte.c`, HI16/LO16 relocation pairing. Works because EE pointers are 32-bit too.
+Hand-asm idioms handled: calls/branches/jumps into the middle of another function (made separate
+entry points; crossing becomes a tail call), `jr` through a saved copy of `$ra` (a return), `j` with
+a relocation inside the same function (a goto). Unsupported input (COP0, jump tables, a load delay
+hazard into a branch) is a hard error.
+
+`tools/port/recomp_all.sh` recompiles the 42 libgte objects the game needs and libkmath into
+`build/port/recomp/`; `port_link.py` compiles them in. `tools/port/recomp_protos.h` gives argument
+counts for libkmath functions no header declares (map7_s03 calls `Math_RotMatrixZxy` implicitly).
+`Math_RotMatrixGte` gets no wrapper: it's an internal helper with a non-C convention (inputs in
+`$v0/$v1/$a3`, results in `$t` registers). `InitGeom` (patches the PS1 kernel via COP0) is
+hand-written in `src/port/libgte_port.c`: it only sets ZSF3/ZSF4/H/DQA/DQB/OFX/OFY defaults.
+
+### Verification: `tools/port/lib_test`
+
+Same idea as the GTE test, for library functions: test list and call stubs generated from the
+prototypes; pointer arguments point into a 2 KB arena of pseudo-random data, integers are
+pseudo-random, GTE registers set to realistic random values. The PS1 build links Sony's *original*
+objects (`lib/libgte/*.o` as an archive, plus the PS1 libkmath object) and runs in DuckStation; the EE
+build links the recompiled code, embeds the PS1 results and runs in PCSX2 (`pcsx2_run.py`),
+comparing return value (pointers as arena offsets), the whole arena and all 64 GTE registers.
+`python3 tools/port/lib_test/run.py`.
+
+Result: 48 functions × 8 tests, 0 differences. (`GsTMDfast*` need real TMD data; tested with libgs.)
+
+HAL inventory after this: 140 undefined symbols (libgs 31, libgpu 30, libcd 19, libspu 19, libapi 15,
+libpad 8, libcard 7, libpress 5, libetc 3, ours 3).
