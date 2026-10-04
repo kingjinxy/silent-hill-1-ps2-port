@@ -178,10 +178,9 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [x] `build/port/sh1.elf` links (110 HAL functions auto-stubbed, each logging its first calls) and
       runs the game's PS1 `main` in PCSX2: ResetCallback, CdInit, VSync, ResetGraph, ClearImage2,
       DrawSync, PutDispEnv, SpuInit, then the file queue retries CD reads forever (stubs)
-- [x] DVD image: `tools/port/make_iso.sh` → `build/port/sh1_ps2.iso` (`tools/port/mkiso.py`: ISO9660,
-      2048-byte sectors, padded past CD capacity so it's DVD media)
-- [ ] PCSX2 + SCPH-10000 v1.00 BIOS can't open any file on the image as DVD media (boots as CD media).
-      Test with a later BIOS; until then develop by booting the ELF directly
+- [x] DVD image: `tools/port/make_iso.sh` → `build/port/sh1_ps2.iso` (`tools/port/mkiso.py`:
+      ISO9660, 2048-byte sectors, retail PS2 DVD layout — path tables at 257, root at 261, root size
+      = bytes used). Boots as DVD media in PCSX2 with both the v1.00 and v1.60 BIOS
 - [ ] Title ID `SHPS_000.01` is a placeholder (SYSTEM.CNF, ELF name, memory card folder)
 - [ ] Next: overlay-load hook + `g_MapOverlayHdr` pointer (currently fixed to map0_s00), then libcd →
       sceCd reads from SILENT./HILL. on the disc, VSync/timers, then libgpu

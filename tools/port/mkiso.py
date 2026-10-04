@@ -5,14 +5,17 @@
 
 Flat root directory only; files are written in the order given. 2048-byte sectors (DVD media).
 
-The volume is padded to at least DVD_MIN_SECTORS (zeroed sectors after the last file, written
-sparsely): more than a CD can hold, so the image is DVD media (PCSX2: CDVDcommon.cpp FindDiskType,
-> 452849 sectors = DVD; below that it guesses from the PVD's root directory record). Real hardware
-goes by the physical disc; padding is common on PS2 DVDs. All fields are standard ISO9660.
-
-Known issue (2026-10-04): with the SCPH-10000 v1.00 BIOS, PCSX2 can't open any file on the image as
-DVD media (BIOS: "open fail name SYSTEM.CNF;1"), with or without a UDF bridge, fast or slow boot; as
-CD media the same image boots. Still to test with a later BIOS. Booting the ELF directly works.
+Layout follows retail PS2 DVDs (checked against Silent Hill 2): L/M path tables at sectors 257/259,
+root directory at 261, and the root directory's recorded size is the bytes actually used rather than
+a whole sector. Both matter:
+  - On DVD media the BIOS reads the path table at 257 (seen with CdvdVerboseReads: sectors 16, 257).
+    With path tables at 18/19 it fails with "open fail name SYSTEM.CNF;1".
+  - PCSX2 takes an ISO as DVD media when the u16 at PVD offset 166 differs from the u16 at 171
+    (CDVDcommon.cpp FindDiskType; images > 452849 sectors are DVD regardless). Those overlap the LE
+    and BE copies of the root directory size; they differ for retail-style sizes (e.g. 468 = 0x1D4),
+    but match for a whole-sector size like 2048.
+Sectors 18-256 (the UDF bridge on retail discs) are left empty; the BIOS doesn't need them.
+All fields are standard ISO9660.
 """
 import os
 import struct
@@ -21,7 +24,6 @@ import time
 
 SECTOR = 2048
 ROOT_SECTORS = 1
-DVD_MIN_SECTORS = 460000  # > 452849 (PCSX2's CD/DVD size threshold); ~942 MB
 
 
 def both16(v):
@@ -66,17 +68,22 @@ def main():
         name, path = e.split("=", 1)
         files.append((name.encode("ascii"), path, os.path.getsize(path)))
 
-    path_table_lba, root_lba = 18, 20  # L path table at 18, M path table at 19
+    # Layout of retail PS2 DVDs (checked against Silent Hill 2): L path table at 257, M at 259, root
+    # directory at 261 (sectors 18-256 hold the UDF bridge there). On DVD media the BIOS reads the
+    # path table at 257.
+    path_table_lba, root_lba = 257, 261
     lba = root_lba + ROOT_SECTORS
     layout = []
     for name, path, size in files:
         layout.append((name, path, size, lba))
         lba += (size + SECTOR - 1) // SECTOR
-    total = max(lba, DVD_MIN_SECTORS)
+    total = lba
 
+    # The root directory's recorded size is the bytes actually used, as on retail DVDs (Sony's
+    # mastering doesn't round it to a sector); computed below, patched into the "." records and PVD.
     root = bytearray()
-    root += dir_record(b"\0", root_lba, ROOT_SECTORS * SECTOR, True, t)
-    root += dir_record(b"\1", root_lba, ROOT_SECTORS * SECTOR, True, t)
+    root += dir_record(b"\0", root_lba, 0, True, t)
+    root += dir_record(b"\1", root_lba, 0, True, t)
     for name, path, size, flba in sorted(layout, key=lambda x: x[0]):
         rec = dir_record(name, flba, size, False, t)
         if len(root) // SECTOR != (len(root) + len(rec) - 1) // SECTOR:  # records don't cross sectors
@@ -84,6 +91,9 @@ def main():
         root += rec
     if len(root) > ROOT_SECTORS * SECTOR:
         sys.exit("too many files for the root directory")
+    root_size = len(root)
+    root[0:root[0]] = dir_record(b"\0", root_lba, root_size, True, t)
+    root[root[0]:root[0] + root[root[0]]] = dir_record(b"\1", root_lba, root_size, True, t)
     root += b"\0" * (ROOT_SECTORS * SECTOR - len(root))
 
     pt_entry = bytes([1, 0]) + struct.pack("<I", root_lba) + struct.pack("<H", 1) + b"\0\0"
@@ -102,7 +112,7 @@ def main():
     pvd[132:140] = both32(len(pt_entry))
     pvd[140:144] = struct.pack("<I", path_table_lba)
     pvd[148:152] = struct.pack(">I", path_table_lba + 1)
-    pvd[156:190] = dir_record(b"\0", root_lba, ROOT_SECTORS * SECTOR, True, t)
+    pvd[156:190] = dir_record(b"\0", root_lba, root_size, True, t)
     pvd[190:318] = strfield("", 128)
     pvd[318:446] = strfield("", 128)
     pvd[446:574] = strfield("", 128)
@@ -123,8 +133,10 @@ def main():
         f.write(b"\0" * (16 * SECTOR))
         f.write(pvd)
         f.write(term)
-        f.write(pt_entry.ljust(SECTOR, b"\0"))
-        f.write(pt_entry_m.ljust(SECTOR, b"\0"))
+        f.write(b"\0" * ((path_table_lba - 18) * SECTOR))
+        f.write(pt_entry.ljust(2 * SECTOR, b"\0"))
+        f.write(pt_entry_m.ljust(2 * SECTOR, b"\0"))
+        assert f.tell() == root_lba * SECTOR
         f.write(root)
         for name, path, size, flba in layout:
             assert f.tell() == flba * SECTOR
@@ -135,8 +147,7 @@ def main():
                         break
                     f.write(chunk)
             f.write(b"\0" * (-size % SECTOR))
-        f.truncate(total * SECTOR)  # padding: sparse zero sectors up to the volume size
-    print("%s: %d sectors (%d used by files)" % (out, total, lba))
+    print("%s: %d sectors" % (out, total))
 
 
 if __name__ == "__main__":

@@ -614,3 +614,20 @@ SYSTEM.CNF;1` even in OSDSYS), with/without a UDF bridge (`genisoimage -udf`), f
 As CD media (unpadded) the same image boots. Needs testing with a later BIOS. For development the
 ELF is booted directly (`pcsx2_run.py build/port/sh1.elf`); `pcsx2_run.py` now also boots images,
 with `--slowboot` for a full BIOS boot.
+
+### DVD image fixed: retail layout (checked against Silent Hill 2)
+
+The "open fail" on DVD media wasn't the BIOS: the v1.60 BIOS (`ps2-0160j-20010427`) failed the same
+way. With `CdvdVerboseReads` on (`pcsx2_run.py --cdvd-verbose`), the BIOS read sector 16 (PVD), then
+**sector 257**, and gave up — our path table was at 18.
+
+The first 8 MB of a retail PS2 DVD (Silent Hill 2 USA; `chdman extractraw --inputbytes 8388608`):
+sectors 18/19 `BEA01`/`NSR02` and an anchor at 256 (UDF bridge), L path table at **257**, M at 259,
+root directory at **261**, root size **468** bytes (bytes used, not rounded to a sector). The latter
+is also PCSX2's DVD signature: u16 at PVD+166 (`0x01D4`) ≠ u16 at PVD+171 (`0x0100`).
+
+`tools/port/mkiso.py` now uses that layout (path tables 257/259, root 261, exact root size; sectors
+18-256 left empty — the BIOS doesn't need the UDF part). With it, PCSX2 sees DVD media without any
+padding (607 MB image), and the game boots from the image with both the v1.00 and v1.60 BIOS
+(`pcsx2_run.py --bios <file>` overrides the BIOS for one run). The earlier padding and root-directory
+experiments are gone.

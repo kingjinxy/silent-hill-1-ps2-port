@@ -55,11 +55,17 @@ def main():
     ap.add_argument("--pcsx2", default=find_pcsx2())
     ap.add_argument("--all", action="store_true", help="print the whole log, not just from the ELF start")
     ap.add_argument("--slowboot", action="store_true", help="boot discs through the BIOS (OSDSYS) instead of fast boot")
+    ap.add_argument("--cdvd-verbose", action="store_true", help="log every disc read (CdvdVerboseReads)")
+    ap.add_argument("--bios", help="BIOS file name in PCSX2's bios folder to use for this run")
     args = ap.parse_args()
     elf = os.path.abspath(args.elf)
     log = tempfile.NamedTemporaryFile(suffix=".log", delete=False).name
 
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
+    if args.cdvd_verbose:
+        OVERRIDES["CdvdVerboseReads"] = "true"
+    if args.bios:
+        OVERRIDES["BIOS"] = args.bios
     patch_ini()
     proc = None
     try:
