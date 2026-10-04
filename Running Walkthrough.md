@@ -318,3 +318,10 @@ Verified with map1_s04 padded by 0x110: `D_800CD768_tbl` now follows `D_800CD768
 Audit afterwards: referenced `ABS` symbols inside a binary's own range are only `main_*_SIZE`
 (linker constants), the 4 relative ones (`ABS` in the ELF but computed from their anchor), and
 bodyprog's references to `g_MapOverlayHdr` / `GameState_KonamiLogo_Update` (cross-binary; Step 2).
+
+### Shift test, rerun with the fix
+
+Rebuilt the shifted image (0x110 padding in every map) on top of the linker fix; map data
+variables now move (map7_s03 `D_800F4806` → `0x800F4916`). Warp sweep: 36/43 pass, and the 7
+failures are exactly the ones that fail on the unmodified disc (map1_s04, map2_s01, map2_s03,
+map3_s06, map4_s00, map4_s06, map6_s05). Step 1 done.

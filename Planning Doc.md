@@ -65,8 +65,8 @@ Ground rules:
       `lib_externs.ld` pinned symbols the binary itself defines (116 of them map data variables used
       from C). `tools/port/prune_undefined_syms.py` now filters those lists at link time; 4 interior
       symbols are defined relative to their container in `configs/USA/relative_syms.ld`.
-- [ ] Re-run the warp sweep on a shifted image with the linker fix (the earlier 36/43 ran with
-      those variables at stale addresses)
+- [x] Re-run the warp sweep on a shifted image with the linker fix: 36/43 pass, the same 7 that
+      fail on the unmodified disc fail; map data variables now move with the shift
 - Deferred to Step 2: `g_OvlBodyprog` / `g_OvlDynamic` overlay load addresses in `src/main/main.c`
   (they disappear once overlays are statically linked).
 
