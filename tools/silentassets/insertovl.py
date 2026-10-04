@@ -168,105 +168,64 @@ def main():
         print("No new overlay to insert")
         return
     
-    #Get new overlay size
-    newSize = 0
-    nextOvl = 0
-    for path in buildOvlPaths:
-        for ovlName in ovlNames:
-            if Path(f"{args.buildFolder}{path}{ovlName}.BIN").is_file():
-                newOvl = open(f"{args.buildFolder}{path}{ovlName}.BIN", "rb")
-                newOvlSize = newOvl.seek(0, 2)
-                newOvlSize = round(newOvlSize / 256)
-                newOvl.close()
-                
-                for newFTLine in fileTableNew:
-                    if nextOvl == newFTLine[4]:
-                        newFTLine[3] = newSize
-                        newSize = 0
-                    
-                    if newFTLine[0] == ovlName:
-                        if newFTLine[1] < newOvlSize:
-                            newFTLine[2] = newOvlSize
-                            newSize = (newOvlSize * 256)
-                            while (newSize % 0x800) != 0:
-                                newSize += 1
-                            newSize -= (newFTLine[1] * 256)
-                            nextOvl = newFTLine[4]+1
-                            break
-                        elif newFTLine[1] >= newOvlSize:
-                            newFTLine[2] = newOvlSize
-                            break
-    
+    # Re-lay out SILENT. sequentially. Every file keeps its original span (data plus any padding up
+    # to the next file) unless a rebuilt overlay no longer fits, in which case the span grows to the
+    # next sector boundary and every later file moves by the same number of sectors. HILL. follows
+    # SILENT. on the disc, so its entries move by the total growth.
+    SILENT_START = 64
+    silentData = open(args.silentFile, "rb").read()
+    silentEnd = SILENT_START + len(silentData) // 0x800
+
+    def builtOverlay(entry):
+        if entry[4] != 2 or entry[3] not in ovlNames:
+            return None
+        for path in buildOvlPaths:
+            ovlPath = Path(f"{args.buildFolder}{path}{entry[3]}.BIN")
+            if ovlPath.is_file():
+                data = ovlPath.read_bytes()
+                if entry[2] != 9:  # Only VIN/ overlays are stored unencrypted.
+                    data = bytes(ovlEncryption(data))
+                return data
+        return None
+
+    newSILENT = bytearray()
+    cursor = SILENT_START
+    silentEntries = [e for e in fileTableOrig if e[0] < silentEnd]
+    for i, entry in enumerate(silentEntries):
+        nextStart = silentEntries[i + 1][0] if i + 1 < len(silentEntries) else silentEnd
+        span = silentData[(entry[0] - SILENT_START) * 0x800:(nextStart - SILENT_START) * 0x800]
+        data = builtOverlay(entry)
+        if data is not None:
+            entry[1] = (len(data) + 0xFF) // 0x100  # Size in 256-byte blocks, rounded up.
+            spanSize = max(len(span), (len(data) + 0x7FF) // 0x800 * 0x800)
+            span = data + bytes(spanSize - len(data))
+        entry[0] = cursor
+        newSILENT += span
+        cursor += len(span) // 0x800
+
+    growth = cursor - silentEnd
+    for entry in fileTableOrig[len(silentEntries):]:  # The table is in sector order.
+        entry[0] += growth
+    print(f"SILENT. grew by {growth} sectors")
+
     # Replace's exe file table
     EXE = open(args.executable, "rb")
     newEXE = open(args.outputFolder+"/USA/new_SLUS_007.07", "wb")
     EXENewData = bytearray()
-    fileTableNewEcrypted = []
-    sumPos = 0
-    index = 0
-    EXEData = EXE.read(version.ftOffset)
-    newEXE.write(EXEData)
+    newEXE.write(EXE.read(version.ftOffset))
     EXE.seek(version.ftSize, 1)
-    for x in fileTableOrig:
-        tableLine = x
-        
-        if tableLine[4] == 2:
-            for tableLineNew in fileTableNew:
-                if tableLine[3] == tableLineNew[0]:
-                    tableLine[1] = tableLineNew[2]
-                    sumPos += tableLineNew[3]
-        
-        tableLine[0] = round((((tableLine[0] - 64) * 2048) + sumPos) / 2048) + 64
-        fileTableNewEcrypted.append([
-        (tableLine[1] << 19) + tableLine[0],
-        nameObfuscate(tableLine[3])[0] + tableLine[2],
-        nameObfuscate(tableLine[3])[1] + (tableLine[4] << 24)
-        ])
-        
-        EXENewData += fileTableNewEcrypted[index][0].to_bytes(4, byteorder='little')
-        EXENewData += fileTableNewEcrypted[index][1].to_bytes(4, byteorder='little')
-        EXENewData += fileTableNewEcrypted[index][2].to_bytes(4, byteorder='little')
-        index += 1
-    
+    for tableLine in fileTableOrig:
+        EXENewData += ((tableLine[1] << 19) + tableLine[0]).to_bytes(4, byteorder='little')
+        EXENewData += (nameObfuscate(tableLine[3])[0] + tableLine[2]).to_bytes(4, byteorder='little')
+        EXENewData += (nameObfuscate(tableLine[3])[1] + (tableLine[4] << 24)).to_bytes(4, byteorder='little')
     newEXE.write(EXENewData)
-    
-    actualPos = EXE.tell()
-    EXE.seek(0, 2)
-    missingData = EXE.tell() - actualPos
-    EXE.seek(actualPos, 0)
-    
-    EXEData = EXE.read(missingData)
-    newEXE.write(EXEData)
-    
-    
-    
-    # Write new files on SILENT     |       HILL doesn't matter as it does not
-    # contain any overlay and the new file table already adjusted the file positions
-    SILENT = open(args.silentFile, "rb")
-    newSILENT = open(args.outputFolder+"/USA/new_SILENT.", "wb")
-    for x in fileTableNew:
-        
-        copyDataSize = ((fileTableOrig[x[4]][0] - 64 ) * 2048) - SILENT.tell()
-        dataSILENT = SILENT.read(copyDataSize)
-        newSILENT.write(dataSILENT)
-        for path in buildOvlPaths:
-            if Path(f"{args.buildFolder}{path}{x[0]}.BIN").is_file():
-                ovl = open(f"{args.buildFolder}{path}{x[0]}.BIN", "rb")
-                ovl.seek(0, 2)
-                dataOvlSize = ovl.tell()
-                ovl.seek(0)
-                dataOvl = ovl.read(dataOvlSize)
-                ovl.close()
-                if fileTableOrig[x[4]][2] != 9:
-                    dataOvl = ovlEncryption(dataOvl)
-                newSILENT.write(dataOvl)
-                while (dataOvlSize % 0x800) != 0:
-                    dataOvlSize += 1
-                    newSILENT.write(b'\x00')
-        
-        
-        SILENT.seek((fileTableOrig[x[4] + 1][0] - 64 ) * 2048)
-    
+    newEXE.write(EXE.read())
+    newEXE.close()
+    EXE.close()
+
+    with open(args.outputFolder+"/USA/new_SILENT.", "wb") as f:
+        f.write(newSILENT)
+
     with open(args.xmlFile, "r") as XML:
         with open(os.path.dirname(args.xmlFile)+"/rebuild.xml", "a+") as newXML:
             newXML.truncate(0)
