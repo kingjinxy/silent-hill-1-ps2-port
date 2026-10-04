@@ -19,61 +19,61 @@
  * #define FS_BUFFER(idx) \
  *     (void*)(0x80100600 + ((idx) * 0x1000))
  */
-#define FS_BUFFER_0      (void*)0x8010A600
-#define FS_BUFFER_12     (void*)0x801201B4 // Used for weapon anim.     } Sub-buffers within the 4096-byte buffers?
-#define FS_BUFFER_4      (void*)0x80124384 // Used for player map anim. }
-#define FS_BUFFER_11     (void*)0x80169600 // } Used for DMS cutscene data.
-#define FS_BUFFER_17     (void*)0x80169E00 // }
-#define FS_BUFFER_13     (void*)0x8016AE00 // }
-#define FS_BUFFER_14     (void*)0x800F9600 // }
-#define FS_BUFFER_15     (void*)0x801F3600 // }
-#define FS_BUFFER_16     (void*)0x801EBE00 // }
-#define FS_BUFFER_18     (void*)0x80180600 // }
-#define FS_BUFFER_19     (void*)0x801A1E00 // }
-#define FS_BUFFER_20     (void*)0x80185600 // }
-#define GLOBAL_LM_BUFFER (s_LmHeader*)0x8016B600
-#define IPD_BUFFER       (s_IpdHeader*)0x80175600 // Used by map.
-#define LM_BUFFER_2      (s_LmHeader*)0x8019E600
-#define FS_BUFFER_3      (void*)0x801B2600
-#define FS_BUFFER_8      (void*)0x801B5E80        // Used for loading inventory item models.
-#define FS_BUFFER_7      (void*)0x801C2600        // Used in `b_konami.c`.
-#define FS_BUFFER_2      (void*)0x801CF600
-#define FS_BUFFER_1      (void*)0x801E2600
-#define FS_BUFFER_5      (void*)0x801E3600 // Used in `b_konami.c`.
-#define FS_BUFFER_6      (void*)0x801E4600 // Used in `b_konami.c`.
-#define FS_BUFFER_21     (void*)0x801E5600
-#define FS_BUFFER_10     (void*)0x801EA600
-#define FS_BUFFER_9      (void*)0x801EC600
-#define FS_BUFFER_22     (void*)0x8019F8F8
+#define FS_BUFFER_0      (void*)PSX_RAM_ADDR(0x8010A600)
+#define FS_BUFFER_12     (void*)PSX_RAM_ADDR(0x801201B4) // Used for weapon anim.     } Sub-buffers within the 4096-byte buffers?
+#define FS_BUFFER_4      (void*)PSX_RAM_ADDR(0x80124384) // Used for player map anim. }
+#define FS_BUFFER_11     (void*)PSX_RAM_ADDR(0x80169600) // } Used for DMS cutscene data.
+#define FS_BUFFER_17     (void*)PSX_RAM_ADDR(0x80169E00) // }
+#define FS_BUFFER_13     (void*)PSX_RAM_ADDR(0x8016AE00) // }
+#define FS_BUFFER_14     (void*)PSX_RAM_ADDR(0x800F9600) // }
+#define FS_BUFFER_15     (void*)PSX_RAM_ADDR(0x801F3600) // }
+#define FS_BUFFER_16     (void*)PSX_RAM_ADDR(0x801EBE00) // }
+#define FS_BUFFER_18     (void*)PSX_RAM_ADDR(0x80180600) // }
+#define FS_BUFFER_19     (void*)PSX_RAM_ADDR(0x801A1E00) // }
+#define FS_BUFFER_20     (void*)PSX_RAM_ADDR(0x80185600) // }
+#define GLOBAL_LM_BUFFER (s_LmHeader*)PSX_RAM_ADDR(0x8016B600)
+#define IPD_BUFFER       (s_IpdHeader*)PSX_RAM_ADDR(0x80175600) // Used by map.
+#define LM_BUFFER_2      (s_LmHeader*)PSX_RAM_ADDR(0x8019E600)
+#define FS_BUFFER_3      (void*)PSX_RAM_ADDR(0x801B2600)
+#define FS_BUFFER_8      (void*)PSX_RAM_ADDR(0x801B5E80)        // Used for loading inventory item models.
+#define FS_BUFFER_7      (void*)PSX_RAM_ADDR(0x801C2600)        // Used in `b_konami.c`.
+#define FS_BUFFER_2      (void*)PSX_RAM_ADDR(0x801CF600)
+#define FS_BUFFER_1      (void*)PSX_RAM_ADDR(0x801E2600)
+#define FS_BUFFER_5      (void*)PSX_RAM_ADDR(0x801E3600) // Used in `b_konami.c`.
+#define FS_BUFFER_6      (void*)PSX_RAM_ADDR(0x801E4600) // Used in `b_konami.c`.
+#define FS_BUFFER_21     (void*)PSX_RAM_ADDR(0x801E5600)
+#define FS_BUFFER_10     (void*)PSX_RAM_ADDR(0x801EA600)
+#define FS_BUFFER_9      (void*)PSX_RAM_ADDR(0x801EC600)
+#define FS_BUFFER_22     (void*)PSX_RAM_ADDR(0x8019F8F8)
 
-#define FS_BUFFER_24     (void*)0x801A0600
-#define FS_BUFFER_25     (void*)0x80167600
-#define FS_BUFFER_26     (void*)0x8018C600
-#define FS_BUFFER_27     (void*)0x80196E00
-#define FS_BUFFER_28     (void*)0x801D6E00
-#define FS_BUFFER_29     (void*)0x80142A00
-#define FS_BUFFER_30     (void*)0x80156A00
-#define FS_BUFFER_31     (void*)0x80102E00
-#define FS_BUFFER_32     (void*)0x80106E00
-#define FS_BUFFER_33     (void*)0x80153A00
-#define FS_BUFFER_34     (void*)0x80163200
-#define FS_BUFFER_35     (void*)0x801950F0
+#define FS_BUFFER_24     (void*)PSX_RAM_ADDR(0x801A0600)
+#define FS_BUFFER_25     (void*)PSX_RAM_ADDR(0x80167600)
+#define FS_BUFFER_26     (void*)PSX_RAM_ADDR(0x8018C600)
+#define FS_BUFFER_27     (void*)PSX_RAM_ADDR(0x80196E00)
+#define FS_BUFFER_28     (void*)PSX_RAM_ADDR(0x801D6E00)
+#define FS_BUFFER_29     (void*)PSX_RAM_ADDR(0x80142A00)
+#define FS_BUFFER_30     (void*)PSX_RAM_ADDR(0x80156A00)
+#define FS_BUFFER_31     (void*)PSX_RAM_ADDR(0x80102E00)
+#define FS_BUFFER_32     (void*)PSX_RAM_ADDR(0x80106E00)
+#define FS_BUFFER_33     (void*)PSX_RAM_ADDR(0x80153A00)
+#define FS_BUFFER_34     (void*)PSX_RAM_ADDR(0x80163200)
+#define FS_BUFFER_35     (void*)PSX_RAM_ADDR(0x801950F0)
 
-#define IMAGE_BUFFER   (u_long*)0x801AFA00
-#define IMAGE_BUFFER_0 (u_long*)0x801CFA00
-#define IMAGE_BUFFER_1 (u_long*)0x801C8200
-#define IMAGE_BUFFER_2 (u_long*)0x801ABE00
-#define IMAGE_BUFFER_3 (u_long*)0x801EB600
-#define IMAGE_BUFFER_4 (u_long*)0x801DCE00
-#define IMAGE_BUFFER_5 (u_long*)0x801DE600
+#define IMAGE_BUFFER   (u_long*)PSX_RAM_ADDR(0x801AFA00)
+#define IMAGE_BUFFER_0 (u_long*)PSX_RAM_ADDR(0x801CFA00)
+#define IMAGE_BUFFER_1 (u_long*)PSX_RAM_ADDR(0x801C8200)
+#define IMAGE_BUFFER_2 (u_long*)PSX_RAM_ADDR(0x801ABE00)
+#define IMAGE_BUFFER_3 (u_long*)PSX_RAM_ADDR(0x801EB600)
+#define IMAGE_BUFFER_4 (u_long*)PSX_RAM_ADDR(0x801DCE00)
+#define IMAGE_BUFFER_5 (u_long*)PSX_RAM_ADDR(0x801DE600)
 
-#define TEMP_MEMORY_ADDR (s8*)0x801A2600
-#define CD_ADDR_0        (u_long*)0x801E2600 // Used to temporarily allocate VAB files.
+#define TEMP_MEMORY_ADDR (s8*)PSX_RAM_ADDR(0x801A2600)
+#define CD_ADDR_0        (u_long*)PSX_RAM_ADDR(0x801E2600) // Used to temporarily allocate VAB files.
 
-#define FONT24_BUFFER (u_long*)0x801F5600 // Loaded by `GameFs_StfRollBinLoad`.
+#define FONT24_BUFFER (u_long*)PSX_RAM_ADDR(0x801F5600) // Loaded by `GameFs_StfRollBinLoad`.
 
-#define HARRY_LM_BUFFER (void*)0x800FE600 /** Harry character model. */
-#define MAP_CHARA_BASE  (void*)0x800FEE00
+#define HARRY_LM_BUFFER (void*)PSX_RAM_ADDR(0x800FE600) /** Harry character model. */
+#define MAP_CHARA_BASE  (void*)PSX_RAM_ADDR(0x800FEE00)
 
 /** Model of an item held in the player's hand. */
 #define HELD_ITEM_LM_BUFFER \

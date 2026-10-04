@@ -479,8 +479,8 @@ bool Fs_QueueDoBuffersOverlap(u8* data0, u32 size0, u8* data1, u32 size1)
     u32 data0Low;
     u32 data1Low;
 
-    data0Low = (u32)data0 & 0xFFFFFF;
-    data1Low = (u32)data1 & 0xFFFFFF;
+    data0Low = PSX_ADDR_CANON(data0);
+    data1Low = PSX_ADDR_CANON(data1);
 
     if (data1Low >= (data0Low + size0) || data0Low >= (data1Low + size1))
     {

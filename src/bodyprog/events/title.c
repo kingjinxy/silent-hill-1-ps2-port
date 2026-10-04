@@ -384,9 +384,9 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
     }
     else
     {
-        *(s32*)0x1F800000 = 0x200000;
-        *(s32*)0x1F800004 = 0x01C00140;
-        ClearImage2((RECT*)0x1F800000, 0u, 0u, 0u);
+        *(s32*)PSX_SCRATCH_ADDR(0) = 0x200000;
+        *(s32*)PSX_SCRATCH_ADDR(4) = 0x01C00140;
+        ClearImage2((RECT*)PSX_SCRATCH, 0u, 0u, 0u);
         Screen_Init(SCREEN_WIDTH, false);
         return;
     }
@@ -547,7 +547,7 @@ static u32 D_800A9AAC[256] = {
 static void func_8003B7BC(void) // 0x8003B7BC
 {
     // Can't be `s32*` since 462 doesn't divide by 4, so guessing `s8`.
-    s8* s0 = 0x801E2432;
+    s8* s0 = PSX_RAM_ADDR(0x801E2432);
 
     memset(s0, 0, 462);
     D_800BCDE0 = s0;

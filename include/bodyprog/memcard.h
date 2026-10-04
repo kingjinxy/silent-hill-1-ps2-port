@@ -5,8 +5,8 @@
 // CONSTANTS
 // ==========
 
-#define SAVEGAME_ENTRY_BUFFER_0 ((u8*)0x801E09E0) // Slot 1 savegame entry.
-#define SAVEGAME_ENTRY_BUFFER_1 ((u8*)0x801E1430) // Slot 2 savegame entry.
+#define SAVEGAME_ENTRY_BUFFER_0 ((u8*)PSX_RAM_ADDR(0x801E09E0)) // Slot 1 savegame entry.
+#define SAVEGAME_ENTRY_BUFFER_1 ((u8*)PSX_RAM_ADDR(0x801E1430)) // Slot 2 savegame entry.
 
 #define MEMCARD_DEVICE_COUNT_MAX 8
 #define MEMCARD_SAVES_COUNT_MAX  11

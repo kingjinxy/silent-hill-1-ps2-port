@@ -182,16 +182,16 @@ void GameState_KcetLogo_Update(void) // 0x800C99A4
                     // Decompress the `HP_SAFE1/S__SAFE2` overlays.
                     Lzss_Init(FS_BUFFER_5, FS_BUFFER_21, 3000); // Larger than actual `HP_SAFE1` size?
                     Lzss_Decode(NO_VALUE);
-                    Lzss_Init(FS_BUFFER_6, (void*)0x801E6600, 3000);
+                    Lzss_Init(FS_BUFFER_6, PSX_RAM_ADDR(0x801E6600), 3000);
                     Lzss_Decode(NO_VALUE);
 
                     // Decrypt `S__SAFE2` and run `AntiModchip_Check`
-                    Fs_DecryptOverlay((void*)0x801E7600, (void*)0x801E6600, 4096);
+                    Fs_DecryptOverlay(PSX_RAM_ADDR(0x801E7600), PSX_RAM_ADDR(0x801E6600), 4096);
                     curTime = g_SysWork.gameStateCounter;
                     AntiModchip_Check();
 
                     // Decrypt `HP_SAFE1` and run `AntiModchip_Check`
-                    Fs_DecryptOverlay((void*)0x801E7600, FS_BUFFER_21, 4096);
+                    Fs_DecryptOverlay(PSX_RAM_ADDR(0x801E7600), FS_BUFFER_21, 4096);
                     
                     // Only run `HP_SAFE1` if `S__SAFE2` took enough time to execute, cheap way of checking if the call above was skipped?
                     if ((g_SysWork.gameStateCounter - curTime) >= 100)

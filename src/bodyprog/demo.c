@@ -20,7 +20,7 @@ bool                 g_Demo_IsLoadingChunks;
 s32                  g_Demo_DemoId   = 0;
 u16                  g_Demo_RandSeed = 0;
 // 2 bytes of padding.
-s_DemoPlaybackFrame* g_Demo_PlaybackFrames = (s_DemoPlaybackFrame*)0x800F5E00;
+s_DemoPlaybackFrame* g_Demo_PlaybackFrames = (s_DemoPlaybackFrame*)PSX_RAM_ADDR(0x800F5E00);
 
 bool Demo_SequenceAdvance(s32 incAmount) // 0x8008EF20
 {

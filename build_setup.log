@@ -1,0 +1,690 @@
+rm -rf build/USA
+rm -rf permuter
+rm -rf asm/USA
+rm -rf linkers/USA
+make generate
+make[1]: Entering directory '/app'
+python3 -m splat split --disassemble-all configs/USA/main.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 136504.92it/s]
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 161862.25it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Scanning header:   0%|          | 0/2 [00:00<?, ?it/s]Scanning main:   0%|          | 0/2 [00:00<?, ?it/s]  Scanning main: 100%|██████████| 2/2 [00:00<00:00,  8.70it/s]Scanning main: 100%|██████████| 2/2 [00:00<00:00,  8.66it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Splitting header:   0%|          | 0/2 [00:00<?, ?it/s]Splitting main:   0%|          | 0/2 [00:00<?, ?it/s]  Splitting main: 100%|██████████| 2/2 [00:01<00:00,  1.95it/s]Splitting main: 100%|██████████| 2/2 [00:01<00:00,  1.95it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Linker script header:   0%|          | 0/2 [00:00<?, ?it/s]Linker script main:   0%|          | 0/2 [00:00<?, ?it/s]  Linker script main: 100%|██████████| 2/2 [00:00<00:00,  5.86it/s]Linker script main: 100%|██████████| 2/2 [00:00<00:00,  5.84it/s]
+Split 55 KB (67.37%) in defined segments
+              header:     2 KB (2.50%) 1 split, 0 cached
+                   o:    46 KB (56.16%) 69 split, 0 cached
+                   c:     6 KB (8.22%) 7 split, 0 cached
+                hasm:    384 B (0.47%) 1 split, 0 cached
+                 pad:     20 B (0.02%) 4 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/bodyprog.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/62 [00:00<?, ?it/s]Loading symbols (sym.b_konami):   0%|          | 0/62 [00:00<?, ?it/s]Loading symbols (sym.b_konami): 100%|██████████| 62/62 [00:00<00:00, 32706.18it/s]
+  0%|          | 0/97 [00:00<?, ?it/s]Loading symbols (sym.stream):   0%|          | 0/97 [00:00<?, ?it/s]Loading symbols (sym.stream): 100%|██████████| 97/97 [00:00<00:00, 83627.44it/s]
+  0%|          | 0/84 [00:00<?, ?it/s]Loading symbols (sym.saveload):   0%|          | 0/84 [00:00<?, ?it/s]Loading symbols (sym.saveload): 100%|██████████| 84/84 [00:00<00:00, 62557.09it/s]
+  0%|          | 0/85 [00:00<?, ?it/s]Loading symbols (sym.options):   0%|          | 0/85 [00:00<?, ?it/s]Loading symbols (sym.options): 100%|██████████| 85/85 [00:00<00:00, 57586.15it/s]
+  0%|          | 0/38 [00:00<?, ?it/s]Loading symbols (sym.credits):   0%|          | 0/38 [00:00<?, ?it/s]Loading symbols (sym.credits): 100%|██████████| 38/38 [00:00<00:00, 40360.48it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 156211.78it/s]
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 143773.51it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Scanning bodyprog:   0%|          | 0/2 [00:00<?, ?it/s]
+The rodata segment 'events/title' has jumptables that are not aligned properly file-wise, indicating one or more likely file split.
+File split suggestions for this segment will follow in config yaml format:
+      - [0x934, .rodata]
+
+
+The rodata segment 'world/world_draw' has jumptables that are not aligned properly file-wise, indicating one or more likely file split.
+File split suggestions for this segment will follow in config yaml format:
+      - [0xA3C, .rodata]
+
+
+The rodata segment 'items/item_utils' has jumptables that are not aligned properly file-wise, indicating one or more likely file split.
+File split suggestions for this segment will follow in config yaml format:
+      - [0x1334, .rodata]
+
+
+The rodata segment 'items/item_screens_2' has jumptables that are not aligned properly file-wise, indicating one or more likely file split.
+File split suggestions for this segment will follow in config yaml format:
+      - [0x1434, .rodata]
+
+
+The rodata segment 'items/item_screens_3' has jumptables that are not aligned properly file-wise, indicating one or more likely file split.
+File split suggestions for this segment will follow in config yaml format:
+      - [0x3388, .rodata]
+
+
+The rodata segment 'ranking' has jumptables that are not aligned properly file-wise, indicating one or more likely file split.
+File split suggestions for this segment will follow in config yaml format:
+      - [0x679C, .rodata]
+
+Scanning bodyprog:  50%|█████     | 1/2 [00:04<00:04,  4.50s/it]Scanning footer_data:  50%|█████     | 1/2 [00:04<00:04,  4.50s/it]Scanning footer_data: 100%|██████████| 2/2 [00:04<00:00,  2.25s/it]
+  0%|          | 0/2 [00:00<?, ?it/s]Splitting bodyprog:   0%|          | 0/2 [00:00<?, ?it/s]
+Warning: Symbol 'g_MapMsg_Select' (0x800BCD78) was given a size '0x2' that is not a multiple of its given type 'MapMsgSelect'
+This may produce inconsistency issues like end labels not being emitted.
+You are highly encouraged to fix it.
+This may be changed to a hard error in the future.
+
+Splitting bodyprog:  50%|█████     | 1/2 [00:23<00:23, 23.94s/it]Splitting footer_data:  50%|█████     | 1/2 [00:23<00:23, 23.94s/it]Splitting footer_data: 100%|██████████| 2/2 [00:23<00:00, 11.97s/it]
+  0%|          | 0/2 [00:00<?, ?it/s]Linker script bodyprog:   0%|          | 0/2 [00:00<?, ?it/s]Linker script bodyprog:  50%|█████     | 1/2 [00:02<00:02,  2.24s/it]Linker script footer_data:  50%|█████     | 1/2 [00:02<00:02,  2.24s/it]Linker script footer_data: 100%|██████████| 2/2 [00:02<00:00,  1.13s/it]
+Split 519 KB (77.05%) in defined segments
+                 pad:    164 B (0.02%) 27 split, 0 cached
+                   o:    72 KB (10.78%) 221 split, 0 cached
+                   c:   445 KB (65.97%) 88 split, 0 cached
+                hasm:     1 KB (0.24%) 1 split, 0 cached
+                 bin:    232 B (0.03%) 1 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/screens/b_konami.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/62 [00:00<?, ?it/s]Loading symbols (sym.b_konami):   0%|          | 0/62 [00:00<?, ?it/s]Loading symbols (sym.b_konami): 100%|██████████| 62/62 [00:00<00:00, 55518.11it/s]
+  0%|          | 0/97 [00:00<?, ?it/s]Loading symbols (sym.stream):   0%|          | 0/97 [00:00<?, ?it/s]Loading symbols (sym.stream): 100%|██████████| 97/97 [00:00<00:00, 89220.94it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 151248.40it/s]
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 181628.00it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Scanning b_konami:   0%|          | 0/2 [00:00<?, ?it/s]Scanning footer_data:   0%|          | 0/2 [00:00<?, ?it/s]Scanning footer_data: 100%|██████████| 2/2 [00:00<00:00, 31.10it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Splitting b_konami:   0%|          | 0/2 [00:00<?, ?it/s]Splitting b_konami:  50%|█████     | 1/2 [00:00<00:00,  3.16it/s]Splitting footer_data:  50%|█████     | 1/2 [00:00<00:00,  3.16it/s]Splitting footer_data: 100%|██████████| 2/2 [00:00<00:00,  6.12it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Linker script b_konami:   0%|          | 0/2 [00:00<?, ?it/s]Linker script footer_data:   0%|          | 0/2 [00:00<?, ?it/s]Linker script footer_data: 100%|██████████| 2/2 [00:00<00:00, 52.64it/s]
+Split 4 KB (98.24%) in defined segments
+                 pad:     16 B (0.39%) 3 split, 0 cached
+                   c:     3 KB (95.41%) 2 split, 0 cached
+                 bin:    100 B (2.44%) 1 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/screens/credits.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/38 [00:00<?, ?it/s]Loading symbols (sym.credits):   0%|          | 0/38 [00:00<?, ?it/s]Loading symbols (sym.credits): 100%|██████████| 38/38 [00:00<00:00, 34438.97it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 144696.45it/s]
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 180168.57it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Scanning credits:   0%|          | 0/2 [00:00<?, ?it/s]Scanning footer_data:   0%|          | 0/2 [00:00<?, ?it/s]Scanning footer_data: 100%|██████████| 2/2 [00:00<00:00, 24.03it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Splitting credits:   0%|          | 0/2 [00:00<?, ?it/s]Splitting credits:  50%|█████     | 1/2 [00:00<00:00,  1.93it/s]Splitting footer_data:  50%|█████     | 1/2 [00:00<00:00,  1.93it/s]Splitting footer_data: 100%|██████████| 2/2 [00:00<00:00,  3.76it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Linker script credits:   0%|          | 0/2 [00:00<?, ?it/s]Linker script footer_data:   0%|          | 0/2 [00:00<?, ?it/s]Linker script footer_data: 100%|██████████| 2/2 [00:00<00:00, 70.80it/s]
+Split 10 KB (68.06%) in defined segments
+                 pad:      8 B (0.05%) 1 split, 0 cached
+                   c:    10 KB (66.42%) 1 split, 0 cached
+                 bin:    240 B (1.59%) 1 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/screens/options.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/85 [00:00<?, ?it/s]Loading symbols (sym.options):   0%|          | 0/85 [00:00<?, ?it/s]Loading symbols (sym.options): 100%|██████████| 85/85 [00:00<00:00, 51970.24it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 138541.35it/s]
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 175317.47it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Scanning options:   0%|          | 0/2 [00:00<?, ?it/s]Scanning options:  50%|█████     | 1/2 [00:00<00:00,  6.93it/s]Scanning footer_data:  50%|█████     | 1/2 [00:00<00:00,  6.93it/s]Scanning footer_data: 100%|██████████| 2/2 [00:00<00:00, 13.66it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Splitting options:   0%|          | 0/2 [00:00<?, ?it/s]Splitting options:  50%|█████     | 1/2 [00:01<00:01,  1.57s/it]Splitting footer_data:  50%|█████     | 1/2 [00:01<00:01,  1.57s/it]Splitting footer_data: 100%|██████████| 2/2 [00:01<00:00,  1.26it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Linker script options:   0%|          | 0/2 [00:00<?, ?it/s]Linker script footer_data:   0%|          | 0/2 [00:00<?, ?it/s]Linker script footer_data: 100%|██████████| 2/2 [00:00<00:00, 80.09it/s]
+Split 17 KB (89.44%) in defined segments
+                 pad:      8 B (0.04%) 1 split, 0 cached
+                   c:    17 KB (89.34%) 1 split, 0 cached
+                 bin:     12 B (0.06%) 1 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/screens/saveload.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/84 [00:00<?, ?it/s]Loading symbols (sym.saveload):   0%|          | 0/84 [00:00<?, ?it/s]Loading symbols (sym.saveload): 100%|██████████| 84/84 [00:00<00:00, 52018.53it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 144112.47it/s]
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 171112.59it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Scanning saveload:   0%|          | 0/2 [00:00<?, ?it/s]Scanning saveload:  50%|█████     | 1/2 [00:00<00:00,  7.11it/s]Scanning footer_data:  50%|█████     | 1/2 [00:00<00:00,  7.11it/s]Scanning footer_data: 100%|██████████| 2/2 [00:00<00:00, 14.04it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Splitting saveload:   0%|          | 0/2 [00:00<?, ?it/s]Splitting saveload:  50%|█████     | 1/2 [00:01<00:01,  1.39s/it]Splitting footer_data:  50%|█████     | 1/2 [00:01<00:01,  1.39s/it]Splitting footer_data: 100%|██████████| 2/2 [00:01<00:00,  1.43it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Linker script saveload:   0%|          | 0/2 [00:00<?, ?it/s]Linker script footer_data:   0%|          | 0/2 [00:00<?, ?it/s]Linker script footer_data: 100%|██████████| 2/2 [00:00<00:00, 81.08it/s]
+Split 18 KB (87.98%) in defined segments
+                   c:    18 KB (87.79%) 1 split, 0 cached
+                 bin:     40 B (0.19%) 1 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/screens/stream.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/97 [00:00<?, ?it/s]Loading symbols (sym.stream):   0%|          | 0/97 [00:00<?, ?it/s]Loading symbols (sym.stream): 100%|██████████| 97/97 [00:00<00:00, 56272.13it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 156102.64it/s]
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 160399.64it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Scanning stream:   0%|          | 0/2 [00:00<?, ?it/s]Scanning footer_data:   0%|          | 0/2 [00:00<?, ?it/s]Scanning footer_data: 100%|██████████| 2/2 [00:00<00:00, 48.50it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Splitting stream:   0%|          | 0/2 [00:00<?, ?it/s]Splitting stream:  50%|█████     | 1/2 [00:00<00:00,  3.55it/s]Splitting footer_data:  50%|█████     | 1/2 [00:00<00:00,  3.55it/s]Splitting footer_data: 100%|██████████| 2/2 [00:00<00:00,  6.83it/s]
+  0%|          | 0/2 [00:00<?, ?it/s]Linker script stream:   0%|          | 0/2 [00:00<?, ?it/s]Linker script footer_data:   0%|          | 0/2 [00:00<?, ?it/s]Linker script footer_data: 100%|██████████| 2/2 [00:00<00:00, 32.06it/s]
+Split 76 KB (99.95%) in defined segments
+                   o:    72 KB (95.08%) 8 split, 0 cached
+                   c:     3 KB (4.84%) 1 split, 0 cached
+                 pad:      8 B (0.01%) 2 split, 0 cached
+                 bin:     12 B (0.02%) 1 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map0_s00.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/281 [00:00<?, ?it/s]Loading symbols (sym.map0_s00):   0%|          | 0/281 [00:00<?, ?it/s]Loading symbols (sym.map0_s00): 100%|██████████| 281/281 [00:00<00:00, 51361.81it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 121910.71it/s]
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 143042.50it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map0_s00:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map0_s00: 100%|██████████| 1/1 [00:00<00:00,  1.64it/s]Scanning map0_s00: 100%|██████████| 1/1 [00:00<00:00,  1.64it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map0_s00:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map0_s00: 100%|██████████| 1/1 [00:02<00:00,  2.67s/it]Splitting map0_s00: 100%|██████████| 1/1 [00:02<00:00,  2.67s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map0_s00:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map0_s00: 100%|██████████| 1/1 [00:00<00:00,  5.36it/s]Linker script map0_s00: 100%|██████████| 1/1 [00:00<00:00,  5.34it/s]
+Split 72 KB (67.31%) in defined segments
+                   c:    72 KB (67.31%) 8 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map0_s01.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/375 [00:00<?, ?it/s]Loading symbols (sym.map0_s01):   0%|          | 0/375 [00:00<?, ?it/s]Loading symbols (sym.map0_s01): 100%|██████████| 375/375 [00:00<00:00, 83765.46it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 156099.34it/s]
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 185019.86it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map0_s01:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map0_s01: 100%|██████████| 1/1 [00:00<00:00,  1.75it/s]Scanning map0_s01: 100%|██████████| 1/1 [00:00<00:00,  1.75it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map0_s01:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map0_s01: 100%|██████████| 1/1 [00:04<00:00,  4.50s/it]Splitting map0_s01: 100%|██████████| 1/1 [00:04<00:00,  4.50s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map0_s01:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map0_s01: 100%|██████████| 1/1 [00:00<00:00,  5.64it/s]Linker script map0_s01: 100%|██████████| 1/1 [00:00<00:00,  5.61it/s]
+Split 67 KB (66.00%) in defined segments
+                   c:    67 KB (66.00%) 10 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map0_s02.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/175 [00:00<?, ?it/s]Loading symbols (sym.map0_s02):   0%|          | 0/175 [00:00<?, ?it/s]Loading symbols (sym.map0_s02): 100%|██████████| 175/175 [00:00<00:00, 58523.62it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 150742.85it/s]
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 163324.94it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map0_s02:   0%|          | 0/1 [00:00<?, ?it/s]
+
+Range check triggered: .data symbol (name: g_WorldObject_Katana, address: 0x800D344C):
+    User declared size (0x30) does not match the amount of bytes that will be emitted (0x28).
+    Try checking the size again or look for symbols which overlaps this region
+
+Scanning map0_s02: 100%|██████████| 1/1 [00:00<00:00,  4.22it/s]Scanning map0_s02: 100%|██████████| 1/1 [00:00<00:00,  4.20it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map0_s02:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map0_s02: 100%|██████████| 1/1 [00:01<00:00,  1.32s/it]Splitting map0_s02: 100%|██████████| 1/1 [00:01<00:00,  1.32s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map0_s02:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map0_s02: 100%|██████████| 1/1 [00:00<00:00,  6.55it/s]Linker script map0_s02: 100%|██████████| 1/1 [00:00<00:00,  6.52it/s]
+Split 19 KB (47.88%) in defined segments
+                   c:    19 KB (47.88%) 6 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map1_s00.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/265 [00:00<?, ?it/s]Loading symbols (sym.map1_s00):   0%|          | 0/265 [00:00<?, ?it/s]Loading symbols (sym.map1_s00): 100%|██████████| 265/265 [00:00<00:00, 67334.50it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 146660.69it/s]
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 172110.01it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map1_s00:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map1_s00: 100%|██████████| 1/1 [00:00<00:00,  2.01it/s]Scanning map1_s00: 100%|██████████| 1/1 [00:00<00:00,  2.00it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map1_s00:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map1_s00: 100%|██████████| 1/1 [00:02<00:00,  2.47s/it]Splitting map1_s00: 100%|██████████| 1/1 [00:02<00:00,  2.47s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map1_s00:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map1_s00: 100%|██████████| 1/1 [00:00<00:00,  6.93it/s]Linker script map1_s00: 100%|██████████| 1/1 [00:00<00:00,  6.86it/s]
+Split 60 KB (62.11%) in defined segments
+                   c:    60 KB (62.11%) 8 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map1_s01.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 163962.51it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 155104.42it/s]
+  0%|          | 0/262 [00:00<?, ?it/s]Loading symbols (sym.map1_s01):   0%|          | 0/262 [00:00<?, ?it/s]Loading symbols (sym.map1_s01): 100%|██████████| 262/262 [00:00<00:00, 70564.93it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map1_s01:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map1_s01: 100%|██████████| 1/1 [00:00<00:00,  1.89it/s]Scanning map1_s01: 100%|██████████| 1/1 [00:00<00:00,  1.89it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map1_s01:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map1_s01: 100%|██████████| 1/1 [00:02<00:00,  2.26s/it]Splitting map1_s01: 100%|██████████| 1/1 [00:02<00:00,  2.26s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map1_s01:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map1_s01: 100%|██████████| 1/1 [00:00<00:00,  6.48it/s]Linker script map1_s01: 100%|██████████| 1/1 [00:00<00:00,  6.44it/s]
+Split 59 KB (66.76%) in defined segments
+                   c:    59 KB (66.76%) 10 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map1_s02.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 156980.06it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 151094.99it/s]
+  0%|          | 0/293 [00:00<?, ?it/s]Loading symbols (sym.map1_s02):   0%|          | 0/293 [00:00<?, ?it/s]Loading symbols (sym.map1_s02): 100%|██████████| 293/293 [00:00<00:00, 80818.83it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map1_s02:   0%|          | 0/1 [00:00<?, ?it/s]
+
+Range check triggered: .data symbol (name: g_WorldObjectC, address: 0x800E58F8):
+    User declared size (0x30) does not match the amount of bytes that will be emitted (0x20).
+    Try checking the size again or look for symbols which overlaps this region
+
+
+
+Range check triggered: .data symbol (name: g_ObjPosC, address: 0x800E5918):
+    User declared size (0x1C) does not match the amount of bytes that will be emitted (0x10).
+    Try checking the size again or look for symbols which overlaps this region
+
+Scanning map1_s02: 100%|██████████| 1/1 [00:00<00:00,  1.55it/s]Scanning map1_s02: 100%|██████████| 1/1 [00:00<00:00,  1.55it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map1_s02:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map1_s02: 100%|██████████| 1/1 [00:02<00:00,  2.76s/it]Splitting map1_s02: 100%|██████████| 1/1 [00:02<00:00,  2.76s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map1_s02:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map1_s02: 100%|██████████| 1/1 [00:00<00:00,  5.41it/s]Linker script map1_s02: 100%|██████████| 1/1 [00:00<00:00,  5.39it/s]
+Split 78 KB (67.63%) in defined segments
+                   c:    78 KB (67.63%) 9 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map1_s03.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 133149.54it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 147423.08it/s]
+  0%|          | 0/302 [00:00<?, ?it/s]Loading symbols (sym.map1_s03):   0%|          | 0/302 [00:00<?, ?it/s]Loading symbols (sym.map1_s03): 100%|██████████| 302/302 [00:00<00:00, 83874.97it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map1_s03:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map1_s03: 100%|██████████| 1/1 [00:00<00:00,  1.47it/s]Scanning map1_s03: 100%|██████████| 1/1 [00:00<00:00,  1.47it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map1_s03:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map1_s03: 100%|██████████| 1/1 [00:03<00:00,  3.48s/it]Splitting map1_s03: 100%|██████████| 1/1 [00:03<00:00,  3.48s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map1_s03:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map1_s03: 100%|██████████| 1/1 [00:00<00:00,  3.75it/s]Linker script map1_s03: 100%|██████████| 1/1 [00:00<00:00,  3.74it/s]
+Split 78 KB (66.22%) in defined segments
+                   c:    78 KB (66.22%) 11 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map1_s04.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 163289.17it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 151688.67it/s]
+  0%|          | 0/119 [00:00<?, ?it/s]Loading symbols (sym.map1_s04):   0%|          | 0/119 [00:00<?, ?it/s]Loading symbols (sym.map1_s04): 100%|██████████| 119/119 [00:00<00:00, 76811.66it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map1_s04:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map1_s04: 100%|██████████| 1/1 [00:00<00:00,  6.22it/s]Scanning map1_s04: 100%|██████████| 1/1 [00:00<00:00,  6.19it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map1_s04:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map1_s04: 100%|██████████| 1/1 [00:00<00:00,  1.28it/s]Splitting map1_s04: 100%|██████████| 1/1 [00:00<00:00,  1.28it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map1_s04:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map1_s04: 100%|██████████| 1/1 [00:00<00:00,  8.36it/s]Linker script map1_s04: 100%|██████████| 1/1 [00:00<00:00,  8.32it/s]
+Split 9 KB (49.77%) in defined segments
+                   c:     9 KB (49.77%) 6 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map1_s05.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 123843.44it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 154574.42it/s]
+  0%|          | 0/182 [00:00<?, ?it/s]Loading symbols (sym.map1_s05):   0%|          | 0/182 [00:00<?, ?it/s]Loading symbols (sym.map1_s05): 100%|██████████| 182/182 [00:00<00:00, 68814.87it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map1_s05:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map1_s05: 100%|██████████| 1/1 [00:00<00:00,  2.63it/s]Scanning map1_s05: 100%|██████████| 1/1 [00:00<00:00,  2.62it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map1_s05:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map1_s05: 100%|██████████| 1/1 [00:01<00:00,  1.69s/it]Splitting map1_s05: 100%|██████████| 1/1 [00:01<00:00,  1.69s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map1_s05:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map1_s05: 100%|██████████| 1/1 [00:00<00:00,  6.12it/s]Linker script map1_s05: 100%|██████████| 1/1 [00:00<00:00,  6.06it/s]
+Split 43 KB (70.95%) in defined segments
+                   c:    43 KB (70.95%) 8 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map1_s06.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 168349.90it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 147083.43it/s]
+  0%|          | 0/206 [00:00<?, ?it/s]Loading symbols (sym.map1_s06):   0%|          | 0/206 [00:00<?, ?it/s]Loading symbols (sym.map1_s06): 100%|██████████| 206/206 [00:00<00:00, 65421.87it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map1_s06:   0%|          | 0/1 [00:00<?, ?it/s]
+
+Range check triggered: .data symbol (name: sharedData_800DFB7C_0_s00, address: 0x800D77A4):
+    User declared size (0x2710) does not match the amount of bytes that will be emitted (0xFA0).
+    Try checking the size again or look for symbols which overlaps this region
+
+Scanning map1_s06: 100%|██████████| 1/1 [00:00<00:00,  2.57it/s]Scanning map1_s06: 100%|██████████| 1/1 [00:00<00:00,  2.56it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map1_s06:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map1_s06: 100%|██████████| 1/1 [00:01<00:00,  1.99s/it]Splitting map1_s06: 100%|██████████| 1/1 [00:01<00:00,  2.00s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map1_s06:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map1_s06: 100%|██████████| 1/1 [00:00<00:00,  7.06it/s]Linker script map1_s06: 100%|██████████| 1/1 [00:00<00:00,  7.03it/s]
+Split 48 KB (66.72%) in defined segments
+                   c:    48 KB (66.72%) 7 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map2_s00.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 153544.96it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 145838.34it/s]
+  0%|          | 0/442 [00:00<?, ?it/s]Loading symbols (sym.map2_s00):   0%|          | 0/442 [00:00<?, ?it/s]Loading symbols (sym.map2_s00): 100%|██████████| 442/442 [00:00<00:00, 78594.30it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map2_s00:   0%|          | 0/1 [00:00<?, ?it/s]
+
+Range check triggered: .data symbol (name: D_800F56CC, address: 0x800F56CC):
+    User declared size (0x1C) does not match the amount of bytes that will be emitted (0x18).
+    Try checking the size again or look for symbols which overlaps this region
+
+Scanning map2_s00: 100%|██████████| 1/1 [00:00<00:00,  1.09it/s]Scanning map2_s00: 100%|██████████| 1/1 [00:00<00:00,  1.08it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map2_s00:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map2_s00: 100%|██████████| 1/1 [00:05<00:00,  5.04s/it]Splitting map2_s00: 100%|██████████| 1/1 [00:05<00:00,  5.04s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map2_s00:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map2_s00: 100%|██████████| 1/1 [00:00<00:00,  6.33it/s]Linker script map2_s00: 100%|██████████| 1/1 [00:00<00:00,  6.29it/s]
+Split 135 KB (74.71%) in defined segments
+                   c:   135 KB (74.71%) 8 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map2_s01.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 176093.90it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 156324.38it/s]
+  0%|          | 0/171 [00:00<?, ?it/s]Loading symbols (sym.map2_s01):   0%|          | 0/171 [00:00<?, ?it/s]Loading symbols (sym.map2_s01): 100%|██████████| 171/171 [00:00<00:00, 67497.27it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map2_s01:   0%|          | 0/1 [00:00<?, ?it/s]
+
+Range check triggered: .data symbol (name: g_CommonWorldObjectPoses, address: 0x800D0528):
+    User declared size (0x1C) does not match the amount of bytes that will be emitted (0x14).
+    Try checking the size again or look for symbols which overlaps this region
+
+Scanning map2_s01: 100%|██████████| 1/1 [00:00<00:00,  4.21it/s]Scanning map2_s01: 100%|██████████| 1/1 [00:00<00:00,  4.19it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map2_s01:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map2_s01: 100%|██████████| 1/1 [00:01<00:00,  1.41s/it]Splitting map2_s01: 100%|██████████| 1/1 [00:01<00:00,  1.41s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map2_s01:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map2_s01: 100%|██████████| 1/1 [00:00<00:00,  7.35it/s]Linker script map2_s01: 100%|██████████| 1/1 [00:00<00:00,  7.31it/s]
+Split 19 KB (58.64%) in defined segments
+                   c:    19 KB (58.64%) 7 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map2_s02.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 129119.77it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 153260.37it/s]
+  0%|          | 0/448 [00:00<?, ?it/s]Loading symbols (sym.map2_s02):   0%|          | 0/448 [00:00<?, ?it/s]Loading symbols (sym.map2_s02): 100%|██████████| 448/448 [00:00<00:00, 80566.32it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map2_s02:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map2_s02: 100%|██████████| 1/1 [00:00<00:00,  1.21it/s]Scanning map2_s02: 100%|██████████| 1/1 [00:00<00:00,  1.21it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map2_s02:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map2_s02: 100%|██████████| 1/1 [00:04<00:00,  4.93s/it]Splitting map2_s02: 100%|██████████| 1/1 [00:04<00:00,  4.93s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map2_s02:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map2_s02: 100%|██████████| 1/1 [00:00<00:00,  6.11it/s]Linker script map2_s02: 100%|██████████| 1/1 [00:00<00:00,  6.07it/s]
+Split 123 KB (76.38%) in defined segments
+                   c:   123 KB (76.38%) 8 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map2_s03.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 132852.95it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 145577.76it/s]
+  0%|          | 0/121 [00:00<?, ?it/s]Loading symbols (sym.map2_s03):   0%|          | 0/121 [00:00<?, ?it/s]Loading symbols (sym.map2_s03): 100%|██████████| 121/121 [00:00<00:00, 72574.11it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map2_s03:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map2_s03: 100%|██████████| 1/1 [00:00<00:00,  6.69it/s]Scanning map2_s03: 100%|██████████| 1/1 [00:00<00:00,  6.62it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map2_s03:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map2_s03: 100%|██████████| 1/1 [00:00<00:00,  1.16it/s]Splitting map2_s03: 100%|██████████| 1/1 [00:00<00:00,  1.16it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map2_s03:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map2_s03: 100%|██████████| 1/1 [00:00<00:00,  8.88it/s]Linker script map2_s03: 100%|██████████| 1/1 [00:00<00:00,  8.82it/s]
+Split 8 KB (46.24%) in defined segments
+                   c:     8 KB (46.24%) 6 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map2_s04.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 174455.96it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 149541.38it/s]
+  0%|          | 0/141 [00:00<?, ?it/s]Loading symbols (sym.map2_s04):   0%|          | 0/141 [00:00<?, ?it/s]Loading symbols (sym.map2_s04): 100%|██████████| 141/141 [00:00<00:00, 60805.76it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map2_s04:   0%|          | 0/1 [00:00<?, ?it/s]
+
+Range check triggered: .data symbol (name: g_CommonWorldObjectPoses, address: 0x800CE024):
+    User declared size (0xC4) does not match the amount of bytes that will be emitted (0x8C).
+    Try checking the size again or look for symbols which overlaps this region
+
+Scanning map2_s04: 100%|██████████| 1/1 [00:00<00:00,  5.30it/s]Scanning map2_s04: 100%|██████████| 1/1 [00:00<00:00,  5.27it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map2_s04:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map2_s04: 100%|██████████| 1/1 [00:01<00:00,  1.05s/it]Splitting map2_s04: 100%|██████████| 1/1 [00:01<00:00,  1.05s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map2_s04:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map2_s04: 100%|██████████| 1/1 [00:00<00:00,  8.44it/s]Linker script map2_s04: 100%|██████████| 1/1 [00:00<00:00,  8.36it/s]
+Split 12 KB (49.54%) in defined segments
+                   c:    12 KB (49.54%) 6 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map3_s00.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 171024.27it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 146160.67it/s]
+  0%|          | 0/189 [00:00<?, ?it/s]Loading symbols (sym.map3_s00):   0%|          | 0/189 [00:00<?, ?it/s]Loading symbols (sym.map3_s00): 100%|██████████| 189/189 [00:00<00:00, 64167.35it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map3_s00:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map3_s00: 100%|██████████| 1/1 [00:00<00:00,  2.96it/s]Scanning map3_s00: 100%|██████████| 1/1 [00:00<00:00,  2.95it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map3_s00:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map3_s00: 100%|██████████| 1/1 [00:01<00:00,  1.79s/it]Splitting map3_s00: 100%|██████████| 1/1 [00:01<00:00,  1.79s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map3_s00:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map3_s00: 100%|██████████| 1/1 [00:00<00:00,  6.30it/s]Linker script map3_s00: 100%|██████████| 1/1 [00:00<00:00,  6.27it/s]
+Split 27 KB (52.60%) in defined segments
+                   c:    27 KB (52.60%) 7 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map3_s01.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 160858.20it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 145260.86it/s]
+  0%|          | 0/218 [00:00<?, ?it/s]Loading symbols (sym.map3_s01):   0%|          | 0/218 [00:00<?, ?it/s]Loading symbols (sym.map3_s01): 100%|██████████| 218/218 [00:00<00:00, 70645.00it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map3_s01:   0%|          | 0/1 [00:00<?, ?it/s]
+
+Range check triggered: .data symbol (name: g_CommonWorldObjects, address: 0x800D8744):
+    User declared size (0xA8) does not match the amount of bytes that will be emitted (0x1C).
+    Try checking the size again or look for symbols which overlaps this region
+
+Scanning map3_s01: 100%|██████████| 1/1 [00:00<00:00,  3.02it/s]Scanning map3_s01: 100%|██████████| 1/1 [00:00<00:00,  3.01it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map3_s01:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map3_s01: 100%|██████████| 1/1 [00:01<00:00,  1.83s/it]Splitting map3_s01: 100%|██████████| 1/1 [00:01<00:00,  1.83s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map3_s01:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map3_s01: 100%|██████████| 1/1 [00:00<00:00,  7.51it/s]Linker script map3_s01: 100%|██████████| 1/1 [00:00<00:00,  7.48it/s]
+Split 34 KB (55.95%) in defined segments
+                   c:    34 KB (55.95%) 7 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map3_s02.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 171693.83it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 151868.32it/s]
+  0%|          | 0/186 [00:00<?, ?it/s]Loading symbols (sym.map3_s02):   0%|          | 0/186 [00:00<?, ?it/s]Loading symbols (sym.map3_s02): 100%|██████████| 186/186 [00:00<00:00, 70301.93it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map3_s02:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map3_s02: 100%|██████████| 1/1 [00:00<00:00,  3.68it/s]Scanning map3_s02: 100%|██████████| 1/1 [00:00<00:00,  3.66it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map3_s02:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map3_s02: 100%|██████████| 1/1 [00:01<00:00,  1.84s/it]Splitting map3_s02: 100%|██████████| 1/1 [00:01<00:00,  1.84s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map3_s02:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map3_s02: 100%|██████████| 1/1 [00:00<00:00,  6.69it/s]Linker script map3_s02: 100%|██████████| 1/1 [00:00<00:00,  6.64it/s]
+Split 26 KB (67.42%) in defined segments
+                   c:    26 KB (67.42%) 8 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map3_s03.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 160313.41it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 149324.85it/s]
+  0%|          | 0/220 [00:00<?, ?it/s]Loading symbols (sym.map3_s03):   0%|          | 0/220 [00:00<?, ?it/s]Loading symbols (sym.map3_s03): 100%|██████████| 220/220 [00:00<00:00, 70165.53it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map3_s03:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map3_s03: 100%|██████████| 1/1 [00:00<00:00,  2.99it/s]Scanning map3_s03: 100%|██████████| 1/1 [00:00<00:00,  2.98it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map3_s03:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map3_s03: 100%|██████████| 1/1 [00:02<00:00,  2.38s/it]Splitting map3_s03: 100%|██████████| 1/1 [00:02<00:00,  2.38s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map3_s03:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map3_s03: 100%|██████████| 1/1 [00:00<00:00,  7.67it/s]Linker script map3_s03: 100%|██████████| 1/1 [00:00<00:00,  7.62it/s]
+Split 39 KB (64.23%) in defined segments
+                   c:    39 KB (64.23%) 6 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map3_s04.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 155401.26it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 151579.53it/s]
+  0%|          | 0/242 [00:00<?, ?it/s]Loading symbols (sym.map3_s04):   0%|          | 0/242 [00:00<?, ?it/s]Loading symbols (sym.map3_s04): 100%|██████████| 242/242 [00:00<00:00, 83396.73it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map3_s04:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map3_s04: 100%|██████████| 1/1 [00:00<00:00,  2.92it/s]Scanning map3_s04: 100%|██████████| 1/1 [00:00<00:00,  2.91it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map3_s04:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map3_s04: 100%|██████████| 1/1 [00:02<00:00,  2.19s/it]Splitting map3_s04: 100%|██████████| 1/1 [00:02<00:00,  2.19s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map3_s04:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map3_s04: 100%|██████████| 1/1 [00:00<00:00,  6.62it/s]Linker script map3_s04: 100%|██████████| 1/1 [00:00<00:00,  6.59it/s]
+Split 37 KB (66.61%) in defined segments
+                   c:    37 KB (66.61%) 8 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map3_s05.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 160641.57it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 154427.13it/s]
+  0%|          | 0/243 [00:00<?, ?it/s]Loading symbols (sym.map3_s05):   0%|          | 0/243 [00:00<?, ?it/s]Loading symbols (sym.map3_s05): 100%|██████████| 243/243 [00:00<00:00, 58254.22it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map3_s05:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map3_s05: 100%|██████████| 1/1 [00:00<00:00,  2.43it/s]Scanning map3_s05: 100%|██████████| 1/1 [00:00<00:00,  2.43it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map3_s05:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map3_s05: 100%|██████████| 1/1 [00:02<00:00,  2.44s/it]Splitting map3_s05: 100%|██████████| 1/1 [00:02<00:00,  2.44s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map3_s05:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map3_s05: 100%|██████████| 1/1 [00:00<00:00,  8.06it/s]Linker script map3_s05: 100%|██████████| 1/1 [00:00<00:00,  8.02it/s]
+Split 55 KB (68.10%) in defined segments
+                   c:    55 KB (68.10%) 6 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map3_s06.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 168625.96it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 149939.74it/s]
+  0%|          | 0/190 [00:00<?, ?it/s]Loading symbols (sym.map3_s06):   0%|          | 0/190 [00:00<?, ?it/s]Loading symbols (sym.map3_s06): 100%|██████████| 190/190 [00:00<00:00, 76752.17it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map3_s06:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map3_s06: 100%|██████████| 1/1 [00:00<00:00,  3.49it/s]Scanning map3_s06: 100%|██████████| 1/1 [00:00<00:00,  3.47it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map3_s06:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map3_s06: 100%|██████████| 1/1 [00:01<00:00,  1.90s/it]Splitting map3_s06: 100%|██████████| 1/1 [00:01<00:00,  1.90s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map3_s06:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map3_s06: 100%|██████████| 1/1 [00:00<00:00,  6.30it/s]Linker script map3_s06: 100%|██████████| 1/1 [00:00<00:00,  6.26it/s]
+Split 26 KB (51.66%) in defined segments
+                   c:    26 KB (51.66%) 7 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map4_s00.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 167942.23it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 155647.91it/s]
+  0%|          | 0/121 [00:00<?, ?it/s]Loading symbols (sym.map4_s00):   0%|          | 0/121 [00:00<?, ?it/s]Loading symbols (sym.map4_s00): 100%|██████████| 121/121 [00:00<00:00, 68232.16it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map4_s00:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map4_s00: 100%|██████████| 1/1 [00:00<00:00,  8.69it/s]Scanning map4_s00: 100%|██████████| 1/1 [00:00<00:00,  8.61it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map4_s00:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map4_s00: 100%|██████████| 1/1 [00:00<00:00,  1.14it/s]Splitting map4_s00: 100%|██████████| 1/1 [00:00<00:00,  1.14it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map4_s00:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map4_s00: 100%|██████████| 1/1 [00:00<00:00,  9.14it/s]Linker script map4_s00: 100%|██████████| 1/1 [00:00<00:00,  9.06it/s]
+Split 8 KB (52.81%) in defined segments
+                   c:     8 KB (52.81%) 6 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map4_s01.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 161476.62it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 151751.11it/s]
+  0%|          | 0/195 [00:00<?, ?it/s]Loading symbols (sym.map4_s01):   0%|          | 0/195 [00:00<?, ?it/s]Loading symbols (sym.map4_s01): 100%|██████████| 195/195 [00:00<00:00, 66690.25it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map4_s01:   0%|          | 0/1 [00:00<?, ?it/s]
+
+Range check triggered: .data symbol (name: WorldObject_D_800D8050, address: 0x800D8050):
+    User declared size (0x30) does not match the amount of bytes that will be emitted (0x20).
+    Try checking the size again or look for symbols which overlaps this region
+
+
+
+Range check triggered: .data symbol (name: WorldObject_D_800D8070, address: 0x800D8070):
+    User declared size (0x12) does not match the amount of bytes that will be emitted (0x10).
+    Try checking the size again or look for symbols which overlaps this region
+
+Scanning map4_s01: 100%|██████████| 1/1 [00:00<00:00,  2.67it/s]Scanning map4_s01: 100%|██████████| 1/1 [00:00<00:00,  2.67it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map4_s01:   0%|          | 0/1 [00:00<?, ?it/s]
+Warning: Symbol 'WorldObject_D_800D8070' (0x800D8070) was given a size '0x12' that is not a multiple of its given type 'WorldObjectPos'
+This may produce inconsistency issues like end labels not being emitted.
+You are highly encouraged to fix it.
+This may be changed to a hard error in the future.
+
+
+Warning: Symbol 'WorldObject_D_800D8090' (0x800D8090) was given a size '0x12' that is not a multiple of its given type 'WorldObjectPos'
+This may produce inconsistency issues like end labels not being emitted.
+You are highly encouraged to fix it.
+This may be changed to a hard error in the future.
+
+Splitting map4_s01: 100%|██████████| 1/1 [00:01<00:00,  1.81s/it]Splitting map4_s01: 100%|██████████| 1/1 [00:01<00:00,  1.81s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map4_s01:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map4_s01: 100%|██████████| 1/1 [00:00<00:00,  7.33it/s]Linker script map4_s01: 100%|██████████| 1/1 [00:00<00:00,  7.29it/s]
+Split 36 KB (59.79%) in defined segments
+                   c:    36 KB (59.79%) 8 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map4_s02.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 167508.29it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 155537.93it/s]
+  0%|          | 0/461 [00:00<?, ?it/s]Loading symbols (sym.map4_s02):   0%|          | 0/461 [00:00<?, ?it/s]Loading symbols (sym.map4_s02): 100%|██████████| 461/461 [00:00<00:00, 84587.00it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map4_s02:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map4_s02: 100%|██████████| 1/1 [00:00<00:00,  1.23it/s]Scanning map4_s02: 100%|██████████| 1/1 [00:00<00:00,  1.23it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map4_s02:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map4_s02: 100%|██████████| 1/1 [00:05<00:00,  5.07s/it]Splitting map4_s02: 100%|██████████| 1/1 [00:05<00:00,  5.07s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map4_s02:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map4_s02: 100%|██████████| 1/1 [00:00<00:00,  5.37it/s]Linker script map4_s02: 100%|██████████| 1/1 [00:00<00:00,  5.36it/s]
+Split 123 KB (75.47%) in defined segments
+                   c:   123 KB (75.47%) 9 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map4_s03.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 165905.43it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 151012.98it/s]
+  0%|          | 0/199 [00:00<?, ?it/s]Loading symbols (sym.map4_s03):   0%|          | 0/199 [00:00<?, ?it/s]Loading symbols (sym.map4_s03): 100%|██████████| 199/199 [00:00<00:00, 66533.80it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map4_s03:   0%|          | 0/1 [00:00<?, ?it/s]
+Rodata segment '1204' may belong to the text segment 'map4_s03'
+    Based on the usage from the function func_800D078C to the symbol D_800CA77C
+Scanning map4_s03: 100%|██████████| 1/1 [00:00<00:00,  1.88it/s]Scanning map4_s03: 100%|██████████| 1/1 [00:00<00:00,  1.88it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map4_s03:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map4_s03: 100%|██████████| 1/1 [00:03<00:00,  3.46s/it]Splitting map4_s03: 100%|██████████| 1/1 [00:03<00:00,  3.46s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map4_s03:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map4_s03: 100%|██████████| 1/1 [00:00<00:00,  7.17it/s]Linker script map4_s03: 100%|██████████| 1/1 [00:00<00:00,  7.12it/s]
+Split 63 KB (66.21%) in defined segments
+                   c:    63 KB (66.21%) 7 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map4_s04.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 128902.10it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 127973.66it/s]
+  0%|          | 0/187 [00:00<?, ?it/s]Loading symbols (sym.map4_s04):   0%|          | 0/187 [00:00<?, ?it/s]Loading symbols (sym.map4_s04): 100%|██████████| 187/187 [00:00<00:00, 71602.60it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map4_s04:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map4_s04: 100%|██████████| 1/1 [00:00<00:00,  3.22it/s]Scanning map4_s04: 100%|██████████| 1/1 [00:00<00:00,  3.21it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map4_s04:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map4_s04: 100%|██████████| 1/1 [00:01<00:00,  1.83s/it]Splitting map4_s04: 100%|██████████| 1/1 [00:01<00:00,  1.83s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map4_s04:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map4_s04: 100%|██████████| 1/1 [00:00<00:00,  6.74it/s]Linker script map4_s04: 100%|██████████| 1/1 [00:00<00:00,  6.70it/s]
+Split 29 KB (52.84%) in defined segments
+                   c:    29 KB (52.84%) 7 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map4_s05.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 135453.77it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 146700.09it/s]
+  0%|          | 0/181 [00:00<?, ?it/s]Loading symbols (sym.map4_s05):   0%|          | 0/181 [00:00<?, ?it/s]Loading symbols (sym.map4_s05): 100%|██████████| 181/181 [00:00<00:00, 67224.74it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map4_s05:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map4_s05: 100%|██████████| 1/1 [00:00<00:00,  2.42it/s]Scanning map4_s05: 100%|██████████| 1/1 [00:00<00:00,  2.41it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map4_s05:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map4_s05: 100%|██████████| 1/1 [00:01<00:00,  1.75s/it]Splitting map4_s05: 100%|██████████| 1/1 [00:01<00:00,  1.75s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map4_s05:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map4_s05: 100%|██████████| 1/1 [00:00<00:00,  5.14it/s]Linker script map4_s05: 100%|██████████| 1/1 [00:00<00:00,  5.12it/s]
+Split 51 KB (68.66%) in defined segments
+                   c:    51 KB (68.66%) 8 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map4_s06.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 139790.47it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 150932.61it/s]
+  0%|          | 0/121 [00:00<?, ?it/s]Loading symbols (sym.map4_s06):   0%|          | 0/121 [00:00<?, ?it/s]Loading symbols (sym.map4_s06): 100%|██████████| 121/121 [00:00<00:00, 76271.53it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map4_s06:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map4_s06: 100%|██████████| 1/1 [00:00<00:00,  7.68it/s]Scanning map4_s06: 100%|██████████| 1/1 [00:00<00:00,  7.61it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map4_s06:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map4_s06: 100%|██████████| 1/1 [00:00<00:00,  1.15it/s]Splitting map4_s06: 100%|██████████| 1/1 [00:00<00:00,  1.15it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map4_s06:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map4_s06: 100%|██████████| 1/1 [00:00<00:00,  8.39it/s]Linker script map4_s06: 100%|██████████| 1/1 [00:00<00:00,  8.35it/s]
+Split 8 KB (52.81%) in defined segments
+                   c:     8 KB (52.81%) 6 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map5_s00.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 176982.20it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 151768.29it/s]
+  0%|          | 0/232 [00:00<?, ?it/s]Loading symbols (sym.map5_s00):   0%|          | 0/232 [00:00<?, ?it/s]Loading symbols (sym.map5_s00): 100%|██████████| 232/232 [00:00<00:00, 78823.70it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map5_s00:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map5_s00: 100%|██████████| 1/1 [00:00<00:00,  2.19it/s]Scanning map5_s00: 100%|██████████| 1/1 [00:00<00:00,  2.18it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map5_s00:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map5_s00: 100%|██████████| 1/1 [00:02<00:00,  2.32s/it]Splitting map5_s00: 100%|██████████| 1/1 [00:02<00:00,  2.32s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map5_s00:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map5_s00: 100%|██████████| 1/1 [00:00<00:00,  6.10it/s]Linker script map5_s00: 100%|██████████| 1/1 [00:00<00:00,  6.06it/s]
+Split 56 KB (66.31%) in defined segments
+                   c:    56 KB (66.31%) 9 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map5_s01.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 123331.27it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 133439.26it/s]
+  0%|          | 0/460 [00:00<?, ?it/s]Loading symbols (sym.map5_s01):   0%|          | 0/460 [00:00<?, ?it/s]Loading symbols (sym.map5_s01): 100%|██████████| 460/460 [00:00<00:00, 75472.53it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map5_s01:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map5_s01: 100%|██████████| 1/1 [00:00<00:00,  1.11it/s]Scanning map5_s01: 100%|██████████| 1/1 [00:00<00:00,  1.10it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map5_s01:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map5_s01: 100%|██████████| 1/1 [00:05<00:00,  5.38s/it]Splitting map5_s01: 100%|██████████| 1/1 [00:05<00:00,  5.38s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map5_s01:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map5_s01: 100%|██████████| 1/1 [00:00<00:00,  5.09it/s]Linker script map5_s01: 100%|██████████| 1/1 [00:00<00:00,  5.07it/s]
+Split 133 KB (76.29%) in defined segments
+                   c:   133 KB (76.29%) 10 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map5_s02.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 160373.76it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 157066.95it/s]
+  0%|          | 0/251 [00:00<?, ?it/s]Loading symbols (sym.map5_s02):   0%|          | 0/251 [00:00<?, ?it/s]Loading symbols (sym.map5_s02): 100%|██████████| 251/251 [00:00<00:00, 81452.25it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map5_s02:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map5_s02: 100%|██████████| 1/1 [00:00<00:00,  2.43it/s]Scanning map5_s02: 100%|██████████| 1/1 [00:00<00:00,  2.43it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map5_s02:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map5_s02: 100%|██████████| 1/1 [00:02<00:00,  2.07s/it]Splitting map5_s02: 100%|██████████| 1/1 [00:02<00:00,  2.07s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map5_s02:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map5_s02: 100%|██████████| 1/1 [00:00<00:00,  6.91it/s]Linker script map5_s02: 100%|██████████| 1/1 [00:00<00:00,  6.86it/s]
+Split 47 KB (66.58%) in defined segments
+                   c:    47 KB (66.58%) 7 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map5_s03.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 174978.01it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 157543.48it/s]
+  0%|          | 0/202 [00:00<?, ?it/s]Loading symbols (sym.map5_s03):   0%|          | 0/202 [00:00<?, ?it/s]Loading symbols (sym.map5_s03): 100%|██████████| 202/202 [00:00<00:00, 72346.46it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map5_s03:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map5_s03: 100%|██████████| 1/1 [00:00<00:00,  3.11it/s]Scanning map5_s03: 100%|██████████| 1/1 [00:00<00:00,  3.10it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map5_s03:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map5_s03: 100%|██████████| 1/1 [00:01<00:00,  1.89s/it]Splitting map5_s03: 100%|██████████| 1/1 [00:01<00:00,  1.89s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map5_s03:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map5_s03: 100%|██████████| 1/1 [00:00<00:00,  5.98it/s]Linker script map5_s03: 100%|██████████| 1/1 [00:00<00:00,  5.96it/s]
+Split 30 KB (54.37%) in defined segments
+                   c:    30 KB (54.37%) 7 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map6_s00.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 161223.45it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 146098.40it/s]
+  0%|          | 0/461 [00:00<?, ?it/s]Loading symbols (sym.map6_s00):   0%|          | 0/461 [00:00<?, ?it/s]Loading symbols (sym.map6_s00): 100%|██████████| 461/461 [00:00<00:00, 70573.55it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map6_s00:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map6_s00: 100%|██████████| 1/1 [00:00<00:00,  1.19it/s]Scanning map6_s00: 100%|██████████| 1/1 [00:00<00:00,  1.18it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map6_s00:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map6_s00: 100%|██████████| 1/1 [00:05<00:00,  5.22s/it]Splitting map6_s00: 100%|██████████| 1/1 [00:05<00:00,  5.22s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map6_s00:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map6_s00: 100%|██████████| 1/1 [00:00<00:00,  6.02it/s]Linker script map6_s00: 100%|██████████| 1/1 [00:00<00:00,  5.99it/s]
+Split 133 KB (75.97%) in defined segments
+                   c:   133 KB (75.97%) 8 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map6_s01.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 157510.70it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 140583.15it/s]
+  0%|          | 0/194 [00:00<?, ?it/s]Loading symbols (sym.map6_s01):   0%|          | 0/194 [00:00<?, ?it/s]Loading symbols (sym.map6_s01): 100%|██████████| 194/194 [00:00<00:00, 75043.34it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map6_s01:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map6_s01: 100%|██████████| 1/1 [00:00<00:00,  3.06it/s]Scanning map6_s01: 100%|██████████| 1/1 [00:00<00:00,  3.05it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map6_s01:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map6_s01: 100%|██████████| 1/1 [00:01<00:00,  1.71s/it]Splitting map6_s01: 100%|██████████| 1/1 [00:01<00:00,  1.71s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map6_s01:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map6_s01: 100%|██████████| 1/1 [00:00<00:00,  5.84it/s]Linker script map6_s01: 100%|██████████| 1/1 [00:00<00:00,  5.81it/s]
+Split 30 KB (62.72%) in defined segments
+                   c:    30 KB (62.72%) 9 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map6_s02.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 167376.67it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 152651.18it/s]
+  0%|          | 0/166 [00:00<?, ?it/s]Loading symbols (sym.map6_s02):   0%|          | 0/166 [00:00<?, ?it/s]Loading symbols (sym.map6_s02): 100%|██████████| 166/166 [00:00<00:00, 75035.51it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map6_s02:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map6_s02: 100%|██████████| 1/1 [00:00<00:00,  2.85it/s]Scanning map6_s02: 100%|██████████| 1/1 [00:00<00:00,  2.84it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map6_s02:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map6_s02: 100%|██████████| 1/1 [00:01<00:00,  1.55s/it]Splitting map6_s02: 100%|██████████| 1/1 [00:01<00:00,  1.55s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map6_s02:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map6_s02: 100%|██████████| 1/1 [00:00<00:00,  6.27it/s]Linker script map6_s02: 100%|██████████| 1/1 [00:00<00:00,  6.23it/s]
+Split 34 KB (73.78%) in defined segments
+                   c:    34 KB (73.78%) 8 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map6_s03.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 165721.04it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 148940.28it/s]
+  0%|          | 0/274 [00:00<?, ?it/s]Loading symbols (sym.map6_s03):   0%|          | 0/274 [00:00<?, ?it/s]Loading symbols (sym.map6_s03): 100%|██████████| 274/274 [00:00<00:00, 76493.56it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map6_s03:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map6_s03: 100%|██████████| 1/1 [00:00<00:00,  1.99it/s]Scanning map6_s03: 100%|██████████| 1/1 [00:00<00:00,  1.99it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map6_s03:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map6_s03: 100%|██████████| 1/1 [00:02<00:00,  2.39s/it]Splitting map6_s03: 100%|██████████| 1/1 [00:02<00:00,  2.39s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map6_s03:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map6_s03: 100%|██████████| 1/1 [00:00<00:00,  6.46it/s]Linker script map6_s03: 100%|██████████| 1/1 [00:00<00:00,  6.42it/s]
+Split 57 KB (61.99%) in defined segments
+                   c:    57 KB (61.99%) 8 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map6_s04.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 116956.24it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 152534.34it/s]
+  0%|          | 0/302 [00:00<?, ?it/s]Loading symbols (sym.map6_s04):   0%|          | 0/302 [00:00<?, ?it/s]Loading symbols (sym.map6_s04): 100%|██████████| 302/302 [00:00<00:00, 80541.73it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map6_s04:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map6_s04: 100%|██████████| 1/1 [00:00<00:00,  1.19it/s]Scanning map6_s04: 100%|██████████| 1/1 [00:00<00:00,  1.19it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map6_s04:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map6_s04: 100%|██████████| 1/1 [00:04<00:00,  4.50s/it]Splitting map6_s04: 100%|██████████| 1/1 [00:04<00:00,  4.50s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map6_s04:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map6_s04: 100%|██████████| 1/1 [00:00<00:00,  5.23it/s]Linker script map6_s04: 100%|██████████| 1/1 [00:00<00:00,  5.21it/s]
+Split 111 KB (74.35%) in defined segments
+                   c:   111 KB (74.35%) 11 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map6_s05.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 160072.47it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 147048.23it/s]
+  0%|          | 0/123 [00:00<?, ?it/s]Loading symbols (sym.map6_s05):   0%|          | 0/123 [00:00<?, ?it/s]Loading symbols (sym.map6_s05): 100%|██████████| 123/123 [00:00<00:00, 67420.20it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map6_s05:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map6_s05: 100%|██████████| 1/1 [00:00<00:00,  7.34it/s]Scanning map6_s05: 100%|██████████| 1/1 [00:00<00:00,  7.28it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map6_s05:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map6_s05: 100%|██████████| 1/1 [00:00<00:00,  1.16it/s]Splitting map6_s05: 100%|██████████| 1/1 [00:00<00:00,  1.15it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map6_s05:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map6_s05: 100%|██████████| 1/1 [00:00<00:00,  8.83it/s]Linker script map6_s05: 100%|██████████| 1/1 [00:00<00:00,  8.77it/s]
+Split 8 KB (54.01%) in defined segments
+                   c:     8 KB (54.01%) 6 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map7_s00.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 151102.05it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 145572.01it/s]
+  0%|          | 0/169 [00:00<?, ?it/s]Loading symbols (sym.map7_s00):   0%|          | 0/169 [00:00<?, ?it/s]Loading symbols (sym.map7_s00): 100%|██████████| 169/169 [00:00<00:00, 77451.64it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map7_s00:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map7_s00: 100%|██████████| 1/1 [00:00<00:00,  2.95it/s]Scanning map7_s00: 100%|██████████| 1/1 [00:00<00:00,  2.94it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map7_s00:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map7_s00: 100%|██████████| 1/1 [00:01<00:00,  1.61s/it]Splitting map7_s00: 100%|██████████| 1/1 [00:01<00:00,  1.61s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map7_s00:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map7_s00: 100%|██████████| 1/1 [00:00<00:00,  7.13it/s]Linker script map7_s00: 100%|██████████| 1/1 [00:00<00:00,  7.09it/s]
+Split 29 KB (66.82%) in defined segments
+                   c:    29 KB (66.82%) 7 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map7_s01.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 154748.07it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 137023.67it/s]
+  0%|          | 0/318 [00:00<?, ?it/s]Loading symbols (sym.map7_s01):   0%|          | 0/318 [00:00<?, ?it/s]Loading symbols (sym.map7_s01): 100%|██████████| 318/318 [00:00<00:00, 64624.68it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map7_s01:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map7_s01: 100%|██████████| 1/1 [00:00<00:00,  1.47it/s]Scanning map7_s01: 100%|██████████| 1/1 [00:00<00:00,  1.47it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map7_s01:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map7_s01: 100%|██████████| 1/1 [00:03<00:00,  3.83s/it]Splitting map7_s01: 100%|██████████| 1/1 [00:03<00:00,  3.83s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map7_s01:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map7_s01: 100%|██████████| 1/1 [00:00<00:00,  5.70it/s]Linker script map7_s01: 100%|██████████| 1/1 [00:00<00:00,  5.68it/s]
+Split 75 KB (70.76%) in defined segments
+                   c:    75 KB (70.76%) 10 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map7_s02.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 111282.56it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 158189.04it/s]
+  0%|          | 0/376 [00:00<?, ?it/s]Loading symbols (sym.map7_s02):   0%|          | 0/376 [00:00<?, ?it/s]Loading symbols (sym.map7_s02): 100%|██████████| 376/376 [00:00<00:00, 81742.51it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map7_s02:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map7_s02: 100%|██████████| 1/1 [00:00<00:00,  1.12it/s]Scanning map7_s02: 100%|██████████| 1/1 [00:00<00:00,  1.12it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map7_s02:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map7_s02: 100%|██████████| 1/1 [00:03<00:00,  3.71s/it]Splitting map7_s02: 100%|██████████| 1/1 [00:03<00:00,  3.71s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map7_s02:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map7_s02: 100%|██████████| 1/1 [00:00<00:00,  4.37it/s]Linker script map7_s02: 100%|██████████| 1/1 [00:00<00:00,  4.36it/s]
+Split 96 KB (67.76%) in defined segments
+                   c:    96 KB (67.76%) 14 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+python3 -m splat split --disassemble-all configs/USA/maps/map7_s03.yaml
+splat 0.39.1 (powered by spimdisasm 1.40.2)
+  0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main):   0%|          | 0/711 [00:00<?, ?it/s]Loading symbols (sym.main): 100%|██████████| 711/711 [00:00<00:00, 141791.09it/s]
+  0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog):   0%|          | 0/3516 [00:00<?, ?it/s]Loading symbols (sym.bodyprog): 100%|██████████| 3516/3516 [00:00<00:00, 155231.76it/s]
+  0%|          | 0/302 [00:00<?, ?it/s]Loading symbols (sym.map7_s03):   0%|          | 0/302 [00:00<?, ?it/s]Loading symbols (sym.map7_s03): 100%|██████████| 302/302 [00:00<00:00, 93488.80it/s]
+  0%|          | 0/1 [00:00<?, ?it/s]Scanning map7_s03:   0%|          | 0/1 [00:00<?, ?it/s]Scanning map7_s03: 100%|██████████| 1/1 [00:01<00:00,  1.09s/it]Scanning map7_s03: 100%|██████████| 1/1 [00:01<00:00,  1.09s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Splitting map7_s03:   0%|          | 0/1 [00:00<?, ?it/s]Splitting map7_s03: 100%|██████████| 1/1 [00:06<00:00,  6.40s/it]Splitting map7_s03: 100%|██████████| 1/1 [00:06<00:00,  6.40s/it]
+  0%|          | 0/1 [00:00<?, ?it/s]Linker script map7_s03:   0%|          | 0/1 [00:00<?, ?it/s]Linker script map7_s03: 100%|██████████| 1/1 [00:00<00:00,  3.05it/s]Linker script map7_s03: 100%|██████████| 1/1 [00:00<00:00,  3.04it/s]
+Split 117 KB (65.93%) in defined segments
+                   c:   117 KB (65.93%) 18 split, 0 cached
+             unknown:      0 B (0.00%) from unknown bin files
+make[1]: Leaving directory '/app'

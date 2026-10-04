@@ -59,7 +59,7 @@ GsOT g_OrderingTable0[2] = {
 
 GsOT g_OrderingTable1[2] = {
     { 9, (GsOT_TAG*)FS_BUFFER_1, 0, 0, 0 },
-    { 9, (GsOT_TAG*)0x801E2E00, 0, 0, 0 }
+    { 9, (GsOT_TAG*)PSX_RAM_ADDR(0x801E2E00), 0, 0, 0 }
 };
 
 GsOT g_OrderingTable2[2] = {

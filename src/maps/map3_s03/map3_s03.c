@@ -271,7 +271,7 @@ void func_800D1A58(void) // 0x800D1A58
         case 5:
             g_SysWork.bgmStatusFlags |= BgmStatusFlag_Pause;
 
-            Fs_QueueStartReadTim(FILE_TIM_COLORS_TIM, (void*)0x801D2600, &g_ItemInspectionImg);
+            Fs_QueueStartReadTim(FILE_TIM_COLORS_TIM, PSX_RAM_ADDR(0x801D2600), &g_ItemInspectionImg);
 
             for (i = 0, Fs_QueueWaitForEmpty(), D_800D8145 = 0; i < 4; i++)
             {

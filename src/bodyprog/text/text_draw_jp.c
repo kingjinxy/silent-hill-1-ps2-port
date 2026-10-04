@@ -677,7 +677,7 @@ s32 Gfx_MapMsg_WidthsCompute(s32 mapMsgIdx) // 0x8004AF5C
 
         if (rect.w != 0)
         {
-            LoadImage(&rect, (u32*)0x801E1E80);
+            LoadImage(&rect, (u32*)PSX_RAM_ADDR(0x801E1E80));
             DrawSync(0);
         }
     }
@@ -765,7 +765,7 @@ void func_8004B45C(s32 mapMsgBaseIdx, s32 arg1) // 0x8004B45C
 
         if (rect.w != 0)
         {
-            LoadImage(&rect, (u32*)0x801E1E80);
+            LoadImage(&rect, (u32*)PSX_RAM_ADDR(0x801E1E80));
             if (i != 2)
             {
                 DrawSync(0);

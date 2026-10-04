@@ -55,7 +55,7 @@ STATIC_ASSERT_SIZEOF(s_DemoFileInfo, 8);
 // GLOBALS
 // ========
 
-#define g_Demo_ActiveState ((s_DemoState*)0x800FDE00)
+#define g_Demo_ActiveState ((s_DemoState*)PSX_RAM_ADDR(0x800FDE00))
 
 /** `Demo_FrameCount` */
 extern s32 g_Demo_FrameCount;

@@ -4,7 +4,7 @@
 #include "common.h"
 
 #define FS_MEM_BLOCK_COUNT 16       /** Number of FS memory blocks that can be allocated. */
-#define FS_MEM_BASE        0x1C0000 /** FS heap base (0x801C0000). */
+#define FS_MEM_BASE        PSX_RAM_ADDR(0x1C0000) /** FS heap base (0x801C0000, KUSEG mirror). */
 #define FS_MEM_SIZE        0x20000  /** FS heap size (128kb). */
 
 /** @brief FS memory block.

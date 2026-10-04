@@ -7,9 +7,7 @@
 
 #define PAD_RODATA()
 
-#define PSX_SCRATCH ((void*)0x1F800000)
-
-#define PSX_SCRATCH_ADDR(offset) ((void*)(((u8*)PSX_SCRATCH) + (offset)))
+#include "psx_mem.h"
 
 /** @brief Computes the size of an array.
  *

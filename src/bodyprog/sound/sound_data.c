@@ -2,14 +2,14 @@
 #include "bodyprog/sound/sound_system.h"
 
 u8* g_Sd_VabBuffers[4] = {
-    (u8*)0x801FE460,
-    (u8*)0x801FD840,
-    (u8*)0x801FC220,
-    (u8*)0x801FA600
+    (u8*)PSX_RAM_ADDR(0x801FE460),
+    (u8*)PSX_RAM_ADDR(0x801FD840),
+    (u8*)PSX_RAM_ADDR(0x801FC220),
+    (u8*)PSX_RAM_ADDR(0x801FA600)
 };
 
 u8* g_Sd_KdtBuffer[1] = {
-    (u8*)0x801F5600
+    (u8*)PSX_RAM_ADDR(0x801F5600)
 };
 
 s32 D_800A9FDC[4] = {

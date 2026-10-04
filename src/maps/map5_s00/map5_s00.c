@@ -154,7 +154,7 @@ void func_800D5EE8(void) // 0x800D5EE8
     s32              idx;
     int              code;
 
-    ptr = 0x801E2600;
+    ptr = PSX_RAM_ADDR(0x801E2600);
 
     packet = GsOUT_PACKET_P;
     poly   = packet;
