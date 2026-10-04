@@ -22,11 +22,6 @@ SKIP_DIRS = ["include/psyq"]
 ALLOWLIST = {
     # The abstraction itself.
     ("include/decomp/psx_mem.h", "0x1F800000"),
-    # Overlay load addresses; removed by Step 2 (static linking of overlays).
-    ("src/main/main.c", "0x800CBAA8"),
-    ("src/main/main.c", "0x800CBBD0"),
-    ("src/main/main.c", "0x800C9578"),
-    ("src/main/main.c", "0x80024B60"),
     # GPU/colour data words, not addresses.
     ("src/bodyprog/bodyprog_80089090.c", "0x80008080"),
     ("src/bodyprog/text/bodyprog_8003652C.c", "0x80048084"),

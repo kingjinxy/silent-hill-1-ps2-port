@@ -14,16 +14,18 @@
 // @hack Explicit rodata here because these need to be referenced externally to end up in .rodata,
 // otherwise they'll go into .sdata because they're small; can't wrap them in a struct either because
 // `main` accesses them individually and not with a common base.
+// Overlay load addresses: in the port they point into the RAM arena, where overlay files are read to
+// (the code itself is linked in; see Port_OverlayActivate).
 
 #if VERSION_IS(JAP0)
-    void* SECTION(".rodata") g_OvlDynamic = (void*)0x800CBAA8;
+    void* SECTION(".rodata") g_OvlDynamic = PSX_RAM_ADDR(0x800CBAA8);
 #elif VERSION_IS(JAP1) || VERSION_IS(JAP2)
-    void* SECTION(".rodata") g_OvlDynamic = (void*)0x800CBBD0;
+    void* SECTION(".rodata") g_OvlDynamic = PSX_RAM_ADDR(0x800CBBD0);
 #else
-    void* SECTION(".rodata") g_OvlDynamic = (void*)0x800C9578;
+    void* SECTION(".rodata") g_OvlDynamic = PSX_RAM_ADDR(0x800C9578);
 #endif
 
-void* SECTION(".rodata") g_OvlBodyprog = (void*)0x80024B60;
+void* SECTION(".rodata") g_OvlBodyprog = PSX_RAM_ADDR(0x80024B60);
 
 // Overridable defines used by `snmain`
 s32 _ramsize = 2 * 1024 * 1024; // 2MiB of RAM

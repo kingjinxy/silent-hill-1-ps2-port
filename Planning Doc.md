@@ -120,10 +120,10 @@ keep only the symbols main/bodyprog reference. main + bodyprog + screens + 43 ma
 
 - [ ] Namespace per-map symbols (`Map_WorldObjectsInit`/`Update` ×42, `sharedFunc_*` in 95 files)
       — compare with the PC port's per-map `SH_MAP_NAME` renaming
-- [ ] Replace "load overlay + jump" with a per-map dispatch table
+- [x] Replace "load overlay + jump" with a per-map dispatch table (`Port_OverlayActivate`)
       — cf. PC port `map_registry.c` (swaps a `g_MapOverlayHdr` pointer per map)
 - [ ] Reset each overlay's `.data` on "load" (snapshot/restore), matching PS1 reload semantics
-- [ ] Remove `g_OvlBodyprog` / `g_OvlDynamic` fixed addresses
+- [x] Remove `g_OvlBodyprog` / `g_OvlDynamic` fixed addresses (now `PSX_RAM_ADDR`)
 - [ ] Decide what to do with the remaining `INCLUDE_ASM` functions (need C for the port)
 - [ ] Assemble splat's data/rodata `.s` files for the EE as-is (no zero-stubbed tables)
 
@@ -182,8 +182,15 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
       ISO9660, 2048-byte sectors, retail PS2 DVD layout — path tables at 257, root at 261, root size
       = bytes used). Boots as DVD media in PCSX2 with both the v1.00 and v1.60 BIOS
 - [ ] Title ID `SHPS_000.01` is a placeholder (SYSTEM.CNF, ELF name, memory card folder)
-- [ ] Next: overlay-load hook + `g_MapOverlayHdr` pointer (currently fixed to map0_s00), then libcd →
-      sceCd reads from SILENT./HILL. on the disc, VSync/timers, then libgpu
+- [x] Overlay-load hook: `g_OvlBodyprog`/`g_OvlDynamic` go through `PSX_RAM_ADDR` (overlay files are
+      still read, into the arena); `Fs_QueueStartRead` calls `Port_OverlayActivate` (src/port/overlay.c),
+      which points `g_MapOverlayHdrPtr` at the loaded map's header
+- [ ] Overlay .data/.bss reset on reload (snapshot/restore)
+- [x] libcd (file-queue subset) on libcdvd: `src/port/ps2/libcd_ps2.c`; SILENT. sector-for-sector,
+      HILL. raw 2336-byte sectors; synchronous reads. The game now gets through `main` into bodyprog
+      init (pad, SPU, root counters, events, main loop)
+- [ ] Next: libgpu — recompile the pure functions (AddPrim, SetPoly*, SetDraw*, OpenTIM/ReadTIM,
+      TermPrim, SetDrawEnv...), C versions of the hardware ones on the GS (Step 4); VSync/root counters
 
 ### Step 4 — Graphics (libgpu → GS)
 

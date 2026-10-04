@@ -146,6 +146,12 @@ def main():
         os.makedirs(os.path.dirname(obj), exist_ok=True)
         run([CC, "-c", *PORT_CFLAGS, src, "-o", obj])
         port_objs.append(obj)
+    # PS2-side HAL code (src/port/ps2/): compiled against ps2sdk's headers, not the game's.
+    for src in sorted(glob.glob("src/port/ps2/*.c")):
+        obj = os.path.join(OUT, "port", "ps2_" + os.path.basename(src) + ".o")
+        run([CC, "-c", "-O2", "-G0", "-D_EE", "-Wall", "-I" + os.path.join(PS2SDK, "ee", "include"),
+             "-I" + os.path.join(PS2SDK, "common", "include"), src, "-o", obj])
+        port_objs.append(obj)
     run(["tools/port/recomp_all.sh"])
     recomp_objs = []
     for src in sorted(glob.glob(OUT + "/recomp/*.c")):
@@ -198,7 +204,8 @@ def main():
         return run([CC, "-T", os.path.join(PS2SDK, "ee", "startup", "linkfile"), "-L", os.path.join(PS2SDK, "ee", "lib"),
                     "-Wl,-zmax-page-size=128", "-Wl,--unresolved-symbols=report-all", "-o", elf,
                     combined, *port_objs, *extra, "-Wl,--start-group", recomp_lib, "-Wl,--end-group",
-                    "configs/USA/relative_syms.ld", "configs/USA/port_relative_syms.ld", "configs/USA/port_syms.ld"],
+                    "configs/USA/relative_syms.ld", "configs/USA/port_relative_syms.ld", "configs/USA/port_syms.ld",
+                    "-lcdvd"],
                    check=False)
 
     r = final_link([])

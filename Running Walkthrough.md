@@ -631,3 +631,35 @@ is also PCSX2's DVD signature: u16 at PVD+166 (`0x01D4`) ≠ u16 at PVD+171 (`0x
 padding (607 MB image), and the game boots from the image with both the v1.00 and v1.60 BIOS
 (`pcsx2_run.py --bios <file>` overrides the BIOS for one run). The earlier padding and root-directory
 experiments are gone.
+
+---
+
+## 2026-10-04 — Overlay hook and CD reads: the game reaches bodyprog
+
+### Overlays
+
+- `src/main/main.c`: `g_OvlBodyprog`/`g_OvlDynamic` are `PSX_RAM_ADDR(...)` (identical on PS1). In the
+  port, overlay files are still read through the file queue — into the RAM arena at their PS1 load
+  address, never executed — so queue behaviour and timing don't change.
+- `Fs_QueueStartRead` calls `Port_OverlayActivate(fileIdx)` under `SH_PORT` (`src/port/overlay.c`):
+  for a map file it sets `g_MapOverlayHdrPtr` to that map's header (`g_MapOverlayHdr_<map>`, from
+  the merge). `bodyprog.h`: under `SH_PORT` and not `SH_MAP_OVERLAY` (new flag, set for map sources
+  in `ee_compile_check.sh`), `g_MapOverlayHdr` is `(*g_MapOverlayHdrPtr)`; map code uses its own
+  header. Starts at map0_s00's header (on PS1 the address holds B_KONAMI's bytes until a map loads).
+- Not yet: restoring an overlay's .data/.bss on reload.
+
+### libcd on the DVD drive (`src/port/ps2/libcd_ps2.c`)
+
+The subset the file queue uses: CdInit/CdReset (`sceCdInit`, DVD media mode, `sceCdSearchFile` for
+`\SILENT.;1` and `\HILL.;1`), CdIntToPos/CdPosToInt (BCD, 150-sector lead-in), CdControl(B)
+(CdlSetloc records the position; everything completes immediately), CdSync → CdlComplete,
+CdRead (synchronous), CdReadSync → 0. PS1 sector L: SILENT. if 64 ≤ L < 64+39295 (DVD sector =
+SILENT.lsn + L-64), else HILL. (raw 2336-byte sectors: data at +8 after the subheader; read through
+a 64-byte-aligned bounce buffer). `src/port/ps2/` is compiled with ps2sdk headers instead of the
+game's; `libcdvd-common.h` `#define`s `CdInit`/`CdRead`/`CdSync`/`CdPosToInt`/`CdIntToPos` to its own
+functions, so those are `#undef`'d. Linked with `-lcdvd`.
+
+Result (DVD image, PCSX2): `libcd: SILENT. at DVD sector 3355 (39295 sectors), HILL. at 42650`;
+the warning TIM loads, main's fade loop runs, then bodyprog init: root counters, memory card, events,
+pad, SPU and reverb, OTs, AddPrim — the main loop. Remaining crashes come from stubs returning NULL
+(`ReadTIM` → `Fs_QueuePostLoadTim`; a NULL `strcpy` source). 102 HAL stubs left.

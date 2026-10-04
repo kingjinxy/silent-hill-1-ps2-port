@@ -77,6 +77,10 @@ s32 Fs_QueueStartSeek(e_FsFile fileIdx)
 
 s32 Fs_QueueStartRead(e_FsFile fileIdx, void* dest)
 {
+#ifdef SH_PORT
+    Port_OverlayActivate(fileIdx); // Overlay code is linked in; the file is still read, to the arena.
+#endif
+
     return Fs_QueueEnqueue(fileIdx, FsQueueOp_Read, FsQueuePostLoadType_None, false, dest, 0, NULL);
 }
 

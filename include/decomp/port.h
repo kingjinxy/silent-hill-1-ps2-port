@@ -27,4 +27,10 @@
 #define MATCH_CONST const
 #endif
 
+#ifdef SH_PORT
+/** @brief Called for every file read the game starts (`Fs_QueueStartRead`). For overlay files
+ * (maps, screens, BODYPROG, B_KONAMI), makes the linked-in overlay current. src/port/overlay.c. */
+void Port_OverlayActivate(s32 fileIdx);
+#endif
+
 #endif

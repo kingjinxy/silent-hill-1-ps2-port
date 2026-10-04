@@ -918,7 +918,16 @@ extern u8 D_800AD480[24];
 /** Weapon attacks. */
 extern s_800AD4C8 D_800AD4C8[70];
 
+#if defined(SH_PORT) && !defined(SH_MAP_OVERLAY)
+/** @brief Port: all maps are linked in, each with its own header (`g_MapOverlayHdr_<map>`); code
+ * outside the maps reaches the current one through this pointer, set by `Port_OverlayActivate` when
+ * the game loads a map overlay. Map code (built with `SH_MAP_OVERLAY`) uses its own header directly.
+ */
+extern s_MapOverlayHdr* g_MapOverlayHdrPtr;
+#define g_MapOverlayHdr (*g_MapOverlayHdrPtr)
+#else
 extern MATCH_CONST s_MapOverlayHdr g_MapOverlayHdr; // 0x800C957C (written at runtime, see `MATCH_CONST`)
+#endif
 
 extern s16 SQRT[100];
 
