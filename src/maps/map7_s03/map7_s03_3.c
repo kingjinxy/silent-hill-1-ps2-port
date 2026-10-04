@@ -2270,6 +2270,10 @@ void func_800E514C(void) // 0x800E514C
 const u8 g_rodata_800CC320[40] = { 0 };
 
 INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CC348);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CC35C);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CC3D4);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CC410);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CC4C4);
 
 void func_800E62CC(void) // 0x800E62CC
 {
@@ -2884,6 +2888,14 @@ void func_800E7380(void) // 0x800E7380
 }
 
 INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CC63C);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CC6B4);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CC7E0);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CC90C);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CC9FC);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CCAEC);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CCB28);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CCC18);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CCC54);
 
 void func_800E787C(void) // 0x800E787C
 {
@@ -3278,6 +3290,7 @@ void func_800E787C(void) // 0x800E787C
 }
 
 INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CCD20);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CCD5C);
 
 void func_800E86BC(void) // 0x800E86BC
 {
@@ -3474,6 +3487,10 @@ void func_800E86BC(void) // 0x800E86BC
 }
 
 INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CCE80);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CCEBC);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CCFAC);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CD024);
+INCLUDE_RODATA("maps/map7_s03/nonmatchings/map7_s03_3", D_800CD09C);
 
 void func_800E8D20(void) // 0x800E8D20
 {

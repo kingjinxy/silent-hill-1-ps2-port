@@ -42,12 +42,13 @@ Ground rules:
 - [x] Verify matching build checksum still passes with the changes (all 51 outputs OK)
 - [x] Audit splat-generated data asm for raw pointer words (`.word 0x80xxxxxx`) that should be symbols
       — 102 raw words (66 distinct) in 5 linked files, see below
-- [ ] Symbolise/migrate the raw pointer words:
-  - [ ] `MAP_MESSAGES` tables in map4_s00 (`365C.data.s`), map4_s06 (`363C.data.s`), map6_s05 (`3744.data.s`)
-        — migrate to C like map4_s01 does
-  - [ ] map7_s03 `23CA0.data.s`: pointer tables into its own rodata (`D_800ED7E0` etc.) and two
-        fixed-buffer pointers (`D_800ED230` = `FS_BUFFER_20`, `FS_BUFFER_18`)
-  - [ ] bodyprog `D_80028A18` (`3EB8.rodata.s`) = `0x80052F00`, a code pointer
+- [x] Symbolise/migrate the raw pointer words:
+  - [x] `MAP_MESSAGES` tables in map4_s00, map4_s06, map6_s05 — migrated to C like map4_s01
+  - [x] map7_s03 `23CA0.data.s`: pointer tables into its own rodata now use symbols (rodata blobs
+        split with extra `INCLUDE_RODATA`); the two fixed buffers are `g_FsBuffer18`/`g_FsBuffer20`
+  - [x] bodyprog `D_80028A18` (`3EB8.rodata.s`) — not a pointer: unreferenced compiler padding
+- [x] Re-audit: no raw pointer words remain in linked data; remaining `0x80……` words are
+      `LOADABLE_INVENTORY_ITEMS` bytes (`0x80222120`) and colours (`0x80808080`, `0x80FF8080`)
 - [x] Check whether any fixed buffer overlaps a linked section
       — map overlays end ≤ `0x800F5978`, below the lowest buffer (`0x800F5E00`): no overlap.
       Screen overlays (STREAM/SAVELOAD/OPTION/STF_ROLL) load at `0x801E2600` *on top of*

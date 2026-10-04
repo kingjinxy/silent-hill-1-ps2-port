@@ -21,3 +21,6 @@ ctx.c
 compile.log
 compile_commands.json
 Zone.Identifier
+
+# Local build logs
+/build_*.log

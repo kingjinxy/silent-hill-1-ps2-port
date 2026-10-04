@@ -134,3 +134,90 @@ a buffer. The screen overlays are deliberately loaded over the `0x801E2600` buff
 (the same address as `FS_BUFFER_1`/`CD_ADDR_0`); the game doesn't use those buffers while a
 screen overlay is active. In the port the overlay code lives outside the arena, so that
 sharing just goes away. Nothing to fix.
+
+---
+
+## 2026-10-04 — Build environment moved to a Debian VM
+
+Docker on Windows was slow, so the build now runs natively on a Debian 13 VM (8 cores, 16 GB RAM,
+80 GB disk), without Docker.
+
+1. System packages (the same ones the Dockerfile installs, plus `chdman`):
+   ```
+   sudo apt install make gcc binutils-mips-linux-gnu cpp-mips-linux-gnu bchunk mame-tools python3-venv
+   ```
+2. Python dependencies in a venv (`.venv/` is gitignored), since Debian blocks system-wide pip.
+   `requirements.txt` installs cleanly on Python 3.13:
+   ```
+   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+   source .venv/bin/activate     # before every make
+   ```
+3. `git submodule update --init`
+4. ROM: `chdman extractcd` as before, producing `rom/image/SLUS-00707.bin/.cue`.
+5. `make setup && make -j8 build`.
+
+Note `make -j8` with no target no longer builds anything on this machine (it treats a generated
+`.i` file as the default goal); use `make -j8 build` explicitly.
+
+Disk: the original 18 GB root filesystem filled up mid-build. The disk was grown to 80 GB; a 1 GB
+swap partition sat between `/` and the new space, so it was replaced with a 4 GB `/swapfile`
+(`/etc/fstab` updated, `RESUME=none` in `/etc/initramfs-tools/conf.d/resume`) and `/` was grown
+with `parted resizepart` + `resize2fs`.
+
+Verification: with the Step 1 changes, a clean `make setup && make -j8 build` takes about 20 s and
+all 50 checksum entries are OK (the "51 outputs" above was a miscount; `configs/USA/checksum.sha`
+lists 50). `tools/port/find_fixed_addresses.py` reports no raw address literals.
+
+---
+
+## 2026-10-04 — Step 1: symbolising raw pointer words in data asm
+
+The `MAP_MESSAGES` tables (map4_s00, map4_s06, map6_s05) were already migrated to C in the
+Windows session (commit `86dea3a72`). This entry covers the rest.
+
+### map7_s03
+
+`23CA0.data.s` holds tables of `s_800ED7E0_ptr*` (`D_800ED7E0`, `D_800ED8B0`, `D_800ED8EC`, and
+more further down) whose entries point at elements of struct arrays in map7_s03's rodata. splat
+only emits a symbol when a word matches a known label exactly, and most targets were in the
+*middle* of `INCLUDE_RODATA` blobs (`D_800CC348`, `D_800CC63C`, `D_800CCD20`, `D_800CCE80`),
+so it wrote them as numbers.
+
+Fix, without changing any bytes:
+
+- `configs/USA/maps/sym.map7_s03.txt`: new `.rodata` section naming each target
+  (`g_rodata_800CC320`, `D_800CC35C` … `D_800CD09C`, 23 symbols). splat now splits the blobs at
+  those addresses and the data tables reference them by name.
+  - `D_800CC348` had to be named explicitly: once `0x800CC320` (already a C array,
+    `g_rodata_800CC320[40]`) was a symbol, splat merged the auto-named `D_800CC348` into it.
+    The struct at `0x800CC320` really spans both (60 bytes); `D_800CC348` is its tail.
+  - Custom `type:` annotations aren't accepted (spimdisasm wants a known type or a capitalised
+    name), so the symbols are untyped.
+- `src/maps/map7_s03/map7_s03_3.c`: an extra `INCLUDE_RODATA` after each split blob, in address
+  order, so the assembled rodata is contiguous and identical.
+- The two fixed-buffer words in `D_800ED230` (`0x80185600`, `0x80180600`, used as
+  `s_DmsHeader*` for cutscene data) are now symbols `g_FsBuffer20`/`g_FsBuffer18`. They're
+  outside every segment, so splat writes them to `linkers/USA/maps/undefined_syms_auto.map7_s03.txt`
+  as absolute addresses. The port's linker script can define them as `g_PsxRam + 0x185600` etc.,
+  matching `PSX_RAM_ADDR`.
+
+### bodyprog `D_80028A18`
+
+`0x80052F00` is in bodyprog's text range, but the yaml already marks `0x3EB8` as
+"Garbage padding" and nothing references it. Left as is.
+
+### Re-audit
+
+All 190 linked data `.s` files (from `linkers/`): the only `0x80xxxxxx` words left are
+`LOADABLE_INVENTORY_ITEMS` (`0x80222120` = item IDs `20 21 22 80`) in each map, RGBA colours
+(`0x80808080`, `0x80FF8080`) and the padding word above. None are pointers.
+
+### Verification
+
+`make setup && make -j8 build`: all 50 checksums OK.
+
+### Build gotcha
+
+maspsx reads its input from stdin unless stdin is a TTY or empty. When `make` runs with stdin
+attached to an open pipe/socket (e.g. a backgrounded job), it blocks forever on the first `.c.s`.
+Run `make ... < /dev/null` in that case.

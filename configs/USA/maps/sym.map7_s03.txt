@@ -175,6 +175,35 @@ Map_WorldObjectsUpdate             = 0x800E972C; // type:func
 
 
 //================================================
+//=== .rodata section
+
+// Elements of `s_800ED7E0_ptr` arrays referenced from pointer tables in data
+// (D_800ED7E0, D_800ED8B0, D_800ED8EC, ...). D_800CC348 is the tail of the struct at 0x800CC320.
+g_rodata_800CC320                  = 0x800CC320;
+D_800CC348                         = 0x800CC348;
+D_800CC35C                         = 0x800CC35C;
+D_800CC3D4                         = 0x800CC3D4;
+D_800CC410                         = 0x800CC410;
+D_800CC4C4                         = 0x800CC4C4;
+D_800CC6B4                         = 0x800CC6B4;
+D_800CC7E0                         = 0x800CC7E0;
+D_800CC90C                         = 0x800CC90C;
+D_800CC9FC                         = 0x800CC9FC;
+D_800CCAEC                         = 0x800CCAEC;
+D_800CCB28                         = 0x800CCB28;
+D_800CCC18                         = 0x800CCC18;
+D_800CCC54                         = 0x800CCC54;
+D_800CCD5C                         = 0x800CCD5C;
+D_800CCEBC                         = 0x800CCEBC;
+D_800CCFAC                         = 0x800CCFAC;
+D_800CD024                         = 0x800CD024;
+D_800CD09C                         = 0x800CD09C;
+
+// Fixed RAM buffers referenced from data (D_800ED230). Not part of any segment; splat emits them as
+// absolute symbols in undefined_syms_auto, so the port can redirect them into g_PsxRam.
+g_FsBuffer20                       = 0x80185600; // FS_BUFFER_20
+g_FsBuffer18                       = 0x80180600; // FS_BUFFER_18
+
 //=== .data section
 //================================================
 
