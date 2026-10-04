@@ -444,3 +444,32 @@ Bugs found by it:
 Result: 19,040 tests (seeds 0-6), 0 differences in any register, FLAG included.
 
 Next: map the 76 `gte_*` macros onto `gte.c` under `SH_PORT`.
+
+### GTE macros → software GTE
+
+The GTE macros are inline asm in three headers, applied in order: Sony's `include/psyq/inline_c.h`,
+the decomp's `include/inline_no_dmpsx.h` (real COP2 words instead of DMPSX placeholders) and
+`include/gpu.h` (custom macros). `gtemac.h` only composes them, so it needs no changes.
+
+`tools/port/gen_gte_inline.py` statically translates every asm macro into C calls to `gte.c`,
+writing `include/port/gte_from_{inline_c,inline_no_dmpsx,gpu}.h`; each source header includes its
+translation at the end under `SH_PORT` (`#undef` + redefine), so the override order is unchanged.
+Supported: lwc2/swc2, mtc2/mfc2/ctc2/cfc2, `.word <COP2>` (→ `Gte_Command(word & 0x1FFFFFF)`; e.g.
+`0x4B400006` is a real NCLIP — bit 24 belongs to the immediate), and the CPU instructions the macros
+use on `$12-$15` (loads/stores, shifts, or/and/addu/subu/addi/negu/move). Anything else, including
+Sony's raw DMPSX placeholders (132 in `inline_c.h`, none used by the game), becomes a call to an
+undefined function, so it fails at link time instead of being translated wrongly. Statement-
+expression macros with outputs (`gte_stIR1()` etc.) and asm that writes its *input* operands as
+scratch (`gpu.h` `gte_LoadVector0_XYZ`, `gte_SetLightSourceXY`; locals in C) are handled. Rerun the
+script after editing any of the three headers.
+
+Two hand-written asm blocks got `SH_PORT` C versions: `Vw_TransformAndProjectPoint`
+(`vw_calc.c`; returns via `$v0` from asm — note it saves TRY in the 16-bit `VZ1`, so the restored TRY
+is truncated, reproduced as-is) and the local `gte_strgb3_vec` (`bodyprog_80056D8C.c`).
+
+`gte.h`/`gte.c` no longer use `<stdint.h>` (the port compiles with `-nostdinc`); GTE test re-run:
+still 0 differences.
+
+Result: `tools/port/ee_compile_check.sh` (replaces `ee_syntax_check.sh`; compiles the 451 C files
+listed in `linkers/USA/*.ld` to EE objects) — 0 failures. PS1 build 50/50. Still open: Sony's
+prebuilt libgte functions, and `INCLUDE_ASM` functions that are still R3000 asm.

@@ -1448,3 +1448,7 @@
 	:							\
 	:							\
 	: "$12" )
+
+#ifdef SH_PORT
+#include "port/gte_from_inline_c.h"
+#endif

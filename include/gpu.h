@@ -496,4 +496,8 @@ void SetPriority(PACKET*, s32, s32);
     "ctc2    $12, $15;"                     \
     : : : "$12")
 
+#ifdef SH_PORT
+#include "port/gte_from_gpu.h"
+#endif
+
 #endif

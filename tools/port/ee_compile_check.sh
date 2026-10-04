@@ -1,0 +1,26 @@
+#!/bin/bash
+# Compile every C file the USA build links (taken from linkers/USA/*.ld, so run `make setup` first)
+# with the PS2 EE compiler under SH_PORT, to object files in build/ee_check/. Lists failures.
+# Usage: tools/port/ee_compile_check.sh [outdir]
+set -u
+OUT=${1:-build/ee_check}
+CC=${PS2DEV:-$HOME/ps2dev}/ee/bin/mips64r5900el-ps2-elf-gcc
+mkdir -p "$OUT"
+check() {
+    f=$1
+    m=$(echo "$f" | sed -nE 's|src/maps/(map[0-9]_s[0-9]+)/.*|\1|p' | tr a-z A-Z)
+    o="$OUT/$(echo "$f" | tr / _)"
+    "$CC" -c -O2 -G0 -std=gnu89 -nostdinc -Iinclude -Ibuild/USA -Iinclude/psyq -Iinclude/decomp -Wa,-Iinclude \
+        -D_LANGUAGE_C -DVER_USA -DSH_PORT -DNON_MATCHING ${m:+-D$m} \
+        -Wno-error=implicit-function-declaration -Wno-error=int-conversion \
+        -Wno-error=incompatible-pointer-types -Wno-error=implicit-int -Wno-error=return-mismatch \
+        "$f" -o "$o.o" > "$o.txt" 2>&1 || echo "$f"
+}
+export -f check; export CC OUT
+cat linkers/USA/*.ld linkers/USA/*/*.ld | grep -oE 'build/USA/src/[^ ()]+\.c\.o' | sed -E 's|^build/USA/||; s|\.o$||' \
+    | sort -u > "$OUT/files.txt"
+xargs -P "$(nproc)" -I{} bash -c 'check {}' < "$OUT/files.txt" > "$OUT/failed.txt"
+echo "failed: $(wc -l < "$OUT/failed.txt") of $(wc -l < "$OUT/files.txt")"
+cat "$OUT/failed.txt"
+cat "$OUT"/*.txt | grep -oE '\[-W[a-z0-9-]+\]' | sort | uniq -c | sort -rn | sed 's/^/  warnings /'
+[ ! -s "$OUT/failed.txt" ]

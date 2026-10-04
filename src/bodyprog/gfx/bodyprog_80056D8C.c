@@ -1834,6 +1834,13 @@ u8 func_8005AA08(s_MeshHeader* meshHdr, s32 arg1, s_GteScratchData2* scratchData
 {
     // Same as `gte_strgb3`, but takes `VECTOR3` pointer to store results.
     // Not sure why this was needed, the func that uses it also ends up calling the normal `gte_strgb3` too.
+#ifdef SH_PORT
+    #define gte_strgb3_vec( r0 ) do { \
+        *(u32*)((u8*)(r0) + 0) = Gte_DataRead(20); \
+        *(u32*)((u8*)(r0) + 4) = Gte_DataRead(21); \
+        *(u32*)((u8*)(r0) + 8) = Gte_DataRead(22); \
+    } while (0)
+#else
     #define gte_strgb3_vec( r0 ) __asm__ volatile ( \
         "swc2    $20, 0( %0 );"                     \
         "swc2    $21, 4( %0 );"                     \
@@ -1841,6 +1848,7 @@ u8 func_8005AA08(s_MeshHeader* meshHdr, s32 arg1, s_GteScratchData2* scratchData
         :                                           \
         : "r"( r0 )                                 \
         : "memory" )
+#endif
 
     CVECTOR   color;
     s_Normal* normals;

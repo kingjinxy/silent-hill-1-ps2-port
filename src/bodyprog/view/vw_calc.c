@@ -10,6 +10,10 @@
 #include "bodyprog/view/vw_system.h"
 #include "bodyprog/math/math.h"
 
+#ifdef SH_PORT
+#include "port/gte.h"
+#endif
+
 // Reference view transform?
 MATRIX D_800C3868;
 MATRIX VbWvsMatrix;
@@ -202,6 +206,33 @@ s32 Vw_TransformAndProjectPoint(VECTOR* worldPos, DVECTOR* screenPos) // 0x80049
 
     // TODO: Make macros for these?
 
+#ifdef SH_PORT
+    // Same register moves as the asm below. Note TRY is saved in VZ1, a 16-bit register, so the
+    // "restored" TRY is truncated to 16 bits, as on hardware.
+    {
+        u32 tr;
+
+        tr = Gte_CtrlRead(5);
+        Gte_DataWrite(2, tr);
+        Gte_CtrlWrite(5, (u32)sp10.vx + tr);
+        tr = Gte_CtrlRead(6);
+        Gte_DataWrite(3, tr);
+        Gte_CtrlWrite(6, (u32)sp10.vy + tr);
+        tr = Gte_CtrlRead(7);
+        Gte_DataWrite(4, tr);
+        Gte_CtrlWrite(7, (u32)sp10.vz + tr);
+        Gte_DataWrite(0, 0);
+        Gte_DataWrite(1, 0);
+    }
+
+    gte_rtps();
+    gte_stsxy(screenPos);
+
+    Gte_CtrlWrite(5, Gte_DataRead(2));
+    Gte_CtrlWrite(6, Gte_DataRead(3));
+    Gte_CtrlWrite(7, Gte_DataRead(4));
+    return (s32)Gte_DataRead(19) >> 2;
+#else
     __asm__ volatile(
         "cfc2       $12, $5;"
         "lw         $t5, 0x0(%0);"
@@ -234,6 +265,7 @@ s32 Vw_TransformAndProjectPoint(VECTOR* worldPos, DVECTOR* screenPos) // 0x80049
         "mfc2    $v0, $19;"
         "nop;"
         "sra     $v0, $v0, 2;" ::: "$12", "$13", "$14");
+#endif
 }
 
 void vwMatrixToAngleYXZ(SVECTOR* ang, const MATRIX* mat) // 0x800495D4

@@ -6,12 +6,15 @@
 
 #include "port/gte.h"
 
-typedef int16_t  s16;
-typedef int32_t  s32;
-typedef int64_t  s64;
-typedef uint8_t  u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
+/* No <stdint.h>: the port build uses -nostdinc. int is 32-bit and long long 64-bit on both the EE
+ * and the hosts this is tested on. */
+typedef signed short       s16;
+typedef signed int         s32;
+typedef signed long long   s64;
+typedef unsigned char      u8;
+typedef unsigned short     u16;
+typedef unsigned int       u32;
+typedef unsigned long long u64;
 
 /* Data registers (cop2r0-31). */
 enum
@@ -110,7 +113,7 @@ static u32 count_leading(u32 v)
     return n;
 }
 
-void Gte_DataWrite(uint32_t reg, uint32_t value)
+void Gte_DataWrite(unsigned int reg, unsigned int value)
 {
     reg &= 31;
     switch (reg)
@@ -156,7 +159,7 @@ void Gte_DataWrite(uint32_t reg, uint32_t value)
     }
 }
 
-uint32_t Gte_DataRead(uint32_t reg)
+unsigned int Gte_DataRead(unsigned int reg)
 {
     reg &= 31;
     switch (reg)
@@ -173,7 +176,7 @@ uint32_t Gte_DataRead(uint32_t reg)
     }
 }
 
-void Gte_CtrlWrite(uint32_t reg, uint32_t value)
+void Gte_CtrlWrite(unsigned int reg, unsigned int value)
 {
     reg &= 31;
     switch (reg)
@@ -203,7 +206,7 @@ void Gte_CtrlWrite(uint32_t reg, uint32_t value)
     }
 }
 
-uint32_t Gte_CtrlRead(uint32_t reg)
+unsigned int Gte_CtrlRead(unsigned int reg)
 {
     reg &= 31;
     if (reg == C_H)
@@ -231,7 +234,7 @@ static s64 mac44(int n, s64 v)
     {
         flag |= F_MAC1_NEG >> (n - 1);
     }
-    return (s64)((uint64_t)v << 20) >> 20;
+    return (s64)((u64)v << 20) >> 20;
 }
 
 /** MAC0 (32-bit) overflow check; returns the value unchanged (MAC0 isn't saturated). */
@@ -387,7 +390,7 @@ static u32 gte_divide(u32 h, u32 sz3)
     if (h < sz3 * 2)
     {
         u32 z = 0, n, dd, u;
-        uint64_t r;
+        u64 r;
         while (z < 16 && !(sz3 & (0x8000u >> z)))
         {
             z++;
@@ -397,7 +400,7 @@ static u32 gte_divide(u32 h, u32 sz3)
         u  = unr_table[(dd - 0x7FC0) >> 7] + 0x101;
         dd = (0x2000080u - (dd * u)) >> 8;
         dd = (0x0000080u + (dd * u)) >> 8;
-        r  = (((uint64_t)n * dd) + 0x8000) >> 16;
+        r  = (((u64)n * dd) + 0x8000) >> 16;
         return r > 0x1FFFF ? 0x1FFFF : (u32)r;
     }
     flag |= F_DIVIDE;
@@ -677,7 +680,7 @@ static void gpf_gpl(int base, int sf, int lm)
     push_color();
 }
 
-void Gte_Command(uint32_t cmd)
+void Gte_Command(unsigned int cmd)
 {
     int sf = (cmd >> 19) & 1;
     int mx = (cmd >> 17) & 3;

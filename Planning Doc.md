@@ -134,7 +134,14 @@ keep only the symbols main/bodyprog reference. main + bodyprog + screens + 43 ma
 - [x] Bit-exact C GTE (register file struct, saturation/flags, UNR divide table): `src/port/gte.c`,
       written from psx-spx; verified against the PS1 GTE in DuckStation with
       `tools/port/gte_test` (every opcode × sf/lm, all 256 MVMVA variants; 19,040 tests, 0 diffs)
-- [ ] Replace `gte_*` macros and DMPSX raw opcodes with calls into it under `SH_PORT`
+- [x] Replace `gte_*` macros and DMPSX raw opcodes with calls into it under `SH_PORT`:
+      `tools/port/gen_gte_inline.py` translates the asm macros of `inline_c.h`, `inline_no_dmpsx.h`
+      and `gpu.h` into `include/port/gte_from_*.h`; two hand-written asm blocks (`vw_calc.c`,
+      `bodyprog_80056D8C.c`) have `SH_PORT` C versions. All 451 linked C files compile for the EE
+- [ ] C replacements for Sony's prebuilt libgte functions (`RotTransPers`, `ApplyRotMatrixLV`, ...)
+      on top of `gte.c` (part of the HAL)
+- [ ] `INCLUDE_ASM` functions still assemble as R3000 code inside EE objects: check for COP2 use
+      and R3000-only behaviour (load delay slots) before relying on them
 
 ### Step 4 — Graphics (libgpu → GS)
 
