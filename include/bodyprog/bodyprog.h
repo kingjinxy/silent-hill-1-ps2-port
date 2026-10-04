@@ -588,13 +588,13 @@ extern s_FsImageDesc g_MainImg0; // 0x80022C74 - TODO: Part of main exe, move to
 
 extern char D_80028544[16];
 
-extern RECT D_80028A20;
+extern const RECT D_80028A20;
 
 extern const s_AnimInfo HARRY_WEAPON_ANIM_INFOS[];
 
 extern const s_800C44F0 D_800294F4[];
 
-extern const s_AnimInfo* D_800297B8;
+extern const s_AnimInfo* const D_800297B8;
 
 extern u_Filename D_8002B2CC;
 
@@ -918,7 +918,7 @@ extern u8 D_800AD480[24];
 /** Weapon attacks. */
 extern s_800AD4C8 D_800AD4C8[70];
 
-extern const s_MapOverlayHdr g_MapOverlayHdr; // 0x800C957C
+extern MATCH_CONST s_MapOverlayHdr g_MapOverlayHdr; // 0x800C957C (written at runtime, see `MATCH_CONST`)
 
 extern s16 SQRT[100];
 

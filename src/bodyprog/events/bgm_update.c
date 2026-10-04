@@ -27,7 +27,7 @@ u32 D_800A999C = &D_80025234;
 // STATIC VARIABLES
 // ========================================
 
-static s32 g_Bgm_LayersUpdated;
+MATCH_STATIC s32 g_Bgm_LayersUpdated;
 static s32 g_Bgm_ChannelSetProcessState = 0;
 static u8  g_Bgm_ChannelLimits[8] = { 128, 128, 128, 128, 128, 128, 128, 128 };
 

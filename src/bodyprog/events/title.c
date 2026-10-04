@@ -401,7 +401,7 @@ void MainMenu_SelectedOptionIdxReset(void) // 0x8003B550
 
 void func_8003B560(void) {} // 0x8003B560
 
-static void MainMenu_MainTextDraw(void) // 0x8003B568
+MATCH_STATIC void MainMenu_MainTextDraw(void) // 0x8003B568
 {
     #define COLUMN_POS_X 158
     #define COLUMN_POS_Y 184
@@ -450,7 +450,7 @@ static void MainMenu_MainTextDraw(void) // 0x8003B568
     }
 }
 
-static void MainMenu_DifficultyTextDraw(s32 selectedEntryIdx) // 0x8003B678
+MATCH_STATIC void MainMenu_DifficultyTextDraw(s32 selectedEntryIdx) // 0x8003B678
 {
     #define DIFFICULTY_MENU_SELECTION_COUNT 3
     #define COLUMN_POS_X                    158
@@ -492,7 +492,7 @@ static void MainMenu_DifficultyTextDraw(s32 selectedEntryIdx) // 0x8003B678
     }
 }
 
-static void MainMenu_BackgroundDraw(void) // 0x8003B758
+MATCH_STATIC void MainMenu_BackgroundDraw(void) // 0x8003B758
 {
     if (g_SysWork.sysState == SysState_Gameplay)
     {
@@ -708,7 +708,7 @@ void MainMenu_FogUpdate(void) // 0x8003BC8C
     MainMenu_FogDraw();
 }
 
-static void func_8003BCF4(void) // 0x8003BCF4
+MATCH_STATIC void func_8003BCF4(void) // 0x8003BCF4
 {
     s32 i;
 

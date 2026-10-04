@@ -8,6 +8,7 @@
 #define PAD_RODATA()
 
 #include "psx_mem.h"
+#include "port.h"
 
 /** @brief Computes the size of an array.
  *

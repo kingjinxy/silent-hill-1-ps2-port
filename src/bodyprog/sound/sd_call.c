@@ -14,12 +14,12 @@
 
 #ifndef PAD_HACK_IGNORE
     const  s32  __pad_rodata_80025BF4 = 0;
-    static s32  __pad_bss_800C15EC;
-    static s16  __pad_bss_800C15F2[2];
-    static s32  __pad_bss_800C1674;
-    static s32  __pad_bss_800C1694;
-    static char __pad_bss_800C37C9[3];
-    static char __pad_bss_800C37D1[3];
+    MATCH_STATIC s32  __pad_bss_800C15EC;
+    MATCH_STATIC s16  __pad_bss_800C15F2[2];
+    MATCH_STATIC s32  __pad_bss_800C1674;
+    MATCH_STATIC s32  __pad_bss_800C1694;
+    MATCH_STATIC char __pad_bss_800C37C9[3];
+    MATCH_STATIC char __pad_bss_800C37D1[3];
 #endif
 
 // ========================================
@@ -37,27 +37,27 @@
 // ========================================
 
 /** @brief Stores read position of processing XA file in CD. */
-static CdlLOC g_Sd_XaCdLocation;
+MATCH_STATIC CdlLOC g_Sd_XaCdLocation;
 
 /** @brief Stores information for processing access to XA file data. */
-static u_Sd_XaCdlInfo g_Sd_XaCdlInfo;
+MATCH_STATIC u_Sd_XaCdlInfo g_Sd_XaCdlInfo;
 
 /** @brief Stores SFX IDs of currently playing SFXs.
  * SFX IDs are stored in the same index where the audio is being play
  * at PSX "Voice" channels.
  */
-static u16 g_AudioPlayingIdxList[SD_VOICE_COUNT];
+MATCH_STATIC u16 g_AudioPlayingIdxList[SD_VOICE_COUNT];
 
 /** @brief Stores the pitch of currently playing SFX.
  * Shares the same index of where the SFX is stored at `g_AudioPlayingIdxList`.
  */
-static s16 g_AudioPlayingPitchList[SD_VOICE_COUNT];
+MATCH_STATIC s16 g_AudioPlayingPitchList[SD_VOICE_COUNT];
 
 /** @brief Stores information of some audio processes. */
-static s_Sd_AudioWork g_Sd_AudioWork;
+MATCH_STATIC s_Sd_AudioWork g_Sd_AudioWork;
 
 /** @brief Holds states for different audio types streaming. */
-static s_AudioStreamingStates g_Sd_AudioStreamingStates;
+MATCH_STATIC s_AudioStreamingStates g_Sd_AudioStreamingStates;
 
 /** @brief Stores main game audio channels volumes.
  * 
@@ -65,13 +65,13 @@ static s_AudioStreamingStates g_Sd_AudioStreamingStates;
  * Symbols lacks the original struct. The size may contradict this definition as it seems the variable is intended
  * to be 48/0x30 bytes, while this is 16/0x10 bytes.
  */
-static s_ChannelsVolumeController gSDVolConfig;
+MATCH_STATIC s_ChannelsVolumeController gSDVolConfig;
 
 /** @brief Stores timestamp from the currently playing XA audio. */
-static s_XaAudioPlayTracking g_Sd_XaAudioPlayTracking;
+MATCH_STATIC s_XaAudioPlayTracking g_Sd_XaAudioPlayTracking;
 
 /** @brief Stores information from the currently playing VAB audio. */
-static s_VabPlayingInfo g_Sd_VabPlayingInfo;
+MATCH_STATIC s_VabPlayingInfo g_Sd_VabPlayingInfo;
 
 /** @brief Task pool related to audio and audio data streaming.
  * `Sd_TaskPoolExecute` is the main function responsible for executing tasks.
@@ -82,34 +82,34 @@ static s_VabPlayingInfo g_Sd_VabPlayingInfo;
  * this purpose. This game also features a similar command pool system
  * to the one in SH1.
  */
-static u8 g_Sd_TaskPool[TASK_POOL_SIZE];
+MATCH_STATIC u8 g_Sd_TaskPool[TASK_POOL_SIZE];
 
 /** @unused Dead code. Called by `SdSetTableSize`, but the function is a nullsub. */
-static s8 D_800C16C8[0x2100];
+MATCH_STATIC s8 D_800C16C8[0x2100];
 
 /** @brief The type of audio file being loaded. See `e_AudioType`. */
-static u8 g_Sd_AudioType;
+MATCH_STATIC u8 g_Sd_AudioType;
 
 /** @brief Amount of data transferred when loading KDT/VAB files. */
-static u32 g_Sd_FileDataTransferred;
+MATCH_STATIC u32 g_Sd_FileDataTransferred;
 
 /** @brief Amount of attempts when loading VAB/KDT files.
  * 
  * @note Limit is defined in `AUDIO_DATA_LOAD_ATTEMPTS` and by default is 16.
  */
-static u8 g_Sd_DataLoadAttempts;
+MATCH_STATIC u8 g_Sd_DataLoadAttempts;
 
 /** @brief Pointer to the data of the VAB file being loaded. */
-static s_AudioItemData* g_Sd_VabTargetLoad;
+MATCH_STATIC s_AudioItemData* g_Sd_VabTargetLoad;
 
 /** @brief Pointer to the data of the KTD file being loaded. */
-static s_AudioItemData* g_Sd_KdtTargetLoad;
+MATCH_STATIC s_AudioItemData* g_Sd_KdtTargetLoad;
 
 /** @brief Boolean | Check if a process of loading a XA audio is pending. */
-static u8 g_Sd_XaTaskPending;
+MATCH_STATIC u8 g_Sd_XaTaskPending;
 
 /** @brief First element from `g_Sd_TaskPool[TASK_POOL_SIZE]`. */
-static u8 g_Sd_CurrentTask;
+MATCH_STATIC u8 g_Sd_CurrentTask;
 
 // ========================================
 // GENERAL AUDIO SYSTEM CORE
@@ -739,7 +739,7 @@ static void func_80046A70(void) // 0x80046A70
     Sd_TaskPoolUpdate();
 }
 
-static void Sd_BgmStopTaskAdd(void) // 0x80046AD8
+MATCH_STATIC void Sd_BgmStopTaskAdd(void) // 0x80046AD8
 {
     g_Sd_AudioWork.midiChannelsVolTask = NO_VALUE;
     Sd_TaskPoolAdd(8);
@@ -763,7 +763,7 @@ static void Sd_BgmStop(void) // 0x80046B04
     Sd_BgmVolumeSet(gSDVolConfig.volumeBgm, gSDVolConfig.volumeBgm);
 }
 
-static void Sd_BgmStopStep(void) // 0x80046B78
+MATCH_STATIC void Sd_BgmStopStep(void) // 0x80046B78
 {
     Sd_BgmVolumeSet(0, 0);
     SdSeqStop(0);
@@ -1089,7 +1089,7 @@ static void Sd_XaPreLoadAudio(void) // 0x80047308
 }
 
 /** @brief Prepares the audio load of the XA set in `gSDXATable`. */
-static void Sd_XaAudioStopTaskAdd(void) // 0x8004760C
+MATCH_STATIC void Sd_XaAudioStopTaskAdd(void) // 0x8004760C
 {
     Sd_TaskPoolAdd(2);
     g_Sd_AudioWork.isXaNotPlaying = true;
@@ -1244,7 +1244,7 @@ void Sd_TaskPoolAdd(u8 task) // 0x800478DC
 }
 
 /** @brief Updates a task pool by shifting a field. */
-static void Sd_TaskPoolUpdate(void) // 0x80047A70
+MATCH_STATIC void Sd_TaskPoolUpdate(void) // 0x80047A70
 {
     static s32 i;
     static s32 __pad_800C15E4;
@@ -1375,7 +1375,7 @@ static void Sd_VabLoad(void) // 0x80047B80
     }
 }
 
-static void Sd_VabLoad_TypeClear(void) // 0x80047D1C
+MATCH_STATIC void Sd_VabLoad_TypeClear(void) // 0x80047D1C
 {
     g_Sd_FileDataTransferred = 0;
     SdVabClose(g_Sd_AudioType);
@@ -1383,7 +1383,7 @@ static void Sd_VabLoad_TypeClear(void) // 0x80047D1C
 }
 
 /** @brief Sets the reader offset to the target VAB position. */
-static void Sd_VabLoad_OffSet(void) // 0x80047D50
+MATCH_STATIC void Sd_VabLoad_OffSet(void) // 0x80047D50
 {
     CdlLOC sp10;
 
@@ -1393,7 +1393,7 @@ static void Sd_VabLoad_OffSet(void) // 0x80047D50
     }
 }
 
-static void Sd_VabLoad_FileLoad(void) // 0x80047DB0
+MATCH_STATIC void Sd_VabLoad_FileLoad(void) // 0x80047DB0
 {
     if (CdSync(1, 0) == CdlComplete)
     {
@@ -1420,7 +1420,7 @@ static void Sd_VabLoad_FileLoad(void) // 0x80047DB0
 }
 
 /** @brief Sets the reader offset to the VAG data position. */
-static void Sd_VabLoad_OffVagDataSet(void) // 0x80047E3C
+MATCH_STATIC void Sd_VabLoad_OffVagDataSet(void) // 0x80047E3C
 {
     s32 i;
     u8* ptr0;
@@ -1446,7 +1446,7 @@ static void Sd_VabLoad_OffVagDataSet(void) // 0x80047E3C
 /** @brief Moves VAG data from the temporary file location to the indicated `g_Sd_VabBuffers` buffer.
  * If the file is larger than `VAB_BUFFER_LIMIT`, it loops to move remaining bytes beyond this size.
  */
-static void Sd_VabLoad_VagDataMove(void) // 0x80047F18
+MATCH_STATIC void Sd_VabLoad_VagDataMove(void) // 0x80047F18
 {
     s32  dataMoveCheck;
     s32* ptr;
@@ -1474,7 +1474,7 @@ static void Sd_VabLoad_VagDataMove(void) // 0x80047F18
     }
 }
 
-static void Sd_VabLoad_OffVagNextDataSet(void) // 0x80048000
+MATCH_STATIC void Sd_VabLoad_OffVagNextDataSet(void) // 0x80048000
 {
     s32     i;
     CdlLOC  cdLocArg;
@@ -1492,7 +1492,7 @@ static void Sd_VabLoad_OffVagNextDataSet(void) // 0x80048000
     }
 }
 
-static void Sd_VabLoad_NextVagDataMove(void) // 0x8004807C
+MATCH_STATIC void Sd_VabLoad_NextVagDataMove(void) // 0x8004807C
 {
     u32 remainingData;
 
@@ -1514,7 +1514,7 @@ static void Sd_VabLoad_NextVagDataMove(void) // 0x8004807C
     g_Sd_AudioStreamingStates.audioLoadState = AudioLoadState_MoveLast;
 }
 
-static void Sd_VabLoad_LastVagDataMove(void) // 0x800480FC
+MATCH_STATIC void Sd_VabLoad_LastVagDataMove(void) // 0x800480FC
 {
     s32 dataMoveCheck;
     u32 remainingData;
@@ -1545,7 +1545,7 @@ static void Sd_VabLoad_LastVagDataMove(void) // 0x800480FC
     }
 }
 
-static void Sd_VabLoad_Finalization(void) // 0x800481F8
+MATCH_STATIC void Sd_VabLoad_Finalization(void) // 0x800481F8
 {
     if (SdVabTransCompleted(0) != 1)
     {
@@ -1614,7 +1614,7 @@ static void Sd_KdtLoad(void) // 0x800482D8
     }
 }
 
-static void Sd_KdtLoad_StopSeq(void) // 0x8004839C
+MATCH_STATIC void Sd_KdtLoad_StopSeq(void) // 0x8004839C
 {
     Sd_BgmStopStep();
     SdSeqClose(g_Sd_AudioType);
@@ -1622,7 +1622,7 @@ static void Sd_KdtLoad_StopSeq(void) // 0x8004839C
     g_Sd_AudioStreamingStates.audioLoadState = AudioLoadState_SetOff;
 }
 
-static void Sd_KdtLoad_OffSet(void) // 0x800483D4
+MATCH_STATIC void Sd_KdtLoad_OffSet(void) // 0x800483D4
 {
     CdlLOC cdLoc;
 
@@ -1632,7 +1632,7 @@ static void Sd_KdtLoad_OffSet(void) // 0x800483D4
     }
 }
 
-static void Sd_KdtLoad_FileLoad(void) // 0x80048424
+MATCH_STATIC void Sd_KdtLoad_FileLoad(void) // 0x80048424
 {
     if (CdSync(1, 0) == 2)
     {
@@ -1645,7 +1645,7 @@ static void Sd_KdtLoad_FileLoad(void) // 0x80048424
     g_Sd_AudioWork.cdErrorCount++;
 }
 
-static void Sd_KdtLoad_LoadCheck(void) // 0x80048498
+MATCH_STATIC void Sd_KdtLoad_LoadCheck(void) // 0x80048498
 {
     s32 i;
     u8* ptr0;

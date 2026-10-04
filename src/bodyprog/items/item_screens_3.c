@@ -60,7 +60,7 @@ GsCOORDINATE2 g_Items_Coords[DISPLAYED_ITEM_COUNT_MAX]; // 0x800C3E48
 
 #include "item_rotations.h"
 
-static u8 g_Items_GunsMaxLoadAmmo[36] = {
+MATCH_STATIC u8 g_Items_GunsMaxLoadAmmo[36] = {
     0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0,

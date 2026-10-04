@@ -235,7 +235,7 @@ void GameBoot_InGameStartup(void)
 }
 
 /** @brief Initalizes drawing of the loading screen. */
-static void GameBoot_LoadingScreen(void) // 0x80034E58
+MATCH_STATIC void GameBoot_LoadingScreen(void) // 0x80034E58
 {
     if (g_SysWork.loadingScreenIdx != LoadingScreenId_None && g_GameWork.gameStateSteps[0] < 10)
     {
@@ -262,7 +262,7 @@ static void GameBoot_NpcClear(void) // 0x80034EC8
     }
 }
 
-static void GameBoot_NpcInit(void) // 0x80034F18
+MATCH_STATIC void GameBoot_NpcInit(void) // 0x80034F18
 {
     #define playerChara g_SysWork.playerWork.player
 

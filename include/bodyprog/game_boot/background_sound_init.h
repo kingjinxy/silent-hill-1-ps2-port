@@ -19,7 +19,7 @@
  * `0` if music has been muted or updated, or
  * `1` if failed.
  */
-s32 Sd_BgmInit(void);
+bool Sd_BgmInit(void);
 
 /** @brief Checks if a given background music track isn't currently playing, or if it's a command used to trigger a
  * layer update or track change.

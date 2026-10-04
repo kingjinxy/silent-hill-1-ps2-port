@@ -89,7 +89,7 @@ void GameFs_BgItemLoad(void)
     g_WorldGfxWork.itemLmQueueIdx = Fs_QueueStartRead(FILE_BG_BG_ITEM_PLM, &g_WorldGfxWork.itemLmHdr);
 }
 
-static void GameFs_CommonItemsTextureLoad(void)
+MATCH_STATIC void GameFs_CommonItemsTextureLoad(void)
 {
     static s_FsImageDesc IMAGE_TIM = {
         .tPage = { 0, 15 },

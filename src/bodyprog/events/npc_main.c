@@ -194,7 +194,7 @@ void Game_NpcUpdate(void) // 0x80038354
     }
 
     // Gets close NPC info index.
-    static s32 func_800382EC()
+    MATCH_STATIC s32 func_800382EC()
     {
         s32 i;
 
@@ -494,7 +494,7 @@ bool Math_Distance2dCheck(const VECTOR3* from, const VECTOR3* to, q19_12 radius)
  * @param pos Reference position (Q19.12).
  * @return 2D squared integer distance to the camera.
  */
-static s32 Camera_Distance2dGet(const VECTOR3* pos) // 0x80038B44
+MATCH_STATIC s32 Camera_Distance2dGet(const VECTOR3* pos) // 0x80038B44
 {
     VECTOR3 camPos; // Q19.12
     q25_6   deltaX;

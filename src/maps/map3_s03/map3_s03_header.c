@@ -43,7 +43,7 @@ void (*g_MapEventFuncs[])() = {
     sharedFunc_800D15F0_3_s01
 };
 
-const s_MapOverlayHdr g_MapOverlayHdr = {
+MATCH_CONST s_MapOverlayHdr g_MapOverlayHdr = {
     .mapInfo                        = &MAP_INFOS[MapType_HU],
     .mapRoomIdxGet              = Map_RoomIdxGet,
     .unused_8                          = 0,

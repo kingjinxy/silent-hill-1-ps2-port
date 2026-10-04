@@ -367,3 +367,35 @@ prints the program's output, closes PCSX2 (whole process group), and restores `P
 
 `port/hello/` (`make -C port/hello`) prints "Silent Hill PS2 port: toolchain OK"; confirmed in
 PCSX2 ~1 s after boot. The toolchain → ELF → emulator path works.
+
+---
+
+## 2026-10-04 — Port build: C front-end pass with the EE compiler
+
+First step towards a port build: run every compilable C file through
+`mips64r5900el-ps2-elf-gcc -fsyntax-only` (GCC 15) with `-DSH_PORT -DNON_MATCHING`, `-std=gnu89`,
+`-nostdinc` and the decomp's own include paths, with GCC 14+'s new hard errors for old C
+(implicit declarations, int/pointer conversions, implicit int, return mismatch) downgraded to
+warnings for now. `tools/port/ee_syntax_check.sh` does this (skips `src/maps/*.c` that are only
+`#include`d into maps).
+
+Initially 18 real files failed (14 bodyprog, 4 maps). Fixes, all byte-identical on PS1 (50/50):
+
+- `include/decomp/port.h` (from `common.h`):
+  - `MATCH_STATIC` — `static` on PS1, external in the port. 78 definitions that are `static` but
+    declared `extern` in a header (GCC 15 rejects that; on PS1 other files reach them by absolute
+    address anyway), plus a block-scope `static` function declaration in `npc_main.c`.
+  - `MATCH_CONST` — `const` on PS1, mutable in the port. Used for `g_MapOverlayHdr` (the extern in
+    `bodyprog.h` and all 43 map header definitions): bodyprog and maps write to it at runtime
+    (`bgmCmd`, `ambientAudioIdx`, `charaGroupIds`, `charaUpdateFuncs`), and a modern compiler could
+    fold reads of a `const` object to its initial value.
+- Header declarations brought in line with definitions: `const` added to
+  `sharedData_800CB094_3_s01`, `D_80028A20`, `D_800297B8`; `Sd_BgmInit` returns `bool`
+  (header said `s32`), and `background_sound_init.c` now includes its own header.
+- `func_8003FE04` writes through `arg0`, so `arg0` is no longer pointer-to-`const`.
+- `world_effects.c`: forward declaration for `func_8003F654` (called before its definition).
+
+Result: 0 of 456 files fail. Remaining warnings to work through before turning them back into
+errors: mostly `-Wincompatible-pointer-types` and `-Wbuiltin-declaration-mismatch` (the decomp's
+own libc-like prototypes), plus a few `-Woverflow` / `-Wshift-count-overflow` worth checking for
+real bugs. This is front-end only: GTE inline asm and `INCLUDE_ASM` aren't assembled yet.

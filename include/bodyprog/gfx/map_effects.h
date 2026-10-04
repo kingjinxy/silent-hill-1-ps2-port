@@ -61,7 +61,7 @@ void Gfx_EffectsUpdate(void);
  */
 q19_12 Math_WeightedAverageGet(s32 a, s32 b, q19_12 weight);
 
-void func_8003FE04(const s_MapEffectsInfo* arg0, const s_MapEffectsInfo* arg1, const s_MapEffectsInfo* arg2, q19_12 alphaTo);
+void func_8003FE04(s_MapEffectsInfo* arg0, const s_MapEffectsInfo* arg1, const s_MapEffectsInfo* arg2, q19_12 alphaTo);
 
 s32 func_8003FEC0(const s_MapEffectsInfo* arg0);
 

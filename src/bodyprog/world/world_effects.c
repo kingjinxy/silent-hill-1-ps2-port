@@ -15,17 +15,19 @@
 #include "main/fsqueue.h"
 #include "main/rng.h"
 
+static u32 func_8003F654(s_SysWork_2388* arg0);
+
 extern s_WorldEnvWork const g_WorldEnvWork;
 
 s16 D_800BCDE8[8];
 
-static s_MapEnvPresetIdxs D_800A9F80 = { 1, 1  };
-static s_MapEnvPresetIdxs D_800A9F84 = { 2, 2  };
-static s_MapEnvPresetIdxs D_800A9F88 = { 6, 3  };
-static s_MapEnvPresetIdxs D_800A9F8C = { 7, 4  };
+MATCH_STATIC s_MapEnvPresetIdxs D_800A9F80 = { 1, 1  };
+MATCH_STATIC s_MapEnvPresetIdxs D_800A9F84 = { 2, 2  };
+MATCH_STATIC s_MapEnvPresetIdxs D_800A9F88 = { 6, 3  };
+MATCH_STATIC s_MapEnvPresetIdxs D_800A9F8C = { 7, 4  };
 static s_MapEnvPresetIdxs D_800A9F90 = { 6, 10 };
 static s_MapEnvPresetIdxs D_800A9F94 = { 6, 5  };
-static s_MapEnvPresetIdxs D_800A9F98 = { 9, 9  };
+MATCH_STATIC s_MapEnvPresetIdxs D_800A9F98 = { 9, 9  };
 static s_MapEnvPresetIdxs D_800A9F9C = { 6, 6  };
 static s_MapEnvPresetIdxs D_800A9FA0 = { 3, 3  };
 static s_MapEnvPresetIdxs D_800A9FA4 = { 5, 5  };
@@ -465,7 +467,7 @@ void Gfx_EffectsUpdate(void) // 0x8003F170
 /** Adjust spotlight/flashlight lighting atributes.
  * Scratch: https://decomp.me/scratch/Crnh4
  */
-static q19_12 func_8003F4DC(GsCOORDINATE2** lightBoneCoord, SVECTOR* rot, q19_12 lightWeight, s32 arg3, u32 lensFlare, s_SysWork* sysWork) // 0x8003F4DC
+MATCH_STATIC q19_12 func_8003F4DC(GsCOORDINATE2** lightBoneCoord, SVECTOR* rot, q19_12 lightWeight, s32 arg3, u32 lensFlare, s_SysWork* sysWork) // 0x8003F4DC
 {
     s32     temp;
     q19_12  lightWeightCpy;
@@ -587,7 +589,7 @@ static u32 func_8003F654(s_SysWork_2388* arg0)
  * @param max Maximum range.
  * @return Normalized progress alpha.
  */
-static q19_12 func_8003F6F0(s32 val, s32 min, s32 max)
+MATCH_STATIC q19_12 func_8003F6F0(s32 val, s32 min, s32 max)
 {
     #define Q12_BITS     32
     #define Q12_VAL_BITS 31
@@ -633,7 +635,7 @@ q19_12 Math_WeightedAverageGet(s32 a, s32 b, q19_12 weight) // 0x8003F7E4
 /**
  * Scratch: https://decomp.me/scratch/asgeE
  */
-static void func_8003F838(s_StructUnk3* target, s_StructUnk3* envSettings0, s_StructUnk3* envSettings1, q19_12 weight) // 0x8003F838
+MATCH_STATIC void func_8003F838(s_StructUnk3* target, s_StructUnk3* envSettings0, s_StructUnk3* envSettings1, q19_12 weight) // 0x8003F838
 {
     q19_12 weight0;
     q19_12 weight1;
@@ -796,7 +798,7 @@ static void func_8003F838(s_StructUnk3* target, s_StructUnk3* envSettings0, s_St
 /**
  * Scratch: https://decomp.me/scratch/wk8iD
  */
-static void func_8003FCB0(s_MapEffectsInfo* target, const s_MapEffectsInfo* envSettings0, const s_MapEffectsInfo* envSettings1, q19_12 alphaTo)
+MATCH_STATIC void func_8003FCB0(s_MapEffectsInfo* target, const s_MapEffectsInfo* envSettings0, const s_MapEffectsInfo* envSettings1, q19_12 alphaTo)
 {
     q19_12 alphaFrom;
 
@@ -808,7 +810,7 @@ static void func_8003FCB0(s_MapEffectsInfo* target, const s_MapEffectsInfo* envS
 /**
  * Scratch: https://decomp.me/scratch/jhfrd
  */
-static void func_8003FD38(s_StructUnk3* target, const s_StructUnk3* envSettings0, const s_StructUnk3* envSettings1, q19_12 weight0, q19_12 weight1, q19_12 alphaTo)
+MATCH_STATIC void func_8003FD38(s_StructUnk3* target, const s_StructUnk3* envSettings0, const s_StructUnk3* envSettings1, q19_12 weight0, q19_12 weight1, q19_12 alphaTo)
 {
     if (envSettings0->brightnessIntensity != envSettings1->brightnessIntensity)
     {
@@ -826,7 +828,7 @@ static void func_8003FD38(s_StructUnk3* target, const s_StructUnk3* envSettings0
     LoadAverageCol(&envSettings0->effectsInfo.fogColor.r, &envSettings1->effectsInfo.fogColor.r, Q12(1.0f) - alphaTo, alphaTo, &target->effectsInfo.fogColor.r);
 }
 
-void func_8003FE04(const s_MapEffectsInfo* arg0, const s_MapEffectsInfo* arg1, const s_MapEffectsInfo* arg2, q19_12 alphaTo) // 0x8003FE04
+void func_8003FE04(s_MapEffectsInfo* arg0, const s_MapEffectsInfo* arg1, const s_MapEffectsInfo* arg2, q19_12 alphaTo) // 0x8003FE04
 {
     q19_12 alphaFrom;
 

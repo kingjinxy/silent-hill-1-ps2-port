@@ -21,18 +21,18 @@
 // STATIC VARIABLES
 // ========================================
 
-static s_MemCard_SaveHeader g_MemCard_SaveHeaderInfo_Slot1[MEMCARD_FILE_COUNT_MAX];
-static s_MemCard_SaveHeader g_MemCard_SaveHeaderInfo_Slot2[MEMCARD_FILE_COUNT_MAX];
-static s_MemCard_SaveHeader g_MemCard_SaveHeaderInfo_Null[MEMCARD_FILE_COUNT_MAX];
+MATCH_STATIC s_MemCard_SaveHeader g_MemCard_SaveHeaderInfo_Slot1[MEMCARD_FILE_COUNT_MAX];
+MATCH_STATIC s_MemCard_SaveHeader g_MemCard_SaveHeaderInfo_Slot2[MEMCARD_FILE_COUNT_MAX];
+MATCH_STATIC s_MemCard_SaveHeader g_MemCard_SaveHeaderInfo_Null[MEMCARD_FILE_COUNT_MAX];
 
 /** @brief Handles processes related to the save game, access and managment of the memory card. */
-static s_MemCard_SaveWork g_MemCard_SaveWork;
+MATCH_STATIC s_MemCard_SaveWork g_MemCard_SaveWork;
 
 /** @brief Define if the memory card system is currently active or not. */
-static bool               g_MemCard_SysAvailibityStatus;
+MATCH_STATIC bool               g_MemCard_SysAvailibityStatus;
 
 /** @brief Handles memory card processes from the console. */
-static s_MemCard_Work     g_MemCard_Work;
+MATCH_STATIC s_MemCard_Work     g_MemCard_Work;
 
 u32 g_MemCard_SaveIconTim[48] = {
     0x00000010, 0x00000008, 0x0000002C, 0x00000000,
@@ -123,7 +123,7 @@ void MemCard_SysInit(void)
  *
  * @param deviceId
  */
-static void MemCard_DeviceInfoClear(s32 deviceId)
+MATCH_STATIC void MemCard_DeviceInfoClear(s32 deviceId)
 {
     g_MemCard_SaveWork.devices[deviceId].status = MemCardState_Null;
 
@@ -140,7 +140,7 @@ static void MemCard_DeviceInfoClear(s32 deviceId)
  *
  * @param deviceId
  */
-static void MemCard_FileStatusClear(s32 deviceId)
+MATCH_STATIC void MemCard_FileStatusClear(s32 deviceId)
 {
     s32 i;
 
@@ -420,7 +420,7 @@ void MemCard_Update(void) // 0x8002EB88
  *
  * @param statusPtr Memory card process work information.
  */
-static void MemCard_Process_Format(s_MemCard_Process* statusPtr)
+MATCH_STATIC void MemCard_Process_Format(s_MemCard_Process* statusPtr)
 {
     if (MemCard_DeviceFormat(statusPtr->deviceId) != 0)
     {
@@ -445,7 +445,7 @@ static void MemCard_Process_Format(s_MemCard_Process* statusPtr)
  *
  * @param statusPtr Memory card process work information.
  */
-static void MemCard_Process_Init(s_MemCard_Process* statusPtr)
+MATCH_STATIC void MemCard_Process_Init(s_MemCard_Process* statusPtr)
 {
     char                       filePath[24];
     s32                        memCardResult;
@@ -662,7 +662,7 @@ static void MemCard_Process_Init(s_MemCard_Process* statusPtr)
  * @param dir
  * @return 
  */
-static s32 MemCard_FileLimitUpdate(s32 deviceId, s_MemCard_Directory* dir) // 0x8002F278
+MATCH_STATIC s32 MemCard_FileLimitUpdate(s32 deviceId, s_MemCard_Directory* dir) // 0x8002F278
 {
     s32 ret;
     s32 i;
@@ -677,7 +677,7 @@ static s32 MemCard_FileLimitUpdate(s32 deviceId, s_MemCard_Directory* dir) // 0x
     return ret + MemCard_UsedFileCount(deviceId);
 }
 
-static void MemCard_Process_Load(s_MemCard_Process* statusPtr)
+MATCH_STATIC void MemCard_Process_Load(s_MemCard_Process* statusPtr)
 {
     char                  filePath[24];
     s32                   memCardResult;
@@ -819,7 +819,7 @@ static void MemCard_Process_Load(s_MemCard_Process* statusPtr)
     }
 }
 
-static void MemCard_Process_Save(s_MemCard_Process* statusPtr)
+MATCH_STATIC void MemCard_Process_Save(s_MemCard_Process* statusPtr)
 {
     char                  filePath[24];
     s32                   fileIdx;

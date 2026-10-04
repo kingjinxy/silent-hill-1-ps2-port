@@ -5,6 +5,7 @@
 #include <psyq/strings.h>
 
 #include "bodyprog/bodyprog.h"
+#include "bodyprog/game_boot/background_sound_init.h"
 #include "bodyprog/game_boot/game_boot.h"
 #include "bodyprog/sound/sound_system.h"
 

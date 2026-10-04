@@ -37,7 +37,7 @@
 // ========================================
 
 /** @brief Game system state functions. Used with `e_SysState`. */
-static void (*g_SysStateFuncs[])(void) = {
+MATCH_STATIC void (*g_SysStateFuncs[])(void) = {
     SysState_Gameplay_Update,
     SysState_OptionsMenu_Update,
     SysState_StatusMenu_Update,
@@ -58,7 +58,7 @@ static void (*g_SysStateFuncs[])(void) = {
 /** Used to store the previous delta time state of the delta timer. There are some instances where 2D backgrounds
  * are drawn using `g_DeltaTimeRaw` while `g_DeltaTime` is stopped.
  */
-static q19_12 g_DeltaTimeCpy;
+MATCH_STATIC q19_12 g_DeltaTimeCpy;
 
 // ========================================
 // GLOBAL VARIABLES

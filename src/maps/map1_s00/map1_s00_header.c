@@ -46,7 +46,7 @@ void (*g_MapEventFuncs[])() = {
     /* 23 */ MapEvent_Boiler2
 };
 
-const s_MapOverlayHdr g_MapOverlayHdr = {
+MATCH_CONST s_MapOverlayHdr g_MapOverlayHdr = {
     .mapInfo                        = &MAP_INFOS[MapType_SC],
     .mapRoomIdxGet              = Map_RoomIdxGet,
     .unused_8                          = 0,

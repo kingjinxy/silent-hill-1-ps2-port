@@ -59,7 +59,7 @@ SVECTOR D_800AE500[4] = {
     SVECTOR( 0.0f,   -255.65f, 255.65f)
 };
 
-static GsCOORDINATE2* g_ViewCoord;
+MATCH_STATIC GsCOORDINATE2* g_ViewCoord;
 
 void func_8005B55C(GsCOORDINATE2* viewCoord) // 0x8005B55C
 {
