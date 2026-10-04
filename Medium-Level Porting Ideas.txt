@@ -1,0 +1,258 @@
+Medium-Level Porting Plan: PS1 Hardware Abstraction Layer (HAL) for PS2 (ps2sdk)
+==================================================================================
+
+This document outlines the concrete architecture and API mappings for a PS1 Hardware
+Abstraction Layer (HAL) on PlayStation 2. The HAL serves as a drop-in replacement for
+Sony's PSY-Q libraries and PS1 BIOS routines, mapping them directly to native ps2sdk
+libraries, headers, and IOP RPC modules.
+
+
+1. 2D/3D Rendering & Framebuffer (libgpu -> libdraw / libgraph / libdma / gsKit)
+--------------------------------------------------------------------------------
+The graphics pipeline translates PS1 Ordering Tables and packet structures into GS DMA chains.
+
+* Relevant ps2sdk Headers:
+  - <draw.h>, <draw_buffers.h>, <graph.h>, <dma.h>, <tamtypes.h>
+  - Optional alternative: <gsKit.h>, <dmaKit.h>
+
+* Ordering Tables (OT) & Primitive Submission:
+  - PS1 APIs: ClearOTag, ClearOTagR, AddPrim, DrawOTag
+  - ps2sdk Mapping:
+    * Frame & DMA Setup:
+      dma_channel_initialize(DMA_CHANNEL_GIF, NULL, 0);
+      graph_initialize(disp_fb.address, disp_fb.width, disp_fb.height, GRAPH_MODE_NTSC, GRAPH_ENABLE);
+    * Primitive Translation (EE -> GIF DMA Packet):
+      The HAL iterates through the PS1 primitive linked list and populates a GIF packet:
+      - packet_allocate(packet_t *p, int num_qwords, int type);
+      - gs_prim = GS_SET_PRIM(GS_PRIM_TRIANGLE, GS_ENABLE, GS_ENABLE, GS_DISABLE, GS_ENABLE, ...);
+      - GIF_SET_TAG(qwords, eop, 1, gs_prim, GIF_FLG_PACKED, 3); // RGBAQ, UV, XYZ2
+      - dma_channel_send_chain(DMA_CHANNEL_GIF, p->data, qwords, 0, 0);
+      - dma_wait_fast();
+    * If using gsKit:
+      gsKit_prim_triangle_3d(gsGlobal, x1, y1, z1, x2, y2, z2, x3, y3, z3, color);
+      gsKit_queue_exec(gsGlobal);
+
+* Environment & Framebuffer Configuration:
+  - PS1 APIs: SetDefDrawEnv, SetDefDispEnv, PutDrawEnv, PutDispEnv, DR_MODE, DR_TWIN
+  - ps2sdk Mapping:
+    * draw_framebuffer_t fb;
+      draw_setup_environment(&draw_env, &fb, &zb);
+    * Directly sets GS Privileged Registers via VIF/GIF:
+      GS_SET_FRAME(fb_addr, fb_width / 64, GS_PSM_CT16, 0);
+      GS_SET_ZBUF(zb_addr, GS_PSMZ_16S, 0);
+      GS_SET_XYOFFSET(ox << 4, oy << 4);
+      GS_SET_SCISSOR(x0, x1, y0, y1);
+      GS_SET_TEST(GS_ENABLE, GS_AFAIL_KEEP, 0, 0, GS_ENABLE, 0, GS_ENABLE, GS_ZTEST_GEQUAL);
+    * PS1 DR_TWIN (Texture Window UV clamping/masking):
+      GS_SET_CLAMP(clamp_s, clamp_t, minu, maxu, minv, maxv);
+
+* VRAM Transfers & Direct Blitting:
+  - PS1 APIs: LoadImage, StoreImage, MoveImage, ClearImage
+  - ps2sdk Mapping:
+    * draw_upload_texture(&draw_env, &tex_env, &tex_data);
+    * Custom GIF IMAGE mode transfer packet:
+      GIF_SET_TAG(qwords, 1, 0, 0, GIF_FLG_IMAGE, 0);
+      dma_channel_send_normal(DMA_CHANNEL_GIF, vram_buf, qwords, 0, 0);
+
+* Semi-Transparency & Blending:
+  - PS1 ABR Modes:
+    * Mode 0 (0.5*B + 0.5*F): GS_SET_ALPHA(0, 1, 2, 1, 0) -> (Cs - Cd) * 0.5 + Cd
+    * Mode 1 (1.0*B + 1.0*F): GS_SET_ALPHA(0, 1, 0, 1, 0) -> (Cs - 0) * 1.0 + Cd
+    * Mode 2 (1.0*B - 1.0*F): GS_SET_ALPHA(1, 0, 0, 1, 0) -> (Cd - Cs) * 1.0 + 0
+    * Mode 3 (1.0*B + 0.25*F): GS_SET_ALPHA(0, 1, 2, 1, 64) -> (Cs - Cd) * 0.25 + Cd
+
+
+2. Transform Math & Lighting (libgte -> math3d / VU0 Macro Mode)
+----------------------------------------------------------------
+The GTE is Coprocessor 2 on the PS1; on PS2, transforms move to the EE FPU or VU0.
+
+* Relevant ps2sdk Headers:
+  - <math3d.h>, inline assembly for VU0 / Cop2 instructions
+
+* Perspective Transformation & Clipping:
+  - PS1 Operations: RTPT, RTPS, NCLIP, RotTransPers, RotTrans
+  - ps2sdk Mapping:
+    * Matrix Math:
+      matrix_multiply(res_mat, obj_mat, cam_mat);
+      matrix_rotate(mat, mat, rot_vec);
+      vector_apply(out_vec, in_vec, mat);
+    * VU0 Hardware Acceleration (Micro/Macro mode via inline asm):
+      asm volatile (
+          "lqc2    $vf1, 0(%0)\n"   // Load input vertex
+          "vmul.xyzw $vf2, $vf1, $vf4\n" // Multiply by transformation matrix
+          "vdiv    Q, $vf0w, $vf2z\n"    // Perspective divide (Q = 1/Z)
+          "vwaitq\n"
+          "vmulq.xyz $vf3, $vf2, Q\n"    // Screen coordinate projection
+          "sqc2    $vf3, 0(%1)\n"   // Store transformed screen vertex
+          : : "r"(in_vertex), "r"(out_vertex)
+      );
+
+* Lighting & Depth Cueing (Fog & Flashlight):
+  - PS1 Operations: DPCS, DPCT (Depth Cueing), NCCT, NCCS (Normal Color & Depth Cueing)
+  - ps2sdk Mapping:
+    * vector_innerproduct(light_val, normal, light_dir);
+    * Fog interpolation computed per-vertex in VU0 or EE C:
+      color = (vertex_color * light_attenuation) * (1.0f - fog_factor) + (fog_color * fog_factor);
+
+
+3. Audio & Voice Subsystem (libspu -> freesd / libsd)
+------------------------------------------------------
+Audio is offloaded to SPU2 Core 0 via ps2sdk's libsd RPC to the IOP.
+
+* Relevant ps2sdk Headers:
+  - <libsd.h> (requires freesd.irx running on the IOP)
+
+* Voice Allocation & Playback:
+  - PS1 APIs: SpuSetVoiceAttr, SpuSetKey, SpuSetVoicePitch, SpuSetVoiceVolume
+  - ps2sdk Mapping:
+    * Initialization:
+      sdInit(0);
+    * Volume:
+      sdSetParam(SD_CORE_0 | SD_PARAM_BVOLL, 0x3FFF);
+      sdSetParam(SD_CORE_0 | SD_PARAM_BVOLR, 0x3FFF);
+      sdSetVoiceParam(SD_CORE_0 | (voice_idx << 1) | SD_VP_VOLL, left_vol);
+      sdSetVoiceParam(SD_CORE_0 | (voice_idx << 1) | SD_VP_VOLR, right_vol);
+    * Pitch & ADSR Envelope:
+      sdSetVoiceParam(SD_CORE_0 | (voice_idx << 1) | SD_VP_PITCH, pitch_hz);
+      sdSetVoiceParam(SD_CORE_0 | (voice_idx << 1) | SD_VP_ADSR1, adsr1);
+      sdSetVoiceParam(SD_CORE_0 | (voice_idx << 1) | SD_VP_ADSR2, adsr2);
+    * Key On / Key Off:
+      sdVoiceKeyOn(SD_CORE_0, (1 << voice_idx));
+      sdVoiceKeyOff(SD_CORE_0, (1 << voice_idx));
+
+* Sample Uploads (VAG Data) & Reverb:
+  - PS1 APIs: SpuSetTransferStartAddr, SpuWrite, SpuSetReverb, SpuSetReverbModeParam
+  - ps2sdk Mapping:
+    * VAG Sample Transfer:
+      sdVoiceTrans(SD_CORE_0, SD_TRANS_WRITE, vag_buffer, spu2_addr, size);
+      sdVoiceTransStatus(SD_CORE_0, SD_TRANS_STATUS_WAIT);
+    * Reverb Configuration:
+      sdSetCoreAttr(SD_CORE_0 | SD_CORE_EFFECT_ENABLE, 1);
+      sdSetEffectAttr(SD_CORE_0, &spu2_effect_attr);
+
+
+4. Disc I/O & Continuous Streaming (libcd -> libcdvd / fileXio)
+---------------------------------------------------------------
+World chunk streaming and CD access are mapped to IOP CDVD / file services.
+
+* Relevant ps2sdk Headers:
+  - <libcdvd.h>, <fileXio_rpc.h>, <sifrpc.h>
+  - (requires cdvd.irx or fileXio.irx on IOP)
+
+* Sector Reads & Drive Streaming:
+  - PS1 APIs: CdRead, CdReadSync, CdSeekL, CdControl, CdReadyCallback, CdDataCallback
+  - ps2sdk Mapping:
+    * Subsystem Init:
+      SifInitRpc(0);
+      cdInit(CDVD_INIT_NOCHECK);
+    * Sector-level Reads:
+      cdRead(lba_sector, sector_count, dest_buffer, &cd_read_mode);
+      cdReadSync(); // Wait or check completion status
+    * Drive Head Seek:
+      cdSeek(lba_sector);
+    * File-level Fallback (if reading from ISO file or USB/HDD storage):
+      fileXioOpen("cdrom0:\\CHUNK.BIN;1", O_RDONLY, 0666);
+      fileXioLseek(fd, offset, SEEK_SET);
+      fileXioRead(fd, buffer, size);
+      fileXioClose(fd);
+
+
+5. Full-Motion Video Decompression (libpress / MDEC -> libipu / EE Software Decoder)
+------------------------------------------------------------------------------------
+PS1 MDEC video streams (.STR) are processed on the Emotion Engine.
+
+* Relevant ps2sdk Headers:
+  - <ipu.h>, <dma.h>
+
+* Decompression & Rendering:
+  - PS1 APIs: DecDCTReset, DecDCTin, DecDCTout, DecDCTinSync, DecDCToutSync
+  - ps2sdk Mapping:
+    * MDEC decoding is implemented in software on the EE CPU using 128-bit MMI SIMD
+      intrinsics for fast Inverse Discrete Cosine Transform (IDCT) and YUV->RGB conversion.
+    * Output frames are transferred directly to the GS frame buffer or texture memory using:
+      dma_channel_send_normal(DMA_CHANNEL_GIF, decoded_rgb_frame, qwords, 0, 0);
+      dma_wait_fast();
+
+
+6. Controller & Peripherals (libpad -> libpad)
+----------------------------------------------
+DualShock 1 inputs and vibration actuators map 1:1 to ps2sdk's libpad interface.
+
+* Relevant ps2sdk Headers:
+  - <libpad.h> (requires padman.irx or sio2man.irx on IOP)
+
+* Input Polling & Rumble Actuation:
+  - PS1 APIs: PadInit, PadStartCom, PadGetState, PadInfoMode, PadSetAct, PadSetActAlign
+  - ps2sdk Mapping:
+    * Subsystem Init & Port Open:
+      padInit(0);
+      padPortOpen(0, 0, pad_dma_buf);
+    * Mode Setup (DualShock Analog Lock):
+      padSetMainMode(0, 0, PAD_MMODE_DUALSHOCK, PAD_MMODE_LOCK);
+    * Polling Input State:
+      struct padButtonStatus buttons;
+      int state = padGetState(0, 0);
+      if (state == PAD_STATE_STABLE || state == PAD_STATE_FINDCTP1) {
+          padRead(0, 0, &buttons);
+          // buttons.btns, buttons.ljoy_h, buttons.ljoy_v, buttons.rjoy_h, buttons.rjoy_v
+      }
+    * Vibration / Rumble Motors:
+      char act_align[6] = { 0, 1, 0xFF, 0xFF, 0xFF, 0xFF };
+      padSetActAlign(0, 0, act_align);
+      char act_data[2];
+      act_data[0] = small_motor_on ? 1 : 0;      // Motor 0: Small (Binary ON/OFF)
+      act_data[1] = (char)large_motor_intensity; // Motor 1: Large (0-255 speed)
+      padSetAct(0, 0, act_data, 2);
+
+
+7. Memory Card & Save Management (libcard -> libmc)
+---------------------------------------------------
+PS1 memory card block access is redirected to the PS2 Memory Card system.
+
+* Relevant ps2sdk Headers:
+  - <libmc.h> (requires mcman.irx and mcserv.irx on IOP)
+
+* Save File Operations:
+  - PS1 APIs: _bu_init, open, read, write, close targeting bu00: / bu10:
+  - ps2sdk Mapping:
+    * Subsystem Init:
+      mcInit(MC_TYPE_MC);
+      mcGetInfo(0, 0, &type, &free, &format);
+    * Directory & File Creation:
+      mcMkDir(0, 0, "BISCPS-10080"); // Standard PS2 save folder name
+      mcOpen(0, 0, "BISCPS-10080/SH_SAVE.DAT", O_CREAT | O_RDWR);
+      mcWrite(0, 0, fd, save_block_buffer, 8192); // 8 KB save block
+      mcClose(0, 0, fd);
+      mcSync(0, NULL, &result);
+
+
+8. System Timing, Root Counters & Interrupts (libetc / libapi -> kernel / timer / graph)
+----------------------------------------------------------------------------------------
+Pacing, frame synchronization, and hardware timers.
+
+* Relevant ps2sdk Headers:
+  - <kernel.h>, <timer.h>, <graph.h>
+
+* Synchronization & Frame Pacing:
+  - PS1 APIs: VSync(0), VSync(1), VSyncCallback
+  - ps2sdk Mapping:
+    * graph_wait_vsync();
+    * Alternatively using GS interrupts:
+      AddIntcHandler(INTC_GS, gs_vsync_handler, 0);
+      EnableIntc(INTC_GS);
+
+* Hardware Timers / Root Counters:
+  - PS1 APIs: SetRCnt, GetRCnt, StartRCnt, StopRCnt
+  - ps2sdk Mapping:
+    * Mapping PS1 Root Counters to EE Hardware Timers (Timers 0-3):
+      SetTimer(TIMER_CH0, &timer_config);
+      unsigned int ticks = GetTimer(TIMER_CH0);
+    * High-resolution cycle counting via MIPS Coprocessor 0:
+      unsigned int cpu_cycles;
+      asm volatile("mfc0 %0, $9" : "=r"(cpu_cycles)); // Reads EE CP0 Count register
+
+* Memory Management:
+  - PS1 APIs: InitHeap, malloc, free
+  - ps2sdk Mapping:
+    * Native standard C heap via ps2sdk newlib (malloc, free, calloc, memalign)
+      operating inside the PS2's 32 MB address space.

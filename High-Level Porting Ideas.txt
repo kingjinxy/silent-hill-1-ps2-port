@@ -1,0 +1,81 @@
+High-Level Plan & Architectural Considerations: Porting Silent Hill (PS1) to PS2 (ps2sdk)
+==========================================================================================
+
+1. Overview & Hardware Synergy
+------------------------------
+- Architecture Match: Both platforms share MIPS CPU roots (PS1 R3000A vs. PS2 Emotion Engine R5900). Both are 32-bit/64-bit Little Endian, allowing straightforward C compilation under the PS2 EE GCC toolchain.
+- Memory: PS1's 2 MB main RAM expands to 32 MB on the PS2, providing ample headroom for uncompressed assets, caching, and runtime translation buffers.
+- Audio: The PS2 SPU2 includes Core 0, which is functionally equivalent to the PS1 SPU (24 ADPCM/VAG channels) and has access to expanded SPU RAM.
+
+
+2. Rendering Pipeline: Ordering Table (OT) vs. GS eDRAM
+-------------------------------------------------------
+- PS1 Painter's Algorithm:
+  * The PS1 GPU has no hardware Z-buffer.
+  * The CPU/GTE builds an Ordering Table (OT)—a reverse-linked list of primitive packets (POLY_FT4, POLY_GT3, etc.) sorted back-to-front by depth, which DMA channel 2 walks and sends to the GPU FIFO.
+- PS2 Graphics Synthesizer (GS):
+  * The GS relies on 4 MB of ultra-fast embedded DRAM (eDRAM) with dedicated hardware Z-buffering (16/24/32-bit Z).
+- Implementation Approaches:
+  * Option A (Direct Emulation / Painter's Algorithm): Emulate the PS1 OT on the EE and emit triangles to the GS without Z-buffering (preserving original draw order). This preserves PS1 sorting quirks/artifacts, but ignores GS performance advantages.
+  * Option B (Native Z-Buffering): Enable GS Z-buffering for opaque scene geometry. Note: Silent Hill relies heavily on depth-sorted translucency for its iconic dense fog, smoke, and flashlight volumetric effects; transparent primitives will still require sorting.
+
+
+3. Texture & CLUT (Palette) Management
+--------------------------------------
+- PS1 VRAM:
+  * 1 MB unified VRAM (1024x512 16-bit space) shared by framebuffers, textures, and 4-bit/8-bit Color Lookup Tables (CLUTs).
+  * The game dynamically blits pixels and updates CLUT palettes directly in VRAM during gameplay.
+- PS2 GS Texture Pipeline:
+  * Textures must be transferred into GS local eDRAM via the GIF (Graphics Interface) using DMA (VIF/GIF).
+  * While the GS natively supports 4-bit and 8-bit indexed textures, dynamic CLUT palette swapping requires dedicated buffer management in eDRAM.
+
+
+4. GTE Math Precision vs. Floating Point / Vector Units
+-------------------------------------------------------
+- Fixed-Point GTE Math:
+  * The PS1 Geometry Transformation Engine (GTE, Coprocessor 2) operates entirely in fixed-point math (e.g., signed 4.12 and 12.20), complete with hardware-specific saturation, color clamping, and a hardware reciprocal divider lookup table (UNR divide approximation).
+- Physics and Collision Sensitivity:
+  * In PS1 engines, collision detection, physics, and line-of-sight checks frequently rely on GTE calculations. Replacing fixed-point GTE math with floating-point math (EE FPU or VU0/VU1) without care can cause subtle collision glitches or physics drift.
+- Implementation Approaches:
+  * Use a bit-accurate software C implementation of the GTE running on the EE (similar to modern PS1 emulators/open-source SDKs).
+  * Reimplement transformations on VU0 (macro mode) or VU1 while verifying game logic and collision stability.
+
+
+5. Full-Motion Video (FMV): MDEC vs. IPU
+----------------------------------------
+- PS1 MDEC:
+  * Silent Hill features pre-rendered FMV cutscenes (intro, Lisa Garland cutscenes, etc.) encoded in the proprietary MDEC format (.STR files containing DCT macroblocks).
+- PS2 Handling:
+  * The PS2 features an Image Processing Unit (IPU) designed for MPEG-2 rather than MDEC.
+  * Because the 294 MHz Emotion Engine is significantly faster than the PS1 CPU, MDEC/STR bitstreams can easily be decoded completely in software on the EE CPU in real time, or cutscenes can be re-encoded to native PS2 formats.
+
+
+6. System Architecture: Asynchronous EE vs. IOP Split
+-----------------------------------------------------
+- PS1 Single-CPU Model:
+  * The main R3000 CPU directly accessed hardware registers, configured timers, and polled disc sectors.
+- PS2 EE/IOP Model:
+  * Under ps2sdk, the EE cannot directly access the CD/DVD drive, SPU, or controllers.
+  * Peripheral control is delegated to the Input/Output Processor (IOP).
+  * File I/O, audio streaming, controller input (libpad), and memory card access (libmc) must be decoupled from the main game loop and routed through asynchronous SIF RPC calls to IOP IRX modules (e.g., cdvd.irx, freesd.irx, padman.irx).
+
+
+7. Frame Pacing and Clock Timing
+--------------------------------
+- The PS1 CPU operates at 33.8688 MHz, with games commonly relying on VSync interrupts (VSync(0)) or root counters for game loop pacing.
+- The EE runs at 294.912 MHz (dual-issue superscalar). Any hardcoded delay loops, spinlocks, or unthrottled sub-frame updates will execute ~9x too fast unless timing hooks are decoupled from CPU cycles and tied strictly to vertical refresh / timers.
+
+
+8. Memory Card & Save Data
+--------------------------
+- PS1 Cards: 128 KB EEPROM divided into 15 fixed 8 KB blocks, accessed via bu00: / bu10:.
+- PS2 Cards: 8 MB MagicGate cards utilizing a hierarchical directory filesystem (mc0:/BISCPS-XXXXX/).
+- Save/load routines will require a translation layer to serialize Silent Hill's save state structure into standard PS2 memory card directory files.
+
+
+9. Recommended Porting Strategy: The Abstraction Layer (HAL)
+------------------------------------------------------------
+Rather than rewriting the game engine from scratch, a practical approach is to build a PS1 Hardware Abstraction Layer (HAL) on top of ps2sdk:
+1. libgpu / libgte Wrapper: Map PS1 primitive structures (POLY_FT4, etc.) and ordering tables to GS DMA packets and VU0/VU1 transforms.
+2. libspu / libpad / libcard Shim: Translate sound, controller, and save requests into ps2sdk IOP RPCs.
+3. libcd Shim: Redirect ISO sector reads to asynchronous fioRead / fileXio calls on CD/DVD/storage.

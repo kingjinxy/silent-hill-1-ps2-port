@@ -1,0 +1,138 @@
+Silent Hill (PS1) Engine Architecture, Subsystems, and Data Formats
+===================================================================
+
+1. High-Level Engine Architecture & Execution Model
+---------------------------------------------------
+Due to the PS1's strict 2 MB RAM constraint, the engine is structured as a modular overlay system:
+
+- Main Executable (SLUS_007.07 / main):
+  * Acts as the primary bootloader.
+  * Displays the content warning screen and initializes hardware.
+  * Embeds the Master File Table (filetable.c.USA.inc) which indexes all resources across the disc containers.
+  * Loads B_KONAMI.BIN and BODYPROG.BIN.
+
+- Main Game Logic Overlay (BODYPROG.BIN):
+  * Resides in the 1ST/ folder of the SILENT. container (encrypted with an XOR key).
+  * Houses the core engine: main loop, character physics, rendering pipeline, camera systems, collision engine, and inventory.
+
+- Transient Overlays (VIN/ folder):
+  * Dynamically swapped in and out of RAM depending on context:
+    - MAP#_S##.BIN: Level-specific event scripts and enemy AI logic.
+    - STREAM.BIN: FMV video playback handler.
+    - OPTION.BIN: Options menu logic and graphics.
+    - SAVELOAD.BIN: Save and load screen UI and logic.
+    - STF_ROLL.BIN: Ending credits sequence.
+
+- Game State Machines:
+  * e_GameState (Application Flow):
+    GameState_Init, GameState_KonamiLogo, GameState_MainMenu, GameState_InGame,
+    GameState_InventoryScreen, GameState_PaperMapScreen, GameState_SaveScreen,
+    GameState_Credits, GameState_MovieOpening, etc.
+  * e_SysState (In-Game Tick Loop):
+    SysState_Gameplay, SysState_OptionsMenu, SysState_StatusMenu, SysState_MapScreen,
+    SysState_Fmv, SysState_LoadOverlay, SysState_LoadRoom, SysState_ReadMessage,
+    SysState_GameOver, SysState_GamePaused.
+
+
+2. Core Engine Subsystems & Functions
+-------------------------------------
+
+A. Graphics, Dynamic Lighting & Fog (Gfx_*, s_MapEffectsInfo):
+- Volumetric Fog & Darkness:
+  * The PS1 GPU lacks hardware fog. The engine relies on GTE Depth Cueing (DPCS/DPCT)
+    to blend vertex colors toward a target fog color (fogColor) or pitch black based
+    on depth distance (fogDistance).
+  * Environment presets dynamically blend between outdoor fog and indoor blackness.
+- Flashlight & Spotlights:
+  * Uses a dual-preset model in s_SysWork_2388: separate lighting configurations for
+    flashlight ON vs. OFF, allowing smooth runtime cross-fading.
+  * Real-time light cone attenuation projected onto level geometry and character meshes.
+- Weather & Particle System (Particle_SystemUpdate):
+  * Dedicated particle engine driving town snowfall, rain, and ash effects.
+
+B. Camera System (vc_* and vw_*):
+- Camera Rails (VC_ROAD_DATA):
+  * Cinematic fixed camera perspectives in alleys and corridors follow pre-authored spline paths/rails (vcInitVCSystem).
+- Dynamic Following (vcUserCamTarget, vcUserWatchTarget):
+  * Smoothly transitions to third-person behind-the-shoulder tracking in open streets.
+- Cutscene Bone Tracking (Vc_SetLookAtMatFromBoneCoord):
+  * Anchors camera translation and view rotation to specific character skeleton bones during scripted cutscenes.
+
+C. Physics & Collision (collision/, ipd.h):
+- Subcell Partitioning:
+  * Level collision is stored in .IPD files broken into a 2D grid of subcells (s_IpdCollSubcell).
+  * Each subcell contains split vertices and surfaces (s_IpdCollSurface).
+- Ground Types (e_GroundType):
+  * Surfaces are tagged with materials (GroundType_Default, Grass, Wood, Concrete, etc.)
+    which dictate Harry's footstep sound effects.
+- Slopes & Stairs:
+  * Collision surfaces store pitch and tilt angles (tiltAngleX, tiltAngleZ) enabling smooth stair and hill traversal.
+- Line-of-Sight & Raycasting (los.h, ray.h):
+  * Drives projectile hit detection, enemy vision cones, and item pickup triggers.
+
+D. Characters & NPC Management (s_SubCharacter, s_PlayerWork):
+- Memory Caps:
+  * Maximum of 4 distinct character archetypes (CHARA_GROUP_COUNT = 4) in RAM simultaneously.
+  * Maximum of 6 active NPCs (NPC_COUNT_MAX = 6) instantiated in the world.
+- Bone Hierarchy & Animation Blending:
+  * Built on GsCOORDINATE2 trees.
+  * Harry's animation model (s_PlayerExtra) splits animations at the waist: upper body
+    (aiming, shooting, lighting matches) operates independently from lower body locomotion
+    (running, turning) via disabledAnimBones bitmasks.
+
+E. Audio & Radio System:
+- Konami libsd / libsmf Sound Driver:
+  * Custom sound system used across Konami PS1 and early PS2 titles (directly related to Silent Hill 2's SOUNDCD.IRX).
+- Dynamic Music Layering (Bgm_LayersUpdate):
+  * Multi-layer ambient music tracks that fade individual stems in and out based on tension and enemy presence.
+- Radio Static (radio.h):
+  * Polling routines calculate distance to nearby monsters and dynamically inject analog radio noise.
+
+
+3. File Formats & Asset Architecture
+------------------------------------
+All assets are consolidated into two large container files without internal directory headers:
+- SILENT.: Overlays, 3D models, textures, animations, scripts.
+- HILL.: Streaming CD-XA audio tracks and MDEC FMV cinematics.
+- Master File Table: Resides in the main executable, mapping resource IDs to LBA sector offsets.
+
+File Types:
+- .ILM: Skeletal 3D models for characters and monsters (with bone weighting).
+- .IPD: Local map geometry (room meshes, street chunks, and subcell collision data).
+- .PLM: Global static props (pickups, keys, interactive environment items).
+- .TMD: Standard PS1 3D model format (used exclusively on the 3D item inspection screen).
+- .ANM: Skeletal joint rotation animation keyframes.
+- .DMS: Scripted cutscene keyframe data (actor choreography and camera cues).
+- .TIM: Standard PS1 textures (4-bit/8-bit indexed with CLUTs or 15-bit direct color).
+- .KDT: Konami MIDI tracker sequence files.
+- .VAB: SPU instrument sample banks and SFX waveforms.
+- .STR / XA: CD-XA interleaved audio streams and MDEC FMV video.
+
+
+4. Mathematical Data Representations
+------------------------------------
+Lacking a hardware FPU, the engine uses fixed-point math throughout:
+- Q19.12 (32-bit, 12 fractional bits):
+  * Primary world coordinate unit for positions, velocities, and health (playerHealth defaults to Q12(100.0f)).
+- Q3.12 (16-bit, 12 fractional bits):
+  * Unit vectors, rotation matrices, normalized angles, and lighting/fog intensity.
+- Q7.8 (16-bit, 8 fractional bits):
+  * Local .IPD collision cell offsets and dimensions.
+- Q20.12:
+  * Timers and accumulators (gameplay timer, total running/walking distance).
+
+
+5. Save Data & Game Progress State (s_Savegame)
+-----------------------------------------------
+The save structure occupies an 8,192-byte block (1 PS1 memory card block):
+- Inventory: Array of equipped weapons, item counts, and toggle states (s_InventoryItem items[INV_ITEM_COUNT_MAX]).
+- Map & World Progress:
+  * mapIdx, mapRoomIdx, locationId.
+  * mapEnemyStates[45]: Bitfield tracking whether individual enemies have been permanently killed or just incapacitated.
+  * eventFlags[52]: 1,664 individual event bit flags tracking story progression, puzzle solutions, unlocked doors, and paper map markings.
+- Stat Tracking & Endings:
+  * Shot statistics (firedShotCount, closeRangeShotCount, midRangeShotCount, longRangeShotCount).
+  * Melee and ranged kill counts.
+  * Running and walking distances.
+  * Ending unlock flags (Good+, Good, Bad+, Bad, UFO).
+  * Known Original Bug: pickedUpSpecialItemCount packs 3 bits for item count and 2 bits for Hyper Blaster beam color, causing the results screen to miscalculate special item counts.
