@@ -131,7 +131,9 @@ keep only the symbols main/bodyprog reference. main + bodyprog + screens + 43 ma
 
 - [ ] Evaluate PsyCross's C GTE (github.com/OpenDriver2/PsyCross) for bit-exactness before
       writing our own; use PC port `gpu_gte_pc.h` as the list of macros to cover
-- [ ] Bit-exact C GTE (register file struct, saturation/flags, UNR divide table)
+- [x] Bit-exact C GTE (register file struct, saturation/flags, UNR divide table): `src/port/gte.c`,
+      written from psx-spx; verified against the PS1 GTE in DuckStation with
+      `tools/port/gte_test` (every opcode × sf/lm, all 256 MVMVA variants; 19,040 tests, 0 diffs)
 - [ ] Replace `gte_*` macros and DMPSX raw opcodes with calls into it under `SH_PORT`
 
 ### Step 4 — Graphics (libgpu → GS)

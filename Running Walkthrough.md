@@ -399,3 +399,48 @@ Result: 0 of 456 files fail. Remaining warnings to work through before turning t
 errors: mostly `-Wincompatible-pointer-types` and `-Wbuiltin-declaration-mismatch` (the decomp's
 own libc-like prototypes), plus a few `-Woverflow` / `-Wshift-count-overflow` worth checking for
 real bugs. This is front-end only: GTE inline asm and `INCLUDE_ASM` aren't assembled yet.
+
+---
+
+## 2026-10-04 — Step 3: software GTE, verified against the PS1 GTE
+
+### Full EE compile
+
+Compiling (not just syntax-checking) every C file the USA build links (451, from `linkers/`)
+with the EE compiler: after adding `-Wa,-Iinclude` (for `INCLUDE_ASM`'s `macro.inc`), 95 files fail,
+all on GTE code: `lwc2`/`swc2`/`mfc2`/`mtc2`/`cfc2`/`ctc2` don't exist on the R5900 (its COP2 is
+VU0). 76 distinct `gte_*` macros are used (`include/psyq/inline_c.h`, `gtemac.h`, `gpu.h`).
+
+VU0 was considered and deferred: it's floating point, while the game depends on the GTE's exact
+fixed-point results (saturation, flags, UNR divide). The C GTE is the reference; hot paths can move
+to the VUs later if profiling says so (EE ~295 MHz vs PS1 33.8 MHz).
+
+### `src/port/gte.c` / `include/port/gte.h`
+
+Own implementation from psx-spx's GTE chapter (repo is GPL-3.0; PsyCross is MIT and would have been
+usable, DuckStation's licence doesn't allow reuse, but it's fine as a test oracle). API mirrors the
+CPU's view: `Gte_DataWrite/Read` (MTC2/MFC2, LWC2/SWC2), `Gte_CtrlWrite/Read` (CTC2/CFC2),
+`Gte_Command` (the 25-bit COP2 immediate). Includes register quirks (sign extension, SXYP
+move-on-write, IRGB/ORGB, LZCS/LZCR, H read-back bug), 44-bit MAC checks after every addition,
+RTPS's IR3 flag quirk, the MVMVA FC bug and garbage matrix, and the UNR divide table.
+
+### Verification: `tools/port/gte_test`
+
+- `gen.py` → 340 command words: every opcode × sf × lm, and MVMVA × sf × mx × v × cv × lm.
+- `test_ps1.c` (bare-metal PS-EXE built with Debian's `mipsel-linux-gnu-gcc -march=r3000`,
+  `-static -no-pie`): per command, 8 input sets from a shared xorshift PRNG (`inputs.h`; odd =
+  fully random, even = realistic ranges), runs the real COP2 instruction, stores all 64 registers.
+- `run.py [seed]`: boots the EXE in DuckStation (as the boot file: `-- gte_test.exe`; `-exe` alone
+  exits in batch mode), waits at `gte_test_done` via gdb, dumps the results; `check` replays the
+  same inputs through `gte.c` and compares every register.
+
+Bugs found by it:
+- Test generator: `pack16(rand(), rand())` — argument evaluation order differs between the MIPS and
+  host compilers, so the two sides generated different inputs. RNG calls now sequenced explicitly.
+- `noinline` on `gte_test_done`, or the breakpoint never hits (it got inlined into `main`).
+- GTE: in `MAC+(FC-MAC)*IR0`, IR saturates from the shifted difference **truncated to 32 bits**,
+  while the overflow flags come from the full value (only visible with sf=0 and extreme inputs).
+
+Result: 19,040 tests (seeds 0-6), 0 differences in any register, FLAG included.
+
+Next: map the 76 `gte_*` macros onto `gte.c` under `SH_PORT`.
