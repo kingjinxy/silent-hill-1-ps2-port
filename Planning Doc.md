@@ -93,6 +93,20 @@ its C GTE is a candidate for Step 3.
 
 ### Step 2 — Static linking of overlays
 
+Proof of concept (`tools/port/static_link_poc.py`): each map `ld -r`-merged, its
+`g_MapOverlayHdr` renamed `g_MapOverlayHdr_<map>` and everything else made local; screen overlays
+keep only the symbols main/bodyprog reference. main + bodyprog + screens + 43 maps then link with
+**no duplicate definitions** and no game-source changes. Still unresolved:
+
+- [ ] Map/screen references to bodyprog addresses bodyprog doesn't name (`D_800C39A0`,
+      `g_Player_AnimResetRequest` from all maps; `Math_MatrixTransform` from 26; `D_800A9938`,
+      `D_800A9945`, `D_800A99B5`; SAVELOAD's `g_SaveScreen_IsLoadError`): define relative to
+      their bodyprog container for the port build
+- [ ] map7_s03 → `func_801E2E28`/`func_801E2ED8`/`func_801E2FC0` and map6_s02 → `func_801E386C`/
+      `func_801E3970`: calls into the screen-overlay region; find out what's loaded there
+- [ ] `D_800CD768_tbl` (map1_s04) and the other `relative_syms.ld` entries in the merged-map link
+- [ ] Rename the bodyprog/SAVELOAD `pad` clash (only duplicate among non-map binaries)
+
 - [ ] Namespace per-map symbols (`Map_WorldObjectsInit`/`Update` ×42, `sharedFunc_*` in 95 files)
       — compare with the PC port's per-map `SH_MAP_NAME` renaming
 - [ ] Replace "load overlay + jump" with a per-map dispatch table
