@@ -147,10 +147,16 @@ def main():
         run([CC, "-c", *PORT_CFLAGS, src, "-o", obj])
         port_objs.append(obj)
     run(["tools/port/recomp_all.sh"])
+    recomp_objs = []
     for src in sorted(glob.glob(OUT + "/recomp/*.c")):
         run([CC, "-c", "-O2", "-G0", "-std=gnu89", "-fno-builtin", "-nostdinc", "-Iinclude", src, "-o", src[:-2] + ".o"])
         run([CC, "-c", "-G0", src[:-2] + ".data.s", "-o", src[:-2] + ".data.o"])
-        port_objs += [src[:-2] + ".o", src[:-2] + ".data.o"]
+        recomp_objs += [src[:-2] + ".o", src[:-2] + ".data.o"]
+    # As an archive: only the recompiled objects something references are linked.
+    lib = OUT + "/librecomp.a"
+    if os.path.exists(lib):
+        os.remove(lib)
+    run([EE + "ar", "rcs", lib, *recomp_objs])
 
     parts = []
     for name in sorted(n for n in objs if n.startswith("map")):
@@ -187,7 +193,8 @@ def main():
     elf = OUT + "/sh1.elf"
     r = run([CC, "-T", os.path.join(PS2SDK, "ee", "startup", "linkfile"), "-L", os.path.join(PS2SDK, "ee", "lib"),
              "-Wl,-zmax-page-size=128", "-Wl,--unresolved-symbols=report-all", "-o", elf,
-             combined, *port_objs, "configs/USA/relative_syms.ld", "configs/USA/port_relative_syms.ld"], check=False)
+             combined, *port_objs, "-Wl,--start-group", lib, "-Wl,--end-group",
+             "configs/USA/relative_syms.ld", "configs/USA/port_relative_syms.ld"], check=False)
     open(OUT + "/link.log", "w").write(r.stderr)
     und = sorted(set(re.findall(r"undefined reference to `([^']+)'", r.stderr)))
     dups = sorted(set(re.findall(r"multiple definition of `([^']+)'", r.stderr)))

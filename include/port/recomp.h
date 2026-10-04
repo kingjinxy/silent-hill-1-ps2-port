@@ -29,6 +29,10 @@ typedef struct
  * the object's .text, since recompiled code has no PS1 addresses. */
 #define RC_TEXT_MARK 0xC0DE0000u
 
+/** Called when recompiled code jumps through a register to an address that isn't a known jump-table
+ * target (port bug or corrupted data). Defined in src/port/recomp_rt.c. */
+void Rc_BadJump(unsigned int target);
+
 /** Unaligned loads/stores (lwl/lwr/swl/swr), little-endian MIPS semantics. */
 static inline unsigned int Rc_Lwl(unsigned int rt, unsigned int addr)
 {

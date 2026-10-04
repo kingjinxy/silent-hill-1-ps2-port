@@ -20,12 +20,28 @@ unsigned char arena[ARENA] __attribute__((aligned(16)));
 static void fill(int f, int t, unsigned int* args, unsigned int data[32], unsigned int ctrl[32])
 {
     int i;
-    gte_test_inputs(1000 + f, t & ~1, data, ctrl); /* realistic GTE state */
-    gte_rng_state ^= (unsigned int)(f * 131 + t * 17 + 3);
-    for (i = 0; i < ARENA / 2; i++)
+    int t_seed = t;
+    if (lib_test_realistic[f])
     {
-        int v = (t & 1) ? (int)(gte_rng() & 0xFFFF) : gte_rand_range(0x1000);
-        ((unsigned short*)arena)[i] = (unsigned short)v;
+        t &= ~1; /* odd tests use realistic data too; t_seed keeps them distinct */
+    }
+    gte_test_inputs(1000 + f, t & ~1, data, ctrl); /* realistic GTE state */
+    gte_rng_state ^= (unsigned int)(f * 131 + t_seed * 17 + 3);
+    if (lib_test_realistic[f])
+    {
+        /* Small 32-bit values: e.g. GsF_LIGHT's direction components are longs. */
+        for (i = 0; i < ARENA / 4; i++)
+        {
+            ((int*)arena)[i] = gte_rand_range(0x1000);
+        }
+    }
+    else
+    {
+        for (i = 0; i < ARENA / 2; i++)
+        {
+            int v = (t & 1) ? (int)(gte_rng() & 0xFFFF) : gte_rand_range(0x1000);
+            ((unsigned short*)arena)[i] = (unsigned short)v;
+        }
     }
     for (i = 0; i < 9; i++)
     {
@@ -36,6 +52,10 @@ static void fill(int f, int t, unsigned int* args, unsigned int data[32], unsign
         else
         {
             args[i] = (t & 1) ? gte_rng() : (unsigned int)gte_rand_range(0x1000);
+            if (lib_test_nonneg[f])
+            {
+                args[i] &= 0x7FFFFFFFu;
+            }
         }
     }
 }

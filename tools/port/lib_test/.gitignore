@@ -5,3 +5,4 @@
 *.a
 ps1_results.s
 lib_tests.h
+ee_objs/

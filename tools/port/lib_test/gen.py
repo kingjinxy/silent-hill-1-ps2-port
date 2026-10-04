@@ -16,9 +16,18 @@ ReadGeomOffset ReadGeomScreen ReadLightMatrix RotTrans RotTransPers RotTransPers
 SetBackColor SetColorMatrix SetGeomOffset SetGeomScreen SetLightMatrix SetMulRotMatrix SetRotMatrix SetTransMatrix
 Square0 SquareRoot0 SquareRoot12 TransMatrix TransposeMatrix VectorNormal ratan2
 Math_Sin Math_Cos Math_RotMatrixZ Math_RotMatrixXyz Math_RotMatrixZxy Math_RotMatrixZxyNeg Math_RotMatrixXyzGte
-Math_RotMatrixZxyNegGte""".split()
+Math_RotMatrixZxyNegGte
+GsSetFlatLight GsSetLightMatrix GsSetLsMatrix GsSetProjection GsSetAmbient""".split()
 
-HEADERS = ["include/psyq/libgte.h", "include/bodyprog/math/math.h", "tools/port/recomp_protos.h"]
+# Integer arguments limited to >= 0: SquareRoot0/12 index their table with a value derived from the
+# input; negative inputs read outside the table (undefined, memory-layout dependent on both sides).
+NONNEG = {"SquareRoot0", "SquareRoot12"}
+
+# Always realistic inputs (no fully random tests): GsSetFlatLight passes the squared length of its
+# light vector to SquareRoot0; random vectors overflow it to a negative value (see NONNEG).
+REALISTIC = {"GsSetFlatLight"}
+
+HEADERS = ["include/psyq/libgs.h", "include/psyq/libgte.h", "include/bodyprog/math/math.h", "tools/port/recomp_protos.h"]
 
 
 def params(name):
@@ -50,6 +59,8 @@ ptrmask = []
 for f in FUNCS:
     _, _, ptrs = params(f)
     ptrmask.append("0x%X" % sum(1 << k for k, p in enumerate(ptrs) if p))
+lines.append("static const unsigned char lib_test_realistic[] = { %s };" % ", ".join("1" if f in REALISTIC else "0" for f in FUNCS))
+lines.append("static const unsigned char lib_test_nonneg[] = { %s };" % ", ".join("1" if f in NONNEG else "0" for f in FUNCS))
 lines.append("/* bit k: parameter k is a pointer */")
 lines.append("static const unsigned short lib_test_ptrs[] = { %s };" % ", ".join(ptrmask))
 open(os.path.join(HERE, "lib_tests.h"), "w").write("\n".join(lines) + "\n")

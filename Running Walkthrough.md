@@ -538,3 +538,35 @@ Result: 48 functions × 8 tests, 0 differences. (`GsTMDfast*` need real TMD data
 
 HAL inventory after this: 140 undefined symbols (libgs 31, libgpu 30, libcd 19, libspu 19, libapi 15,
 libpad 8, libcard 7, libpress 5, libetc 3, ours 3).
+
+---
+
+## 2026-10-04 — libgs recompiled
+
+All 24 libgs objects go through `tools/port/recomp.py`. New recompiler features:
+
+- **Jump tables** (`jr $v0` after loading from a table): the data emitter already stores `.text`
+  addresses as `RC_TEXT_MARK + offset`; `jr reg` becomes a `switch` over every code address this
+  object's data refers to (within the function), default `Rc_BadJump()` (`src/port/recomp_rt.c`).
+- **`jalr`**: a call through a C function pointer (libgs's `GsFCALL4` table is filled from game C
+  code, so the pointers are C functions, recompiled wrappers included): a0-a3 plus the o32 stack words.
+- **Cross-object calls** are now `rc_<name>(r)` (shared registers). `tools/port/recomp_bridges.py`
+  writes a `bridge_<name>.c` for every `rc_` name no recompiled object defines (plain C functions:
+  libc, the HAL), one file each so that linking the recompiled code as an **archive** (now done in
+  `port_link.py` and `lib_test`) only pulls in what's used.
+- Wrappers zero the register file (callee-saved registers get saved before use; deterministic).
+- `reg11.o` (`SetFarColor`) added: libgs calls it, the game doesn't.
+
+### Test-input fixes (not port bugs)
+
+- `SquareRoot0`/`SquareRoot12` with a **negative** argument compute a negative index and read
+  memory *before* Sony's `SQRT` table — undefined, memory-layout dependent (results changed with the
+  link order). The test now gives them non-negative arguments only.
+- `GsSetFlatLight` normalises its light vector through `SquareRoot0` on the squared length; with
+  random (or random 16-bit-half) 32-bit components that overflows to negative — same issue. It now
+  gets small 32-bit values.
+
+Result: `lib_test` 53 functions × 8 tests, 0 differences. libgs's packet builders and libgte's
+`GsTMDfast*` need real model/OT data; they'll be compared against the PS1 in-game. Full link: 113
+undefined symbols (libgpu 31, libcd 19, libspu 19, libapi 17, libpad 8, libcard 7, libpress 5,
+libetc 4, ours 3).

@@ -169,6 +169,16 @@ def translate_object(path, out_dir, protos, prefix):
                 lo_addend[off] = sext16(words[off // 4] & 0xFFFF)
 
     externs = set()
+    # .text offsets stored in data (jump tables): jump targets for `jr reg`.
+    code_refs = set()
+    for secname, rels in obj.relocs.items():
+        if secname == ".text":
+            continue
+        sec = obj.elf.get_section_by_name(secname)
+        for roff, (rtype, sidx) in rels.items():
+            name, is_sec, rsec, value = obj.sym_ref(sidx)
+            if rtype == R_MIPS_32 and rsec == ".text":
+                code_refs.add(int.from_bytes(sec.data()[roff:roff + 4], "little") + value)
 
     def addr_expr(off, kind):
         """C expression for a relocated HI/LO half."""
@@ -333,9 +343,22 @@ def translate_object(path, out_dir, protos, prefix):
                     if ra_copy:
                         lines.append("%s { %s return; }" % (lab, delay()))
                     else:
-                        raise RecompError("jr $%s at 0x%X (jump table?)" % (REG[rs], off))
+                        # Jump table: the register holds a code address loaded from data, which the data
+                        # sections store as RC_TEXT_MARK + .text offset (see the data emitter).
+                        cases = sorted(t for t in code_refs if start <= t < end)
+                        if not cases:
+                            raise RecompError("jr $%s at 0x%X with no code addresses in data" % (REG[rs], off))
+                        sw = " ".join("case 0x%08Xu: goto L_%X;" % (0xC0DE0000 + t, t) for t in cases)
+                        lines.append("%s { unsigned int t = %s; %s switch (t) { %s default: Rc_BadJump(t); return; } }"
+                                     % (lab, R(rs), delay(), sw))
                 elif op == 0 and (w & 63) == 9:
-                    raise RecompError("jalr at 0x%X" % off)
+                    # jalr: call through a C function pointer (e.g. libgs's GsFCALL4 table, filled from C).
+                    # Arguments: a0-a3, then the o32 stack words at sp+16.. (extra ones are ignored).
+                    if (w >> 11) & 31 != 31:
+                        raise RecompError("jalr with link register %d at 0x%X" % ((w >> 11) & 31, off))
+                    stk = ", ".join("RC_R32(r->r[29] + %d)" % (16 + 4 * i) for i in range(8))
+                    lines.append("%s { unsigned int t = %s; %s r->r[31] = 0; r->r[2] = ((unsigned int (*)())(unsigned long)t)"
+                                 "(r->r[4], r->r[5], r->r[6], r->r[7], %s); goto L_%X; }" % (lab, R(rs), delay(), stk, off + 8))
                 elif op in (2, 3):
                     if off not in trel or trel[off][0] != R_MIPS_26:
                         tgt = (w & 0x3FFFFFF) << 2
@@ -355,7 +378,9 @@ def translate_object(path, out_dir, protos, prefix):
                                 raise RecompError("call into the middle of a function at 0x%X" % off)
                             call = "rc_%s(r);" % callee
                         else:
-                            call = "rc_ext_%s(r);" % c_ident(name)
+                            # Another object: recompiled code is called directly (shared registers); for plain C
+                            # functions tools/port/recomp_bridges.py generates rc_<name> bridges.
+                            call = "rc_%s(r);" % c_ident(name)
                             externs.add(("call", name))
                         if op == 3:
                             lines.append("%s { %s r->r[31] = 0; %s goto L_%X; }" % (lab, delay(), call, off + 8))
@@ -420,10 +445,7 @@ def translate_object(path, out_dir, protos, prefix):
         lines.append("extern char %s[];" % n)
     calls = sorted(n for k, n in (e for e in externs if isinstance(e, tuple)))
     for n in calls:
-        # Bridge to a C function outside the recompiled code: up to 4 register arguments, int/pointer.
-        lines.append("extern int %s();" % n)
-        lines.append("static void rc_ext_%s(RcRegs* r) { r->r[2] = (unsigned int)%s(r->r[4], r->r[5], r->r[6], r->r[7]); }"
-                     % (c_ident(n), n))
+        lines.append("void rc_%s(RcRegs* r);" % c_ident(n))
     lines.append("")
     for fname, _, _, _, _ in func_bodies:
         lines.append("void rc_%s(RcRegs* r);" % fname)
@@ -450,8 +472,8 @@ def translate_object(path, out_dir, protos, prefix):
                 raise RecompError("variadic %s" % name)
             params = ", ".join("unsigned int a%d" % i for i in range(nargs)) or "void"
             lines.append("%s %s(%s)\n{" % ("unsigned int" if ret else "void", name, params))
-            lines.append("    RcRegs regs;\n    unsigned int stack[RC_STACK_WORDS];")
-            lines.append("    regs.r[0] = 0;\n    regs.r[29] = (unsigned int)(unsigned long)&stack[RC_STACK_WORDS - 64];")
+            lines.append("    RcRegs regs = { { 0 } };\n    unsigned int stack[RC_STACK_WORDS];")
+            lines.append("    regs.r[29] = (unsigned int)(unsigned long)&stack[RC_STACK_WORDS - 64];")
             for i in range(nargs):
                 if i < 4:
                     lines.append("    regs.r[%d] = a%d;" % (4 + i, i))

@@ -167,6 +167,11 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
       (`tools/port/recomp_all.sh`); `InitGeom` hand-written (`src/port/libgte_port.c`). Verified
       against the PS1 originals with `tools/port/lib_test` (48 functions, 384 tests, 0 diffs).
       `GsTMDfast*` (also libgte) still to test, with libgs
+- [x] libgs recompiled (all 24 objects; jump tables and `jalr` through `GsFCALL4` supported). State
+      setters verified by `lib_test` (GsSetFlatLight/LightMatrix/LsMatrix/Projection/Ambient)
+- [ ] Verify libgs packet builders (`GsSortObject4J`, `GsSortFastSprite`, `GsSortOt`,
+      `GsLinkObject4`, `GsMapModelingData`) and `GsTMDfast*` with real game data: compare the packets
+      built per frame against the PS1 once the port renders
 
 ### Step 4 — Graphics (libgpu → GS)
 
