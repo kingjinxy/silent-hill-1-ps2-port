@@ -60,16 +60,42 @@ Ground rules:
 - Deferred to Step 2: `g_OvlBodyprog` / `g_OvlDynamic` overlay load addresses in `src/main/main.c`
   (they disappear once overlays are statically linked).
 
+## Reference: the SH1 PC port
+
+`/home/alex/Downloads/silent-hill-decomp-nx-pc-port` is a playable PC port of the same decomp on
+PsyCross (SDL2/OpenGL PS1-library reimplementation; repo `SlickAmogus/silent-hill-decomp`, branch
+`pc-port`). The download is not a git checkout and its `pc_port/PsyCross/` submodule is empty.
+Useful to us (`pc_port/` paths):
+
+- `docs/Port_Fixes_Index.md` — game-code bugs the PS1 tolerated (NULL/small-pointer reads,
+  integer divide by zero, fixed-point overflow, IPD buffer sizing). Check each against the EE.
+- `src/map_registry.c`, `maps/CMakeLists.txt` — per-map builds with renamed symbols
+  (`-DSH_MAP_NAME=…`) and a swapped `g_MapOverlayHdr` pointer: a working Step 2 design.
+- `include/gpu_gte_pc.h` — every custom GTE macro in `gpu.h` mapped onto C calls (Step 3 checklist).
+- `include/psx_memory.h` — same 2 MiB arena + `& 0x1FFFFF` scheme as our `psx_mem.h`.
+- `XA_RESEARCH.md`, `docs/ordering_table_and_drawtag_pipeline.md` — background for Steps 4 and 7.
+
+Not applicable: the 64-bit struct reformatting (`ipd_reformat.c`, `dms_reformat.c`,
+`struct_offset_portability.md`) — EE pointers are 32-bit. Their 700+ "zero-stub" data tables come
+from not being able to use the MIPS data asm; the EE is MIPS, so we should assemble splat's data
+`.s` files as-is and get the real tables. PsyCross itself is OpenGL/SDL and can't run on PS2, but
+its C GTE is a candidate for Step 3.
+
 ### Step 2 — Static linking of overlays
 
 - [ ] Namespace per-map symbols (`Map_WorldObjectsInit`/`Update` ×42, `sharedFunc_*` in 95 files)
+      — compare with the PC port's per-map `SH_MAP_NAME` renaming
 - [ ] Replace "load overlay + jump" with a per-map dispatch table
+      — cf. PC port `map_registry.c` (swaps a `g_MapOverlayHdr` pointer per map)
 - [ ] Reset each overlay's `.data` on "load" (snapshot/restore), matching PS1 reload semantics
 - [ ] Remove `g_OvlBodyprog` / `g_OvlDynamic` fixed addresses
 - [ ] Decide what to do with the remaining `INCLUDE_ASM` functions (need C for the port)
+- [ ] Assemble splat's data/rodata `.s` files for the EE as-is (no zero-stubbed tables)
 
 ### Step 3 — Software GTE
 
+- [ ] Evaluate PsyCross's C GTE (github.com/OpenDriver2/PsyCross) for bit-exactness before
+      writing our own; use PC port `gpu_gte_pc.h` as the list of macros to cover
 - [ ] Bit-exact C GTE (register file struct, saturation/flags, UNR divide table)
 - [ ] Replace `gte_*` macros and DMPSX raw opcodes with calls into it under `SH_PORT`
 
@@ -96,6 +122,12 @@ Ground rules:
 
 - [ ] Raw Mode 2 Form 2 sector reads, software XA-ADPCM decode, stream to SPU2
 - [ ] Software MDEC decode on the EE
+
+### Throughout
+
+- [ ] Go through PC port `docs/Port_Fixes_Index.md`, sections 1, 3, 4, 6, 7 (section 2 is the
+      zero-stub problem, section 5 is 64-bit only) and apply the fixes that are real game-code
+      bugs, under `SH_PORT`
 
 ### Optional — PC host build
 
