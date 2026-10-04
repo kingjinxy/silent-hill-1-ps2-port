@@ -24,3 +24,7 @@ Zone.Identifier
 
 # Local build logs
 /build_*.log
+
+# PS2 port build output
+/port/**/*.elf
+/port/**/*.o

@@ -354,3 +354,16 @@ Check: a hello world using `$(PS2SDK)/samples/Makefile.pref` + `Makefile.eegloba
 `-ldebug` (`init_scr`/`scr_printf`) builds a static EE ELF. Not run yet: no PS2 emulator installed.
 Note the EE compiler is GCC 15 (the PS1 build uses GCC 2.8.1): expect new warnings/errors in the
 decomp's C, and C23 defaults — pass an explicit `-std=` in the port build.
+
+### PCSX2
+
+PCSX2 v2.8.2 (AppImage in `~/Downloads`), BIOS `ps2-0100j-20000117` (Japan v1.00). Booting an ELF:
+`pcsx2-qt -batch -fastboot -nofullscreen -logfile <log> -elf <file.elf> -- <file.elf>`.
+
+ps2sdk's `printf` shows up in PCSX2's **IOP** console (it goes through the IOP's tty), so both
+`EnableEEConsole` and `EnableIOPConsole` must be on to see program output in the log.
+`tools/port/pcsx2_run.py <elf> [--seconds N] [--until TEXT]` boots an ELF with those turned on,
+prints the program's output, closes PCSX2 (whole process group), and restores `PCSX2.ini`.
+
+`port/hello/` (`make -C port/hello`) prints "Silent Hill PS2 port: toolchain OK"; confirmed in
+PCSX2 ~1 s after boot. The toolchain → ELF → emulator path works.
