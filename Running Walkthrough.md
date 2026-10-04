@@ -325,3 +325,32 @@ Rebuilt the shifted image (0x110 padding in every map) on top of the linker fix;
 variables now move (map7_s03 `D_800F4806` → `0x800F4916`). Warp sweep: 36/43 pass, and the 7
 failures are exactly the ones that fail on the unmodified disc (map1_s04, map2_s01, map2_s03,
 map3_s06, map4_s00, map4_s06, map6_s05). Step 1 done.
+
+---
+
+## 2026-10-04 — PS2 toolchain (prebuilt ps2dev)
+
+No need to build the toolchain from source: ps2dev publishes prebuilt Linux archives.
+
+```
+export PS2DEV=$HOME/ps2dev && mkdir -p $PS2DEV
+curl -L -o ps2dev-latest.tar.gz https://github.com/ps2dev/ps2dev/releases/download/latest/ps2dev-ubuntu-latest.tar.gz
+tar -xf ps2dev-latest.tar.gz --strip-components 1 -C $PS2DEV
+```
+
+Installed version: `ps2dev-ubuntu-latest.tar.gz` asset updated 2026-10-03T23:22:30Z,
+SHA-256 `d053f43c2c3cf7be597270e9afe08f3d03ced33430f1650ca66a898b8111633e`; EE compiler
+`mips64r5900el-ps2-elf-gcc` 15.2.0. Runs on Debian 13 as is. Installed under `~/ps2dev` (no sudo);
+environment added to `~/.bashrc`:
+
+```
+export PS2DEV=$HOME/ps2dev
+export PS2SDK=$PS2DEV/ps2sdk
+export GSKIT=$PS2DEV/gsKit
+export PATH=$PATH:$PS2DEV/bin:$PS2DEV/ee/bin:$PS2DEV/iop/bin:$PS2DEV/dvp/bin:$PS2SDK/bin
+```
+
+Check: a hello world using `$(PS2SDK)/samples/Makefile.pref` + `Makefile.eeglobal` and
+`-ldebug` (`init_scr`/`scr_printf`) builds a static EE ELF. Not run yet: no PS2 emulator installed.
+Note the EE compiler is GCC 15 (the PS1 build uses GCC 2.8.1): expect new warnings/errors in the
+decomp's C, and C23 defaults — pass an explicit `-std=` in the port build.
