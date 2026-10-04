@@ -143,6 +143,29 @@ keep only the symbols main/bodyprog reference. main + bodyprog + screens + 43 ma
 - [ ] `INCLUDE_ASM` functions still assemble as R3000 code inside EE objects: check for COP2 use
       and R3000-only behaviour (load delay slots) before relying on them
 
+### HAL inventory (first full PS2 link, `tools/port/port_link.py`)
+
+The whole game (main + bodyprog + screens + 43 merged maps, EE objects) links against ps2sdk with no
+duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
+
+| Library | # | Notes |
+|---|---|---|
+| libgte | 46 | matrix/vector helpers, RotTransPers etc. — on `gte.c` |
+| libgpu | 30 | prims, DrawOTag, Load/StoreImage, draw/disp env — Step 4 |
+| libgs | 30 | Sony's 3D/2D layer (GsSortObject4J, GsDrawOt, coords) — on libgte + libgpu |
+| libcd | 19 | CdRead/CdControl, St* streaming — Steps 5/7 |
+| libspu | 19 | voices, reverb, transfers — Step 6 |
+| libapi | 15 | events, root counters, critical sections, memcard files |
+| libkmath | 8 | Konami asm math (`src/bodyprog/libkmath/libkmath.s`, has GTE ops) — needs C |
+| libpad | 8 | controller — Step 5 |
+| libcard | 7 | memory card — Step 5 |
+| libpress | 5 | MDEC decode — Step 7 |
+| libetc | 3 | VSync, callbacks |
+| ours | 3 | `g_MapOverlayHdr` (current-map pointer), `g_FsBuffer18/20` (arena) |
+
+- [ ] libgte + libkmath (on the software GTE; can be tested against the PS1 libraries the same way
+      as the GTE)
+
 ### Step 4 — Graphics (libgpu → GS)
 
 - [ ] Walk the PS1 OT at `DrawOTag`, translate primitives to GIF packets

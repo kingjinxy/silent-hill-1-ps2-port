@@ -473,3 +473,22 @@ still 0 differences.
 Result: `tools/port/ee_compile_check.sh` (replaces `ee_syntax_check.sh`; compiles the 451 C files
 listed in `linkers/USA/*.ld` to EE objects) — 0 failures. PS1 build 50/50. Still open: Sony's
 prebuilt libgte functions, and `INCLUDE_ASM` functions that are still R3000 asm.
+
+---
+
+## 2026-10-04 — First full PS2 link: HAL inventory
+
+`tools/port/port_link.py` links the whole game for the EE: EE objects for the 451 C files
+(`ee_compile_check.sh`), splat's 190 data `.s` files assembled with the EE toolchain, `src/port/*.c`,
+maps and screen overlays merged/localised as in the PoC, then a final link with ps2sdk's crt0 and
+libc (`$PS2SDK/ee/startup/linkfile`). Left out on purpose: Sony's prebuilt PS1 libraries (`lib/*.o`),
+the PS-EXE header, `footer_data` padding, `src/main/libsn/snmain.s` (PS1 startup: clears BSS and calls
+`main`; ps2sdk's crt0 replaces it — it was the only user of the `main_*` section markers), and
+`src/bodyprog/libkmath/libkmath.s` (Konami math: 11 functions plus tables, 17 GTE instructions).
+
+`configs/USA/relative_syms.ld` anchors `D_800C4454` on `screenPosY.53`, a GCC 2.8 static-local name
+that GCC 15 doesn't produce. It's a standalone bss-gap variable, so the port simply defines it in
+`src/port/port_data.c` (a PROVIDE only applies when the symbol is otherwise undefined).
+
+Result: no duplicate definitions (game vs ps2sdk/newlib), 193 undefined symbols, grouped by the
+Sony library that defined them on PS1 — table in the Planning Doc ("HAL inventory").
