@@ -19,7 +19,7 @@
  * @param rot Rotation to apply.
  * @param boneCoords Character model bone coords.
  */
-static void Math_MatrixTransform(const VECTOR3* pos, SVECTOR* rot, GsCOORDINATE2* boneCoords)
+void Math_MatrixTransform(const VECTOR3* pos, SVECTOR* rot, GsCOORDINATE2* boneCoords)
 {
     boneCoords[0].flg        = false;
     boneCoords[0].coord.t[0] = Q12_TO_Q8(pos->vx);

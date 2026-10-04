@@ -98,10 +98,10 @@ Proof of concept (`tools/port/static_link_poc.py`): each map `ld -r`-merged, its
 keep only the symbols main/bodyprog reference. main + bodyprog + screens + 43 maps then link with
 **no duplicate definitions** and no game-source changes. Still unresolved:
 
-- [ ] Map/screen references to bodyprog addresses bodyprog doesn't name (`D_800C39A0`,
-      `g_Player_AnimResetRequest` from all maps; `Math_MatrixTransform` from 26; `D_800A9938`,
-      `D_800A9945`, `D_800A99B5`; SAVELOAD's `g_SaveScreen_IsLoadError`): define relative to
-      their bodyprog container for the port build
+- [x] Map/screen references to bodyprog addresses bodyprog doesn't name: `Math_MatrixTransform`
+      was `static` in `load_screen.c` (now global; matching unchanged); the other six
+      (`D_800C39A0`, `g_Player_AnimResetRequest`, `D_800A99xx`, `g_SaveScreen_IsLoadError`) are in
+      `configs/USA/port_relative_syms.ld`, port link only
 - [x] map7_s03 → `func_801E2E28`/`func_801E2ED8`/`func_801E2FC0` and map6_s02 → `func_801E386C`/
       `func_801E3970`: deliberate calls into STF_ROLL.BIN (credits), which those scenes load next to
       the map via bodyprog `GameFs_StfRollBinLoad()`. The PoC now keeps every overlay symbol any
@@ -110,8 +110,13 @@ keep only the symbols main/bodyprog reference. main + bodyprog + screens + 43 ma
       (maps → `g_OvlDynamic`, screens and STF_ROLL → `FS_BUFFER_1`, bodyprog/B_KONAMI decrypted at
       boot). One hook: for overlay file indices, skip the read and restore that overlay's
       `.data`/`.bss` to its initial state (and set the current-map header pointer for maps)
-- [ ] `D_800CD768_tbl` (map1_s04) and the other `relative_syms.ld` entries in the merged-map link
-- [ ] Rename the bodyprog/SAVELOAD `pad` clash (only duplicate among non-map binaries)
+- [x] Relative symbols in the merged link. Linker-script expressions come out ABS in an `ld -r`
+      link, so: map-internal zero-offset aliases (`D_800CD768_tbl`) are resolved by renaming the
+      reference in the map's objects before merging; bodyprog ones are applied in the final link
+      (checked: `D_800C15B4` = `D_800C15B0` + 4 etc. in the PoC ELF)
+- [x] bodyprog/SAVELOAD `pad` clash: gone once SAVELOAD's internal symbols are localised
+- PoC final link: only `g_MapOverlayHdr` (→ current-map pointer), `g_FsBuffer18/20` (→ arena) and
+  `main_*` section markers (→ PS2 crt) are left undefined
 
 - [ ] Namespace per-map symbols (`Map_WorldObjectsInit`/`Update` ×42, `sharedFunc_*` in 95 files)
       — compare with the PC port's per-map `SH_MAP_NAME` renaming

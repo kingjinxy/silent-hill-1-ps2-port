@@ -28,6 +28,23 @@ def objects(ld_script):
     return objs
 
 
+# name -> (anchor, offset) from configs/USA/relative_syms.ld
+ALIASES = {m.group(1): (m.group(2), int(m.group(3), 16)) for m in re.finditer(
+    r'PROVIDE\("(\w+)" = "([\w.]+)" \+ (0x[0-9A-Fa-f]+)\)', open("configs/USA/relative_syms.ld").read())}
+
+
+def rename_refs(obj, renames, outdir):
+    """Copy obj to outdir with undefined references renamed (only if it has any)."""
+    und = {l.split()[-1] for l in run([NM, "-u", obj]).stdout.splitlines() if l.strip()}
+    hits = {a: b for a, b in renames.items() if a in und}
+    if not hits:
+        return obj
+    os.makedirs(outdir, exist_ok=True)
+    out = os.path.join(outdir, os.path.basename(obj))
+    run([OBJCOPY, *[x for a, b in hits.items() for x in ("--redefine-sym", "%s=%s" % (a, b))], obj, out])
+    return out
+
+
 def run(cmd):
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode:
@@ -41,7 +58,15 @@ def main():
     for ld in sorted(glob.glob("linkers/USA/maps/map*_s*.ld")):
         name = os.path.basename(ld)[:-3]
         merged = "%s/%s.o" % (OUT, name)
-        run([LD, "-EL", "-r", "-o", merged, *objects(ld)])
+        objs = objects(ld)
+        # A map's own aliases (offset 0, e.g. map1_s04 D_800CD768_tbl = D_800CD768) must resolve
+        # before its symbols are hidden; linker-script expressions turn ABS in an `ld -r` link, so
+        # rename the references in copies of the input objects instead.
+        defined = {f[2] for f in (l.split() for l in run([NM, "--defined-only", *objs]).stdout.splitlines()) if len(f) == 3}
+        renames = {a: b for a, (b, off) in ALIASES.items() if off == 0 and b in defined}
+        if renames:
+            objs = [rename_refs(o, renames, "%s/%s_objs" % (OUT, name)) for o in objs]
+        run([LD, "-EL", "-r", "-o", merged, *objs])
         hdr = "g_MapOverlayHdr_" + name
         run([OBJCOPY, "--redefine-sym", "g_MapOverlayHdr=" + hdr, "--keep-global-symbol", hdr, merged])
         parts.append(merged)
@@ -68,8 +93,13 @@ def main():
         sys.exit(r.stderr[-3000:])
     if r.returncode:
         return 1
-    und = sorted({l.split()[-1] for l in run([NM, "-u", combined]).stdout.splitlines() if l.strip()})
-    print("undefined symbols left: %d" % len(und))
+    # Final (non-relocatable) link with the relative-symbol scripts as implicit scripts, so the
+    # default layout is kept and the PROVIDE expressions are computed from the real anchors.
+    r = subprocess.run([LD, "-EL", "-o", OUT + "/all.elf", "-e", "0", "--unresolved-symbols=report-all",
+                        combined, "configs/USA/relative_syms.ld", "configs/USA/port_relative_syms.ld"],
+                       capture_output=True, text=True)
+    und = sorted(set(re.findall(r"undefined reference to `([^']+)'", r.stderr)))
+    print("undefined symbols in final link: %d" % len(und))
     for u in und:
         print("  " + u)
     return 0
