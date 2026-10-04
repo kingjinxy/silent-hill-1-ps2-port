@@ -4,7 +4,7 @@
 Each map is first linked on its own (`ld -r`), its `g_MapOverlayHdr` renamed to
 `g_MapOverlayHdr_<map>`, and every other symbol it defines made local, so the 43 maps' duplicate
 names (sharedFunc_*, sharedData_*, Map_WorldObjectsInit, ...) can't collide. Then main, bodyprog,
-the screen overlays (keeping only what main/bodyprog reference) and all maps are linked together and the remaining undefined symbols listed.
+the screen overlays (keeping only what other parts reference) and all maps are linked together and the remaining undefined symbols listed.
 
 Uses the PS1 objects from a normal build (run `make build` first); nothing here runs, it only
 checks that the pieces fit. Output goes to build/USA/port_poc/.
@@ -45,9 +45,10 @@ def main():
         hdr = "g_MapOverlayHdr_" + name
         run([OBJCOPY, "--redefine-sym", "g_MapOverlayHdr=" + hdr, "--keep-global-symbol", hdr, merged])
         parts.append(merged)
-    # Screen overlays (and B_KONAMI) share an address region too: keep only what main/bodyprog use.
+    # Screen overlays (and B_KONAMI) share an address region too: keep only what other parts use
+    # (main/bodyprog call their state functions; map7_s03 and map6_s02 call into STF_ROLL).
     core_objs = [o for ld in ("linkers/USA/main.ld", "linkers/USA/bodyprog.ld") for o in objects(ld)]
-    wanted = {l.split()[-1] for l in run([NM, "-u", *core_objs]).stdout.splitlines() if l.strip() and ":" not in l}
+    wanted = {l.split()[-1] for l in run([NM, "-u", *core_objs, *parts]).stdout.splitlines() if l.strip() and ":" not in l}
     for ld in sorted(glob.glob("linkers/USA/screens/*.ld")):
         name = os.path.basename(ld)[:-3]
         merged = "%s/%s.o" % (OUT, name)

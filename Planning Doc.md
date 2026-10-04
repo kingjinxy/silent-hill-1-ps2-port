@@ -102,8 +102,14 @@ keep only the symbols main/bodyprog reference. main + bodyprog + screens + 43 ma
       `g_Player_AnimResetRequest` from all maps; `Math_MatrixTransform` from 26; `D_800A9938`,
       `D_800A9945`, `D_800A99B5`; SAVELOAD's `g_SaveScreen_IsLoadError`): define relative to
       their bodyprog container for the port build
-- [ ] map7_s03 → `func_801E2E28`/`func_801E2ED8`/`func_801E2FC0` and map6_s02 → `func_801E386C`/
-      `func_801E3970`: calls into the screen-overlay region; find out what's loaded there
+- [x] map7_s03 → `func_801E2E28`/`func_801E2ED8`/`func_801E2FC0` and map6_s02 → `func_801E386C`/
+      `func_801E3970`: deliberate calls into STF_ROLL.BIN (credits), which those scenes load next to
+      the map via bodyprog `GameFs_StfRollBinLoad()`. The PoC now keeps every overlay symbol any
+      other part references, so these resolve
+- [ ] Overlay "loads" in the port: all go through `Fs_QueueStartRead(<overlay file>, <load addr>)`
+      (maps → `g_OvlDynamic`, screens and STF_ROLL → `FS_BUFFER_1`, bodyprog/B_KONAMI decrypted at
+      boot). One hook: for overlay file indices, skip the read and restore that overlay's
+      `.data`/`.bss` to its initial state (and set the current-map header pointer for maps)
 - [ ] `D_800CD768_tbl` (map1_s04) and the other `relative_syms.ld` entries in the merged-map link
 - [ ] Rename the bodyprog/SAVELOAD `pad` clash (only duplicate among non-map binaries)
 
