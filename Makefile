@@ -249,12 +249,17 @@ endif
 
 $2.elf: $(call get_o_files, $1, $(GEN_COMP_TU))
 	@mkdir -p $(dir $2)
+	$(PYTHON) $(TOOLS_DIR)/port/prune_undefined_syms.py prune $(LINKER_DIR)/$1.ld $(CONFIG_DIR)/relative_syms.ld \
+		$(LINKER_DIR)/$(filter-out ./,$(dir $1))undefined_syms_auto.$(notdir $1).txt $2.undefined_syms.txt \
+		$(LINKER_DIR)/$(filter-out ./,$(dir $1))undefined_funcs_auto.$(notdir $1).txt $2.undefined_funcs.txt \
+		$(CONFIG_DIR)/lib_externs.ld $2.lib_externs.ld
 	$(LD) $(LD_FLAGS) \
 		-Map $2.map \
 		-T $(LINKER_DIR)/$1.ld \
-		-T $(LINKER_DIR)/$(filter-out ./,$(dir $1))undefined_syms_auto.$(notdir $1).txt \
-		-T $(LINKER_DIR)/$(filter-out ./,$(dir $1))undefined_funcs_auto.$(notdir $1).txt \
-		-T $(CONFIG_DIR)/lib_externs.ld \
+		-T $(CONFIG_DIR)/relative_syms.ld \
+		-T $2.undefined_syms.txt \
+		-T $2.undefined_funcs.txt \
+		-T $2.lib_externs.ld \
 		-o $$@
 
 #endef make_elf_target

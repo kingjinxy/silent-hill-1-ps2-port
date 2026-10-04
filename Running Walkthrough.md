@@ -280,3 +280,41 @@ story flags and recorded inputs), not from the shift. Warping is a smoke test; i
 playing through.
 
 Conclusion: map overlays are position-independent within their load region. Step 1 done.
+
+---
+
+## 2026-10-04 — Step 1 correction: absolute symbol assignments
+
+While surveying symbols for Step 2, found that the shift test was weaker than it looked.
+
+### The problem
+
+Each binary links with `-T undefined_syms_auto.X.txt -T undefined_funcs_auto.X.txt
+-T configs/USA/lib_externs.ld`. Those files assign symbols fixed PS1 addresses, and a linker-script
+assignment **overrides** an object's own definition: the final ELF shows the symbol as `ABS`.
+splat lists some symbols there even though its own data asm defines them (e.g. `dlabel D_800F4806`
+in map7_s03's data), and `lib_externs.ld` assigns main's own library functions. 402 such entries
+across 45 binaries; 116 distinct map `.data` variables are used from C this way.
+
+In the shift test those variables stayed at their old addresses while the data moved 0x110 bytes,
+so map code read/wrote the wrong bytes. The 36 passing maps just didn't crash in a short demo.
+
+### Fix (matching build unchanged, all 50 checksums OK)
+
+- `tools/port/prune_undefined_syms.py prune`, run in the Makefile's link rule: copies each binary's
+  `undefined_*_auto` files and `lib_externs.ld` into `build/.../<target>.*` without the names the
+  binary's objects define (including the prebuilt `lib/*.o`), and links with those copies.
+- 4 referenced names have no definition at all — a byte inside another variable, or a bss gap the
+  generated linker script only reserves with `. += N`: `D_800C15B4`, `D_800C391E`, `D_800C4454`
+  (bodyprog) and map1_s04's `D_800CD768_tbl` alias. They're now `PROVIDE(name = anchor + off)` in
+  `configs/USA/relative_syms.ld`, with offsets taken from the matching layout. Note `D_800C4454` is
+  anchored on `screenPosY.53`, a compiler-numbered static local; regenerate if that file changes.
+  (`relativize` mode regenerates entries from a matching build.)
+- First attempt computed the relative offsets on every link; that's wrong under a shift (it
+  measures the stale ABS address against moved neighbours). Offsets must be fixed config.
+
+Verified with map1_s04 padded by 0x110: `D_800CD768_tbl` now follows `D_800CD768` (`0x800CD878`).
+
+Audit afterwards: referenced `ABS` symbols inside a binary's own range are only `main_*_SIZE`
+(linker constants), the 4 relative ones (`ABS` in the ELF but computed from their anchor), and
+bodyprog's references to `g_MapOverlayHdr` / `GameState_KonamiLogo_Update` (cross-binary; Step 2).

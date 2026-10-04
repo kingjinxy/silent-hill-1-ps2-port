@@ -60,6 +60,13 @@ Ground rules:
       `tools/port/shift_test.py`); all 43 warped into via `tools/port/gdb/warp_sweep.py`. 36 pass;
       the other 7 fail identically on the unmodified disc (warp artefact), so nothing shift-specific.
       main/bodyprog can't be shifted until Step 2 (other binaries reference them by fixed address).
+- [x] Linker-script symbol assignments overriding the binary's own definitions (found after the
+      shift test; it couldn't detect them): 402 entries in splat's `undefined_*_auto` files and
+      `lib_externs.ld` pinned symbols the binary itself defines (116 of them map data variables used
+      from C). `tools/port/prune_undefined_syms.py` now filters those lists at link time; 4 interior
+      symbols are defined relative to their container in `configs/USA/relative_syms.ld`.
+- [ ] Re-run the warp sweep on a shifted image with the linker fix (the earlier 36/43 ran with
+      those variables at stale addresses)
 - Deferred to Step 2: `g_OvlBodyprog` / `g_OvlDynamic` overlay load addresses in `src/main/main.c`
   (they disappear once overlays are statically linked).
 
