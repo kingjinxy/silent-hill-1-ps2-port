@@ -30,7 +30,7 @@ Ground rules:
 
 ## Steps
 
-### Step 1 — Fixed addresses / shiftability  *(in progress)*
+### Step 1 — Fixed addresses / shiftability  *(done)*
 
 - [x] Matching build environment working (Docker image, CHD → BIN/CUE, submodules)
 - [x] Single abstraction for fixed addresses: `include/decomp/psx_mem.h`
@@ -56,7 +56,10 @@ Ground rules:
       area is dead while a screen is active; in the port it simply stops being clobbered.
 - [x] Add a regression check script that fails on new raw address literals
       (`tools/port/find_fixed_addresses.py`)
-- [ ] Shift test: build with padding inserted and confirm the game still boots in an emulator
+- [x] Shift test: map overlays padded by 0x110 after their header (branch `shift-test`,
+      `tools/port/shift_test.py`); all 43 warped into via `tools/port/gdb/warp_sweep.py`. 36 pass;
+      the other 7 fail identically on the unmodified disc (warp artefact), so nothing shift-specific.
+      main/bodyprog can't be shifted until Step 2 (other binaries reference them by fixed address).
 - Deferred to Step 2: `g_OvlBodyprog` / `g_OvlDynamic` overlay load addresses in `src/main/main.c`
   (they disappear once overlays are statically linked).
 

@@ -221,3 +221,62 @@ All 190 linked data `.s` files (from `linkers/`): the only `0x80xxxxxx` words le
 maspsx reads its input from stdin unless stdin is a TTY or empty. When `make` runs with stdin
 attached to an open pipe/socket (e.g. a backgrounded job), it blocks forever on the first `.c.s`.
 Run `make ... < /dev/null` in that case.
+
+---
+
+## 2026-10-04 — Step 1: shift test
+
+### What was shifted
+
+`tools/port/shift_test.py` (branch `shift-test` only) inserts `. += 0x110` into every map
+overlay's linker script right after `<map>_header.c.o(.rodata)`. The header stays at the overlay
+base (bodyprog reads it there); everything after it (rest of rodata, text, data, bss) moves.
+Largest map then ends at `0x800F5A88`, still below the first fixed buffer (`0x800F5E00`).
+
+main and bodyprog were not shifted: every other binary refers to their symbols by absolute address
+(`undefined_syms_auto` from the `sym.*.txt` files), so moving them breaks callers by construction.
+That can only be tested after Step 2.
+
+Build: `make setup`, `python3 tools/port/shift_test.py`, delete `build/USA/out/VIN/MAP*` (the
+Makefile doesn't depend on the linker scripts), `make build CHECKSUM=0`, `make insert-ovl`.
+
+### insertovl.py bug
+
+The first shifted image hung after the KCET logo. `tools/silentassets/insertovl.py` mis-laid-out
+`SILENT.` whenever an overlay grew: block counts were rounded down (every map lost its last
+16 bytes), and position shifts were only carried to the next resized overlay, so STREAM, OPTION,
+SAVELOAD and STF_ROLL (after the maps) pointed at the wrong data — STREAM plays the intro movie.
+Rewrote the layout as one sequential pass: each file keeps its original span unless a rebuilt
+overlay outgrows it; later files (and all `HILL.` entries) move by the accumulated growth.
+Verified every `SILENT.` file at its new position, no overlaps, and `HILL.` at the LBA the new
+table expects (`0x99CC`, read from the image's ISO directory). Fix is on master.
+
+### DuckStation + gdb
+
+- DuckStation: Settings → Advanced → GDB server (port 2345).
+- `tools/port/gdb/sh1.py` loads main/bodyprog symbols and adds:
+  - `warp <map>`: breakpoint on `GameBoot_MapLoad` (`0x8003521C`) rewrites `$a0` and
+    `g_SavegamePtr->mapIdx` for the next map load, and loads that map's ELF symbols.
+  - `sh-skip-intro on`: skips the title FMV. When attached during the logos it patches
+    `jal open_main` in `GameState_MovieIntro_Update` (STREAM.BIN) via a breakpoint on MainLoop's
+    state dispatch; when attached mid-movie it sets `max_frame` (`0x801E3F40`) to 0.
+- VS Code: `.vscode/launch.json` "DuckStation (attach)" (local, gitignored) sources `sh1.py`.
+
+Notes: each gdb breakpoint hit pauses the emulator, so per-frame breakpoints cause visible
+stutter; and in all-stop mode, enabling/disabling a breakpoint from a `gdb.post_event` while the
+target runs only takes effect at the next stop (change it inside `stop()` instead).
+
+### Warp sweep
+
+`tools/port/gdb/warp_sweep.py`: per map, boot DuckStation at unlimited speed, skip the intro,
+warp the first title-screen demo into the map, and pass when the next map load is reached. It
+temporarily edits DuckStation's `settings.ini` and restores it (and recovers from a killed run).
+DuckStation runs in its own process group so the whole AppImage gets closed.
+
+Results on the shifted image: 36/43 pass. The 7 failures (map1_s04, map2_s01, map2_s03,
+map3_s06, map4_s00, map4_s06, map6_s05) fail the same way on the **unmodified** disc — stuck on
+the title screen re-reading the CD, or frozen — so they come from warping a demo (wrong spawn,
+story flags and recorded inputs), not from the shift. Warping is a smoke test; it doesn't replace
+playing through.
+
+Conclusion: map overlays are position-independent within their load region. Step 1 done.
