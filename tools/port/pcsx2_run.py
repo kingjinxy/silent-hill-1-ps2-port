@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Boot a PS2 ELF in PCSX2, print what the program writes to the console, then close PCSX2.
+"""Boot a PS2 ELF or disc image in PCSX2, print what the program writes to the console, then close it.
 
-    python3 tools/port/pcsx2_run.py <file.elf> [--seconds 15] [--until "text"]
+    python3 tools/port/pcsx2_run.py <file.elf|file.iso> [--seconds 15] [--until "text"] [--all]
 
 ps2sdk's printf reaches PCSX2's IOP console (via the IOP's tty), so the EE and IOP console logs are
 switched on in PCSX2.ini for the run and the original file restored afterwards (also on the next
@@ -53,6 +53,8 @@ def main():
     ap.add_argument("--seconds", type=float, default=15)
     ap.add_argument("--until", help="stop as soon as this text appears in the output")
     ap.add_argument("--pcsx2", default=find_pcsx2())
+    ap.add_argument("--all", action="store_true", help="print the whole log, not just from the ELF start")
+    ap.add_argument("--slowboot", action="store_true", help="boot discs through the BIOS (OSDSYS) instead of fast boot")
     args = ap.parse_args()
     elf = os.path.abspath(args.elf)
     log = tempfile.NamedTemporaryFile(suffix=".log", delete=False).name
@@ -61,7 +63,9 @@ def main():
     patch_ini()
     proc = None
     try:
-        proc = subprocess.Popen([args.pcsx2, "-batch", "-fastboot", "-nofullscreen", "-logfile", log, "-elf", elf, "--", elf],
+        boot = ["--", elf] if elf.lower().endswith(".iso") else ["-elf", elf, "--", elf]
+        proc = subprocess.Popen([args.pcsx2, "-batch", "-slowboot" if args.slowboot else "-fastboot", "-nofullscreen",
+                                 "-logfile", log, *boot],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                                 start_new_session=True)
         end = time.time() + args.seconds
@@ -82,7 +86,7 @@ def main():
 
     text = open(log, errors="replace").read().splitlines() if os.path.exists(log) else []
     os.remove(log)
-    started = next((i for i, l in enumerate(text) if "Initializing Elf" in l), 0)
+    started = 0 if args.all else next((i for i, l in enumerate(text) if "Initializing Elf" in l), 0)
     out = [l for l in text[started:] if not any(n in l for n in NOISE)]
     print("\n".join(out))
     return 0 if not args.until or any(args.until in l for l in out) else 1

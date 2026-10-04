@@ -570,3 +570,47 @@ Result: `lib_test` 53 functions × 8 tests, 0 differences. libgs's packet builde
 `GsTMDfast*` need real model/OT data; they'll be compared against the PS1 in-game. Full link: 113
 undefined symbols (libgpu 31, libcd 19, libspu 19, libapi 17, libpad 8, libcard 7, libpress 5,
 libetc 4, ours 3).
+
+---
+
+## 2026-10-04 — First boot on the PS2, DVD image
+
+### Making it run
+
+- `src/port/port_main.c`: the PS2 `main()` prints a banner and calls the game's PS1 `main`, which
+  `port_link.py` renames to `Game_PsxMain` in the combined object.
+- `src/main/main.c`: under `SH_PORT`, skip `Fs_DecryptOverlay` of BODYPROG/B_KONAMI into their PS1
+  load addresses (`0x80024B60`, `0x800C9578` — EE kernel memory); both are linked in.
+- `configs/USA/port_syms.ld`: `g_FsBuffer18/20` = `g_PsxRam + offset`; `g_MapOverlayHdr` =
+  `g_MapOverlayHdr_map0_s00` for now (the overlay-load hook will switch maps).
+- `port_link.py` stubs every remaining undefined function (`build/port/hal_stubs.c`, each logs its
+  first 3 calls) and links `build/port/sh1.elf`.
+- First run crashed in newlib startup (`__retarget_lock_init_recursive`: NULL from `malloc`). Cause:
+  the game's own `memcpy` (`src/main/memcpy.c`, a matching reconstruction pinned to GCC 2.8 register
+  allocation) replaced newlib's for everything, including ps2sdk/newlib internals; under GCC 15 it
+  miscopies. It's now PS1-only (`#ifndef SH_PORT`). (Checked: no other game/port symbol overlaps
+  libc/libkernel/libcglue/libps2sdkc.)
+
+Result: banner, then ResetCallback, CdInit, VSync, ResetGraph, ClearImage2, DrawSync, PutDispEnv,
+SpuInit, then CdIntToPos/CdControl/CdReset retried forever — the file queue waiting for CD reads.
+
+### DVD image
+
+`tools/port/make_iso.sh` builds `build/port/sh1_ps2.iso`: SYSTEM.CNF (`BOOT2 = cdrom0:\SHPS_000.01;1`,
+placeholder title ID), the ELF, and the original `SILENT.`/`HILL.` (HILL.'s 2336-byte XA sectors are
+just file data; the port's CD layer will read them by offset). Written by `tools/port/mkiso.py`
+(ISO9660 level 1, 2048-byte sectors, standard both-endian fields), padded with sparse zero sectors to
+460,000 sectors (~942 MB) — more than a CD holds, which is what makes it DVD media.
+
+How PCSX2 decides (from its source): `CDVDcommon.cpp FindDiskType`: > 452,849 sectors = DVD; below
+that it guesses from the PVD root-directory record (u16 at offset 166 vs 171 — for a correct
+both-endian size < 64 KiB these always match, i.e. "CD"); `InputIsoFile.cpp tryIsoType` labels
+"Image type" CD if the root directory is exactly 2048 bytes. Experiments: a 64 KiB root directory
+makes the v1.00 BIOS fail to find files; zeroing the BE copy of the root size breaks the BIOS
+(reads BE), zeroing the LE copy breaks PCSX2's own loader (reads LE). Padding is the clean answer.
+
+Open problem: as DVD media, the SCPH-10000 v1.00 BIOS can't open any file (`open fail name
+SYSTEM.CNF;1` even in OSDSYS), with/without a UDF bridge (`genisoimage -udf`), fast or slow boot.
+As CD media (unpadded) the same image boots. Needs testing with a later BIOS. For development the
+ELF is booted directly (`pcsx2_run.py build/port/sh1.elf`); `pcsx2_run.py` now also boots images,
+with `--slowboot` for a full BIOS boot.

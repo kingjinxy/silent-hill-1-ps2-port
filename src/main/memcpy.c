@@ -1,5 +1,7 @@
 #include "common.h"
 
+#ifndef SH_PORT // The port uses the C library's memcpy: this one depends on GCC 2.8 register allocation.
+
 /** NOTE: `memcpy` may rely on hand-tuned or inline assembly.
  * This code matches but is almost just straight ASM -> C in some parts, if it was written in C originally it likely didn't look like this.
  * Matching it precisely isn't really a priority, since this would likely just be replaced down the line.
@@ -104,3 +106,5 @@ char* memcpy(void* dest0, void* src0, unsigned int count)
 }
 
 void nullsub_800120b0(void) {}
+
+#endif

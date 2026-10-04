@@ -167,8 +167,10 @@ int main(void)
     }
 
     // Decrypt `BODYPROG` and `B_KONAMI` into place.
+#ifndef SH_PORT // The port links both in; their PS1 load addresses are EE kernel memory.
     Fs_DecryptOverlay(g_OvlBodyprog, FS_BUFFER_0, Fs_GetFileSize(FILE_1ST_BODYPROG_BIN));
     Fs_DecryptOverlay(g_OvlDynamic, FS_BUFFER_1, Fs_GetFileSize(FILE_1ST_B_KONAMI_BIN));
+#endif
 
     // Load `1ST/FONT8NOC.TIM` (8x8 font atlas).
     Fs_QueueStartReadTim(FILE_1ST_FONT8NOC_TIM, FS_BUFFER_1, &g_MainImg1);
