@@ -3,8 +3,8 @@
  * ...) are recompiled (tools/port/recomp_all.sh); this file replaces the parts that drive the GPU.
  *
  * VRAM is emulated as a 1024x512 16-bit array, as on the PS1. GPU command packets (from ordering
- * tables, DrawPrim, draw environments) go to Gpu_Submit(), the hook for the GS renderer (Step 4);
- * for now it only counts them.
+ * tables, DrawPrim, draw environments) go to Gpu_Submit(): for now the software GPU (gpu_soft.c)
+ * draws them into VRAM, and PutDispEnv shows the display area via the GS (display_ps2.c).
  *
  * Ordering tables and packets use 24-bit addresses, as on the PS1. That's valid on the EE as long as
  * all drawing memory is below 16 MiB (the whole program currently ends below 8 MiB).
@@ -13,12 +13,15 @@
 #include "common.h"
 #include "libgte.h"
 #include "libgpu.h"
+#include "game.h"
 
 #define VRAM_W 1024
 #define VRAM_H 512
 #define OT_END 0x00FFFFFF
 
 extern int printf(const char* fmt, ...);
+extern void GpuSoft_Commands(const u32* words, s32 count);      /* src/port/gpu_soft.c */
+extern void Display_Present(const u16* vram, s32 x, s32 y, s32 w, s32 h, s32 rgb24, s32 isinter); /* src/port/ps2/display_ps2.c */
 
 u16 g_PortVram[VRAM_H][VRAM_W] __attribute__((aligned(64)));
 
@@ -39,7 +42,7 @@ static void* ptr24(u32 addr)
 /** @brief Every GPU command packet (GP0 words) ends up here. */
 static void Gpu_Submit(const u32* words, s32 count)
 {
-    (void)words;
+    GpuSoft_Commands(words, count);
     s_FramePackets++;
     s_FrameWords += count;
 }
@@ -53,9 +56,18 @@ static void submit_tagged(const u32* prim)
     }
 }
 
+/* sys.o's state (recompiled data). Its packet builders (SetDrawEnv etc.) clamp against fields that
+ * the PS1's ResetGraph sets up for the detected GPU. */
+extern u32 GEnv[];
+
 int ResetGraph(int mode)
 {
     (void)mode;
+    /* As left by the PS1's ResetGraph (read from the running game in DuckStation; the rest of GEnv
+     * is per-frame state): +0 0x100, +4 VRAM size 1024x512 (h << 16 | w), +8 1. */
+    GEnv[0] = 0x100;
+    GEnv[1] = (VRAM_H << 16) | VRAM_W;
+    GEnv[2] = 1;
     return 0;
 }
 
@@ -167,7 +179,8 @@ void DrawOTag(u_long* p)
 
     if (++s_DrawOTags % 60 == 0)
     {
-        printf("libgpu: %u DrawOTag calls; last 60: %u packets, %u words\n", s_DrawOTags, s_FramePackets, s_FrameWords);
+        printf("libgpu: %u DrawOTag calls; last 60: %u packets, %u words; gameState %d step %d\n", s_DrawOTags,
+               s_FramePackets, s_FrameWords, g_GameWork.gameState, g_GameWork.gameStateSteps[0]);
         s_FramePackets = 0;
         s_FrameWords   = 0;
     }
@@ -194,6 +207,11 @@ DRAWENV* PutDrawEnv(DRAWENV* env)
 DISPENV* PutDispEnv(DISPENV* env)
 {
     s_DispEnv = *env;
+    /* The game swaps display buffers with PutDispEnv once per frame: present the new display area. */
+    if (s_DispMask)
+    {
+        Display_Present(&g_PortVram[0][0], env->disp.x, env->disp.y, env->disp.w, env->disp.h, env->isrgb24, env->isinter);
+    }
     return env;
 }
 

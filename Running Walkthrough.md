@@ -700,3 +700,45 @@ GCC still aligns arrays to 8, and layout *across* files follows link order, not 
 
 Result: OTs terminate; steady loop, ~1,700 DrawOTag calls a minute, 240 packets per 60 calls
 (probably the first screen: nothing is drawn or read yet). 70 HAL stubs left.
+
+---
+
+## 2026-10-04 — First pixels: software GPU, display modes, timing
+
+### Software GPU and display
+
+- `src/port/gpu_soft.c`: PS1 GP0 commands into `g_PortVram`, from psx-spx: polygons (flat/gouraud,
+  textured 4/8/15-bit, raw/modulated; quads as triangles 1-2-3 and 2-3-4; edge functions with a
+  top-left rule), rectangles (texpage from E1, flips), lines/polylines, fill, VRAM copy, E1-E6,
+  semi-transparency modes 0-3 (textured only when texel bit 15 is set), mask set/check, texture
+  window, dithering (shaded/modulated polygons and lines). Plain C, no PS2 dependencies; it's the
+  reference for the future GS renderer.
+- `src/port/ps2/display_ps2.c` (gsKit, `-lgskit -ldmakit`): `PutDispEnv` presents the display area —
+  copied out of VRAM, uploaded as PSMCT16 (same bit layout as PS1 15-bit pixels), drawn as one
+  full-screen sprite with alpha test/blending off.
+- Debug: frames 30/120/300/600/900/1200 are written to `host:frame_NNNN.ppm` and the whole VRAM to
+  `host:vram_NNNN.ppm` (PCSX2 HostFs; `pcsx2_run.py` now enables `HostFs` and `OutputMuted`).
+
+First frame was black: the draw area came out as `E30FFFFF`/`E40FFFFF`. Sony's SetDrawEnv
+(recompiled sys.o) clamps the clip rect against `GEnv`, which the PS1's ResetGraph initialises.
+Dumped `GEnv` from the real game (DuckStation + gdb at the first DrawOTag): only `+0 = 0x100`,
+`+4 = 0x02000400` (VRAM 1024x512), `+8 = 1` come from ResetGraph; the rest is per-frame state. Our
+ResetGraph now sets those three. Result: the warning screen renders correctly (texture, CLUT, the
+SPRT strips, subtractive fade).
+
+### Output modes (240p / 480i)
+
+The PS2 output follows the game's `DISPENV`: 480i (640x448, GS interlaced field mode) when
+`isinter` is on and the display has more than 256 lines, else 240p (640x240, progressive). gsKit is
+re-initialised on a mode change. Observed: 240p for the warning screen, 480i from the Konami logo
+state on.
+
+### Timing
+
+`GameState_Init` waited forever for its fade: the frame delta is `GsGetVcount()` =
+`GetRCnt(RCntCNT1)` (horizontal blanks), a stub returning 0. `src/port/ps2/rcnt_ps2.c` models the
+root counters from the EE's CP0 Count (294.912 MHz, extended to 64 bits): counter 0 system clock,
+1 NTSC hblanks (15,734 Hz), 2 system clock/8, 3 vblanks; 16-bit, wrapping at the target. No counter
+interrupts yet. `src/port/libspu_port.c` makes every libspu call succeed (transfers complete at once;
+the game waited on `SpuIsTransferCompleted` before). The game now goes through game states 0 → 1 → 2.
+46 HAL stubs left.

@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 PS2DEV = os.environ.get("PS2DEV", os.path.expanduser("~/ps2dev"))
 PS2SDK = os.environ.get("PS2SDK", os.path.join(PS2DEV, "ps2sdk"))
+GSKIT = os.environ.get("GSKIT", os.path.join(PS2DEV, "gsKit"))
 EE = os.path.join(PS2DEV, "ee", "bin", "mips64r5900el-ps2-elf-")
 CC, LD, OBJCOPY, NM = EE + "gcc", EE + "ld", EE + "objcopy", EE + "nm"
 OUT = "build/port"
@@ -150,7 +151,7 @@ def main():
     for src in sorted(glob.glob("src/port/ps2/*.c")):
         obj = os.path.join(OUT, "port", "ps2_" + os.path.basename(src) + ".o")
         run([CC, "-c", "-O2", "-G0", "-D_EE", "-Wall", "-I" + os.path.join(PS2SDK, "ee", "include"),
-             "-I" + os.path.join(PS2SDK, "common", "include"), src, "-o", obj])
+             "-I" + os.path.join(PS2SDK, "common", "include"), "-I" + os.path.join(GSKIT, "include"), src, "-o", obj])
         port_objs.append(obj)
     if not os.environ.get("SH1_NO_RECOMP"):
         run(["tools/port/recomp_all.sh"])
@@ -206,7 +207,7 @@ def main():
                     "-Wl,-zmax-page-size=128", "-Wl,--unresolved-symbols=report-all", "-o", elf,
                     combined, *port_objs, *extra, "-Wl,--start-group", recomp_lib, "-Wl,--end-group",
                     "configs/USA/relative_syms.ld", "configs/USA/port_relative_syms.ld", "configs/USA/port_syms.ld",
-                    "-lcdvd"],
+                    "-L" + os.path.join(GSKIT, "lib"), "-lgskit", "-ldmakit", "-lcdvd"],
                    check=False)
 
     r = final_link([])

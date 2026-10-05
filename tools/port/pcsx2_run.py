@@ -18,7 +18,10 @@ import time
 
 INI = os.path.expanduser("~/.config/PCSX2/inis/PCSX2.ini")
 BACKUP = INI + ".pcsx2_run.bak"
-OVERRIDES = {"EnableEEConsole": "true", "EnableIOPConsole": "true", "EnableFileLogging": "true"}
+# OutputMuted: PCSX2's "Mute" (audio is still emulated, just not played). HostFs: lets the program
+# write to host: (= the ELF's folder, e.g. frame dumps from display_ps2.c).
+OVERRIDES = {"EnableEEConsole": "true", "EnableIOPConsole": "true", "EnableFileLogging": "true", "OutputMuted": "true",
+             "HostFs": "true"}
 NOISE = ("GL_EXTENSIONS", "UpdateVSyncRate", "Frame rate:", "Set GS CRTC", "Vulkan", "OpenGL")
 
 
