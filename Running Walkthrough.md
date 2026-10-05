@@ -901,3 +901,20 @@ Game-like cycles per command (EE, PCSX2): RTPS 767 → 343, RTPT 2007 → 897, D
 update 3.15 → 2.42 M. With `SH1_FPS=60 SH1_BENCH=1` at real-time speed: 60 fps in most views,
 average 57.7 (was ~45), dips to 43-55 in heavy views. The GS translation (1.3 M) is now the biggest
 single item.
+
+### GS translation speed
+
+Profiled inside `gpu_gs.c` (`SH1_PROF=1` now also covers `src/port/ps2/`): about 712 polygons per
+frame in the demo scene at ~1,700 cycles each (parse ~320, state ~530, emission ~510); DMA is cheap
+(two flushes per frame).
+- `prim_state` memoised: consecutive primitives with the same inputs (texture page, CLUT, blending,
+  dithering, window, clip area, mask) reuse the last result; `s_Epoch` invalidates it whenever state
+  changes elsewhere (reset, fills, display copies, texture cache changes).
+- `set`/`ad` inline fast paths (the flush path is out of line).
+- Vertices go out as GIF REGLIST runs (PRIM and vertex registers listed once per tag, 64 bits per
+  register, consecutive primitives of the same shape share a tag): half the data of A+D.
+Under PCSX2's timing these gave little (1.28 → ~1.2 M cycles; REGLIST halves the GS traffic, which
+matters more on hardware). More importantly, measuring idle time (vertical blank waits) showed the
+EE is 11-38% idle per second in-game at 60 fps; the frame rate dips (36-54 fps for a second or two)
+come with *more* idle time: they are file loads (the loader waits in VSync loops), as on the PS1.
+`SH1_FPS=60 SH1_BENCH=1`: average 58.3 fps; the rendering itself fits in a field in this scene.

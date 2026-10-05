@@ -215,7 +215,8 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [x] 60 fps option (`SH1_FPS=60`: gameplay `g_IntervalVBlanks` 1 instead of 2); benchmark `SH1_BENCH=1`
 - [x] Profiling counters (`SH1_PROF=1`, include/port/prof.h)
 - [x] GTE speed-up (bit-exact, checked on the host and on the EE): fast paths, cached matrices, inlined register moves, MMI (PLZCW, PHMADH)
-- [ ] Performance for 60 fps: GS translation (~1.3 M cycles/frame), remaining GTE (~1.4 M), heavy views dip to 45-55 fps
+- [x] 60 fps in the demo scene: EE 11-38% idle; the remaining dips are file loads (VSync waits while streaming), as on the PS1
+- [ ] Further GS translation speed-ups if heavier scenes need them (parse straight into packets; state per primitive is ~500 cycles)
 - [ ] GS renderer gaps: rectangle flips, wrapping VRAM copies, 24-bit display (FMV)
 - [ ] GS hardware renderer (speed), checked against gpu_soft.c
 

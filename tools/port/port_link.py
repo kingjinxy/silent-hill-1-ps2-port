@@ -154,8 +154,9 @@ def main():
     # PS2-side HAL code (src/port/ps2/): compiled against ps2sdk's headers, not the game's.
     for src in sorted(glob.glob("src/port/ps2/*.c")):
         obj = os.path.join(OUT, "port", "ps2_" + os.path.basename(src) + ".o")
-        run([CC, "-c", "-O2", "-G0", "-D_EE", "-Wall", "-I" + os.path.join(PS2SDK, "ee", "include"),
-             "-I" + os.path.join(PS2SDK, "common", "include"), "-I" + os.path.join(GSKIT, "include"), src, "-o", obj])
+        run([CC, "-c", "-O2", "-G0", "-D_EE", "-Wall", *prof, "-I" + os.path.join(PS2SDK, "ee", "include"),
+             "-I" + os.path.join(PS2SDK, "common", "include"), "-I" + os.path.join(GSKIT, "include"),
+             "-iquote", "include", src, "-o", obj])
         port_objs.append(obj)
     if not os.environ.get("SH1_NO_RECOMP"):
         run(["tools/port/recomp_all.sh"])

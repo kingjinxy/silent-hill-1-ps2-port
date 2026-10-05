@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <dmaKit.h>
+#include "port/prof.h"
 
 typedef unsigned long long u64x;
 
@@ -63,51 +64,132 @@ extern void Display_EnsureInit(void); /* display_ps2.c */
 
 /* --- GIF packets ------------------------------------------------------------------------------*/
 
-#define PKT_QW 8192
-static u64x s_Pkt[PKT_QW * 2] __attribute__((aligned(64)));
-static int  s_PktN; /* A+D qwords after the GIFtag at s_Pkt[0..1] */
+/* The packet is a sequence of GIF tags: A+D tags for register writes, and REGLIST tags for runs of
+ * primitives of the same shape (PRIM and the vertex registers listed once in the tag, then 64 bits
+ * per register: half the data of A+D). */
+#define PKT_WORDS (8192 * 2) /* 64-bit words */
+static u64x s_Pkt[PKT_WORDS] __attribute__((aligned(64)));
+static int  s_Pos;            /* words used */
+static int  s_TagAt = -1;     /* open tag (word index), -1 = none */
+static u64x s_TagRegs;        /* REGLIST register list of the open tag, 0 = A+D */
+static int  s_TagNreg;        /* registers per loop */
+static int  s_TagLoops;
+static int  s_LastTag = -1;   /* for EOP */
 
 static u64x s_Reg[REG_COUNT];
+/* Incremented whenever GS state may have changed outside prim_state() (reset, fills, display
+ * copies, texture cache changes): its memo of the last primitive's state is then stale. */
+static u32  s_Epoch;
 static u8   s_RegValid[REG_COUNT];
 
 static u64x giftag(u32 nloop, u32 eop, u32 flg, u32 nreg)
 {
-    return (u64x)nloop | ((u64x)eop << 15) | ((u64x)flg << 58) | ((u64x)nreg << 60);
+    return (u64x)nloop | ((u64x)eop << 15) | ((u64x)flg << 58) | ((u64x)(nreg & 15) << 60);
 }
 
+static void dma_send_impl(void* data, u32 qwc);
 static void dma_send(void* data, u32 qwc)
+{
+    PROF_BEGIN("gs: dma_send")
+    dma_send_impl(data, qwc);
+    PROF_END("gs: dma_send")
+}
+
+static void dma_send_impl(void* data, u32 qwc)
 {
     FlushCache(0);
     dmaKit_send(DMA_CHANNEL_GIF, data, qwc);
     dmaKit_wait(DMA_CHANNEL_GIF, 0);
 }
 
-/** Sends the queued register writes. */
-void GpuGs_Flush(void)
+/** Finishes the open tag: loop count, and padding to a whole qword for REGLIST. */
+static void tag_close(void)
 {
-    if (s_PktN == 0)
+    if (s_TagAt < 0)
     {
         return;
     }
-    s_Pkt[0] = giftag(s_PktN, 1, 0, 1);
-    s_Pkt[1] = 0xE; /* A+D */
-    dma_send(s_Pkt, s_PktN + 1);
-    s_PktN = 0;
+    if (s_TagRegs)
+    {
+        s_Pkt[s_TagAt]     = giftag((u32)s_TagLoops, 0, 1, (u32)s_TagNreg);
+        s_Pkt[s_TagAt + 1] = s_TagRegs;
+        if ((s_TagLoops * s_TagNreg) & 1)
+        {
+            s_Pkt[s_Pos++] = 0;
+        }
+    }
+    else
+    {
+        s_Pkt[s_TagAt]     = giftag((u32)s_TagLoops, 0, 0, 1);
+        s_Pkt[s_TagAt + 1] = 0xE; /* A+D */
+    }
+    s_LastTag = s_TagAt;
+    s_TagAt   = -1;
 }
 
-static void ad(u32 reg, u64x val)
+/** Sends the queued packet. */
+void GpuGs_Flush(void) __attribute__((noinline));
+void GpuGs_Flush(void)
 {
-    if (s_PktN + 1 >= PKT_QW)
+    tag_close();
+    if (s_Pos == 0)
+    {
+        return;
+    }
+    s_Pkt[s_LastTag] |= 1 << 15; /* EOP */
+    dma_send(s_Pkt, (u32)(s_Pos / 2));
+    s_Pos     = 0;
+    s_LastTag = -1;
+}
+
+/** Room for `words` more data words (plus a tag and padding) in the packet. */
+static inline void room(int words)
+{
+    if (s_Pos + words + 4 > PKT_WORDS)
     {
         GpuGs_Flush();
     }
-    s_PktN++;
-    s_Pkt[s_PktN * 2]     = val;
-    s_Pkt[s_PktN * 2 + 1] = reg;
+}
+
+static inline void ad(u32 reg, u64x val)
+{
+    room(2);
+    if (s_TagAt < 0 || s_TagRegs)
+    {
+        tag_close();
+        s_TagAt    = s_Pos;
+        s_TagRegs  = 0;
+        s_TagLoops = 0;
+        s_Pos += 2;
+    }
+    s_Pkt[s_Pos]     = val;
+    s_Pkt[s_Pos + 1] = reg;
+    s_Pos += 2;
+    s_TagLoops++;
+}
+
+/** Space for one loop of a REGLIST run with these registers (4 bits each, `nreg` of them). */
+static inline u64x* reglist(u64x regs, int nreg)
+{
+    u64x* q;
+    room(nreg);
+    if (s_TagAt < 0 || s_TagRegs != regs || s_TagLoops >= 0x7FFF)
+    {
+        tag_close();
+        s_TagAt    = s_Pos;
+        s_TagRegs  = regs;
+        s_TagNreg  = nreg;
+        s_TagLoops = 0;
+        s_Pos += 2;
+    }
+    q = &s_Pkt[s_Pos];
+    s_Pos += nreg;
+    s_TagLoops++;
+    return q;
 }
 
 /** State register write, skipped when unchanged. */
-static void set(u32 reg, u64x val)
+static inline void set(u32 reg, u64x val)
 {
     if (s_RegValid[reg] && s_Reg[reg] == val)
     {
@@ -121,6 +203,7 @@ static void set(u32 reg, u64x val)
 /** The GS was reset (display mode change) or its state changed behind our back. */
 void GpuGs_StateLost(void)
 {
+    s_Epoch++;
     memset(s_RegValid, 0, sizeof(s_RegValid));
 }
 
@@ -176,6 +259,7 @@ static void page_rect(s32 key, s32* x, s32* y, s32* w)
 static void cache_invalidate(s32 x, s32 y, s32 w, s32 h)
 {
     s32 i;
+    s_Epoch++;
     s_ClutDirty = 1;
     for (i = 0; i < CACHE_SLOTS; i++)
     {
@@ -310,7 +394,40 @@ static void scissor(s32 x1, s32 y1, s32 x2, s32 y2)
 }
 
 /** Per-primitive state; returns the PRIM register bits other than the type. */
+static u64x prim_state_impl(const Prim* p);
+/** GS state for a primitive; consecutive primitives with the same inputs (the usual case) reuse
+ * the previous result instead of going through every register again. */
 static u64x prim_state(const Prim* p)
+{
+    static u32  memoEpoch = ~0u, memoKey[4];
+    static u64x memoPrim;
+    u32         key[4];
+    u64x        r;
+
+    key[0] = p->textured | (p->raw << 1) | (p->semi << 2) | (p->semiMode << 3) | (p->gouraud << 5) |
+             (p->dither << 6) | (s_SetMask << 7) | (s_CheckMask << 8) | ((p->tpage & 0x1FF) << 9) |
+             (s_TwMaskX << 18) | (s_TwMaskY << 23);
+    key[1] = (p->clut & 0xFFFF) | (s_TwOffX << 16) | (s_TwOffY << 21);
+    key[2] = (u32)s_AreaX1 | ((u32)s_AreaY1 << 10) | ((u32)s_AreaX2 << 20);
+    key[3] = (u32)s_AreaY2;
+    if (memoEpoch == s_Epoch && key[0] == memoKey[0] && key[1] == memoKey[1] && key[2] == memoKey[2] &&
+        key[3] == memoKey[3])
+    {
+        return memoPrim;
+    }
+    PROF_BEGIN("gs: prim_state")
+    r = prim_state_impl(p);
+    PROF_END("gs: prim_state")
+    memoEpoch  = s_Epoch;
+    memoKey[0] = key[0];
+    memoKey[1] = key[1];
+    memoKey[2] = key[2];
+    memoKey[3] = key[3];
+    memoPrim   = r;
+    return r;
+}
+
+static u64x prim_state_impl(const Prim* p)
 {
     u64x prim = (u64x)(p->gouraud << 3) | (1 << 8); /* IIP, FST (UV coordinates) */
     u32  test = (1 << 16) | (1 << 17);            /* ZTE on, ZTST always */
@@ -379,15 +496,48 @@ static u64x prim_state(const Prim* p)
     return prim;
 }
 
-static void vertex(const Prim* p, const Vtx* v)
+/* REGLIST register lists (4 bits per register, first in the low bits): PRIM, then per vertex
+ * RGBAQ (1), [UV (3)], XYZ2 (5). */
+static u64x vertex_regs(int textured, int n, int* nreg)
 {
-    u32 a = p->textured ? 0x80 : 0;
-    ad(R_RGBAQ, v->r | (v->g << 8) | (v->b << 16) | (a << 24) | (0x3F800000ULL << 32));
-    if (p->textured)
+    u64x regs = 0; /* PRIM = 0 */
+    int  i, k = 1;
+    for (i = 0; i < n; i++)
     {
-        ad(R_UV, (u64x)(v->u << 4) | ((u64x)(v->v << 4) << 16));
+        regs |= (u64x)1 << (k++ * 4);
+        if (textured)
+        {
+            regs |= (u64x)3 << (k++ * 4);
+        }
+        regs |= (u64x)5 << (k++ * 4);
     }
-    ad(R_XYZ2, (u64x)((v->x + 2048) << 4 & 0xFFFF) | ((u64x)((v->y + 2048) << 4 & 0xFFFF) << 16));
+    *nreg = k;
+    return regs;
+}
+
+/** A primitive (PRIM + n vertices) as one REGLIST loop. */
+static void emit(const Prim* p, u64x prim, const Vtx* const* v, int n)
+{
+    static u64x regsTab[2][4];
+    static int  nregTab[2][4];
+    u64x*       q;
+    u32         a = p->textured ? 0x80 : 0;
+    int         i;
+    if (!nregTab[p->textured][n])
+    {
+        regsTab[p->textured][n] = vertex_regs(p->textured, n, &nregTab[p->textured][n]);
+    }
+    q    = reglist(regsTab[p->textured][n], nregTab[p->textured][n]);
+    *q++ = prim;
+    for (i = 0; i < n; i++)
+    {
+        *q++ = v[i]->r | (v[i]->g << 8) | (v[i]->b << 16) | (a << 24) | (0x3F800000ULL << 32);
+        if (p->textured)
+        {
+            *q++ = (u64x)(v[i]->u << 4) | ((u64x)(v[i]->v << 4) << 16);
+        }
+        *q++ = (u64x)((v[i]->x + 2048) << 4 & 0xFFFF) | ((u64x)((v[i]->y + 2048) << 4 & 0xFFFF) << 16);
+    }
 }
 
 static s32 absd(s32 a, s32 b)
@@ -403,10 +553,13 @@ static void triangle(const Prim* p, u64x prim, const Vtx* v0, const Vtx* v1, con
     {
         return;
     }
-    ad(R_PRIM, prim | 3);
-    vertex(p, v0);
-    vertex(p, v1);
-    vertex(p, v2);
+    {
+        const Vtx* v[3];
+        v[0] = v0;
+        v[1] = v1;
+        v[2] = v2;
+        emit(p, prim | 3, v, 3);
+    }
 }
 
 /* --- Commands ---------------------------------------------------------------------------------*/
@@ -559,9 +712,12 @@ static u32 rectangle(const u32* w, s32 n)
     b.u = a.u + rw;
     b.v = a.v + rh;
     prim = prim_state(&p);
-    ad(R_PRIM, prim | 6);
-    vertex(&p, &a);
-    vertex(&p, &b);
+    {
+        const Vtx* v[2];
+        v[0] = &a;
+        v[1] = &b;
+        emit(&p, prim | 6, v, 2);
+    }
     return (u32)k;
 }
 
@@ -603,9 +759,10 @@ static u32 lines(const u32* w, s32 n)
         read_xy(w[k++], &cur);
         if (absd(prev.x, cur.x) <= 1023 && absd(prev.y, cur.y) <= 511)
         {
-            ad(R_PRIM, prim | 1);
-            vertex(&p, &prev);
-            vertex(&p, &cur);
+            const Vtx* v[2];
+            v[0] = &prev;
+            v[1] = &cur;
+            emit(&p, prim | 1, v, 2);
         }
         prev = cur;
         if (!(cmd & 0x08))
@@ -619,6 +776,7 @@ static u32 lines(const u32* w, s32 n)
  * (GP0 02 fill, ClearImage). */
 static void fill_rect(s32 x, s32 y, s32 w, s32 h, u32 rgb)
 {
+    s_Epoch++;
     Vtx a, b;
     Prim p;
     memset(&p, 0, sizeof(p));
@@ -638,9 +796,12 @@ static void fill_rect(s32 x, s32 y, s32 w, s32 h, u32 rgb)
     b   = a;
     b.x = x + w;
     b.y = y + h;
-    ad(R_PRIM, 6 | (1 << 8));
-    vertex(&p, &a);
-    vertex(&p, &b);
+    {
+        const Vtx* v[2];
+        v[0] = &a;
+        v[1] = &b;
+        emit(&p, 6 | (1 << 8), v, 2);
+    }
     cache_invalidate(x, y, w, h);
 }
 
@@ -718,7 +879,9 @@ void GpuGs_Commands(const u32* w, s32 n)
 
         if (cmd >= 0x20 && cmd < 0x40)
         {
+            PROF_BEGIN("gs: polygon (incl. state)")
             used = polygon(w, n);
+            PROF_END("gs: polygon (incl. state)")
         }
         else if (cmd >= 0x40 && cmd < 0x60)
         {
@@ -726,7 +889,9 @@ void GpuGs_Commands(const u32* w, s32 n)
         }
         else if (cmd >= 0x60 && cmd < 0x80)
         {
+            PROF_BEGIN("gs: rectangle (incl. state)")
             used = rectangle(w, n);
+            PROF_END("gs: rectangle (incl. state)")
         }
         else if (cmd == 0x02)
         {
@@ -869,6 +1034,7 @@ void GpuGs_StoreAll(void)
  * psm: its format). */
 void GpuGs_DisplayCopy(u32 fbp, u32 fbw, u32 psm, s32 x, s32 y, s32 w, s32 h)
 {
+    s_Epoch++;
     init();
     set(R_FRAME, (u64x)fbp | ((u64x)fbw << 16) | ((u64x)psm << 24));
     set(R_XYOFFSET, (u64x)(2048 << 4) | ((u64x)(2048 << 4) << 32));

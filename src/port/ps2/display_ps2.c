@@ -114,7 +114,7 @@ void Display_EnsureInit(void)
 
 /* Debug: frames whose number is listed here are also written to host:frame_<n>.ppm (PCSX2 with
  * HostFs on writes them next to the ELF; tools/port/pcsx2_run.py enables it). */
-static const int DUMP_FRAMES[] = { 30, 120, 200, 300, 600, 960, 1200 };
+static const int DUMP_FRAMES[] = { 30, 120, 200, 300, 600, 960, 1200, 2400 };
 static int s_Frame;
 
 static void dump_vram(const unsigned short* vram)
