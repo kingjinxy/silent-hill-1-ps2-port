@@ -4,8 +4,14 @@
  * GetRCnt(RCntCNT1), and the frame's delta time comes from it. Counters run at the PS1 rates
  * (0: system clock, 1: NTSC horizontal blanks, 2: system clock / 8, 3: vertical blanks), counted
  * from the last ResetRCnt/SetRCnt/StartRCnt, as 16-bit values that wrap at the target when one is set.
+ * Counter 1 counts whole fields from the actual vertical blank interrupts (262.5 lines each): the
+ * game's frame time comes from it, read right after waiting for a vertical blank, and the EE's cycle
+ * counter doesn't track time between vertical blanks reliably under emulation (frames measured only
+ * a few lines long, so fades took minutes).
  * Counter interrupts (used by the sound driver's tick, through events) aren't implemented yet.
  */
+
+extern int Port_VBlanks(unsigned int* cycles); /* libetc_ps2.c */
 
 #define EE_CLOCK   294912000ULL
 #define PS1_CLOCK  33868800ULL
@@ -43,6 +49,19 @@ static unsigned long long ee_cycles(void)
     return high | now;
 }
 
+/** Horizontal blanks so far, from the vertical blank count (NTSC: 262.5 lines per field). */
+static unsigned long long hblanks(void)
+{
+    unsigned int at;
+    return (unsigned long long)Port_VBlanks(&at) * 525 / 2;
+}
+
+/** Current count source for counter i, in counter units. */
+static unsigned long long source(int i)
+{
+    return i == 1 ? hblanks() : ee_cycles() * RATE[i] / EE_CLOCK;
+}
+
 static int index_of(unsigned long spec)
 {
     int i = (int)(spec & 0xF);
@@ -58,7 +77,7 @@ long SetRCnt(unsigned long spec, unsigned short target, long mode)
     }
     s_Cnt[i].target = target;
     s_Cnt[i].mode   = mode;
-    s_Cnt[i].base   = ee_cycles();
+    s_Cnt[i].base   = source(i);
     return 1;
 }
 
@@ -70,7 +89,7 @@ long GetRCnt(unsigned long spec)
     {
         return 0;
     }
-    v = (ee_cycles() - s_Cnt[i].base) * RATE[i] / EE_CLOCK;
+    v = source(i) - s_Cnt[i].base;
     if (s_Cnt[i].target)
     {
         v %= s_Cnt[i].target;
@@ -85,7 +104,7 @@ long ResetRCnt(unsigned long spec)
     {
         return 0;
     }
-    s_Cnt[i].base = ee_cycles();
+    s_Cnt[i].base = source(i);
     return 1;
 }
 

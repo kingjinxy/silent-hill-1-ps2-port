@@ -804,3 +804,44 @@ the game waited on `SpuIsTransferCompleted` before). The game now goes through g
   (`tools/port/ee_compile_check.sh`), e.g. `-finstrument-functions` for a shadow call stack.
 - Result: title menu → attract demo; the demo plays in the town (fog, snow, road, Harry) without
   faults. The software GPU makes it run at ~10% speed in PCSX2.
+
+### GS hardware renderer
+
+`src/port/ps2/gpu_gs.c` executes the GP0 packets with GS primitives, drawing into an image of the
+PS1's VRAM in GS memory (PSMCT16 1024x512 at 0x300000, out of reach of gsKit's display setup; 4/8-bit
+texture page cache at 0x200000). The PS1 features map onto GS state almost directly:
+
+| PS1 | GS |
+|---|---|
+| 15-bit VRAM + mask bit | PSMCT16 frame buffer (bit 15 = alpha MSB) |
+| Texture × colour / 128, raw texture | MODULATE (same formula), DECAL |
+| Texel 0x0000 transparent, STP bit | TEXA (AEM, TA0 0x40, TA1 0x80) + alpha test |
+| Semi-transparency only on STP texels | PABE |
+| Blend modes 0-3 | ALPHA with FIX 0x40/0x80/0x80/0x20, COLCLAMP |
+| Set / check mask | FBA / DATE |
+| Dithering | DTHE + DIMX = the PS1 matrix |
+| Texture window | CLAMP REGION_REPEAT |
+| CLUTs in VRAM | CSM2 (TEXCLUT COU/COV = CLUT position) |
+| 4/8-bit pages | PSMT4/PSMT8 uploaded from g_PortVram (same packing), cached |
+| 15-bit pages | sampled straight from the VRAM buffer |
+
+- Display: a GS-local 1:1 copy of the display area into gsKit's frame buffer.
+- `StoreImage` and the debug dumps read VRAM back from the GS (local-to-host transfer through
+  BUSDIR / VIF1 DMA).
+- Fixes found by comparing against the software renderer (`SH1_GPU=compare`: both renderers, dumps
+  write both images and a difference count): `TEX0` must be written again when only `TEXCLUT` changes
+  (the CLUT loads on `TEX0`; Harry had another texture's colours); flat untextured colours are
+  truncated to 5 bits before blending, as on the PS1 (fades were off by one everywhere). Konami/KCET
+  screens now match pixel for pixel; in-game, nearly all remaining differences are 1/31 steps from
+  interpolation rounding, plus ~150 edge pixels per frame.
+- Renderer chosen at build time: `SH1_GPU=gs` (default), `soft`, `compare` (`tools/port/port_link.py`).
+- At unlimited speed the game went from ~10% in-game to far above full speed. At real-time speed it
+  first stuck on the Konami logo: two timing bugs.
+  - `VSync` returned without a vertical blank: after gsKit's setup runs again (display mode
+    change), something else signals our semaphore (likely a gsKit/dmaKit semaphore ID reused; the GS
+    renderer's DMA transfers triggered it). `VSync` now waits for the vertical blank count to
+    advance, using the semaphore only to sleep. The handler is also reinstalled after gsKit's setup.
+  - Root counter 1 (the game's frame time, `GsGetVcount`) now counts whole fields from the vertical
+    blank interrupts (262.5 lines each) instead of the EE cycle counter, which doesn't track time
+    between vertical blanks under emulation.
+- In-game at real-time speed: ~20 fps of the game's 30 (to profile).

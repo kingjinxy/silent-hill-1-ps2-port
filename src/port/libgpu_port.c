@@ -2,9 +2,13 @@
  * environments. Sony's primitive builders and sys.o's pure packet builders (SetDrawEnv, SetDrawMode,
  * ...) are recompiled (tools/port/recomp_all.sh); this file replaces the parts that drive the GPU.
  *
- * VRAM is emulated as a 1024x512 16-bit array, as on the PS1. GPU command packets (from ordering
- * tables, DrawPrim, draw environments) go to Gpu_Submit(): for now the software GPU (gpu_soft.c)
- * draws them into VRAM, and PutDispEnv shows the display area via the GS (display_ps2.c).
+ * GPU command packets (from ordering tables, DrawPrim, draw environments) go to Gpu_Submit(), then to
+ * one of two renderers:
+ *  - GS (default, src/port/ps2/gpu_gs.c): draws with the GS into an image of VRAM in GS memory.
+ *    g_PortVram is the EE's copy, updated by CPU uploads (LoadImage, ClearImage) and read back from
+ *    the GS by StoreImage; the GS renderer builds 4/8-bit texture pages from it.
+ *  - Software (gpu_soft.c, g_PortGsRenderer = 0): draws into g_PortVram; the reference renderer.
+ * PutDispEnv shows the display area (display_ps2.c).
  *
  * Ordering tables and packets use 24-bit addresses, as on the PS1. That's valid on the EE as long as
  * all drawing memory is below 16 MiB (the whole program currently ends below 8 MiB).
@@ -22,6 +26,19 @@
 extern int printf(const char* fmt, ...);
 extern void GpuSoft_Commands(const u32* words, s32 count);      /* src/port/gpu_soft.c */
 extern void Display_Present(const u16* vram, s32 x, s32 y, s32 w, s32 h, s32 rgb24, s32 isinter); /* src/port/ps2/display_ps2.c */
+extern void Display_PresentGs(s32 x, s32 y, s32 w, s32 h, s32 rgb24, s32 isinter);
+extern void GpuGs_Commands(const u32* words, s32 count); /* src/port/ps2/gpu_gs.c */
+extern void GpuGs_LoadImage(s32 x, s32 y, s32 w, s32 h);
+extern void GpuGs_ClearImage(s32 x, s32 y, s32 w, s32 h, u32 rgb);
+extern void GpuGs_StoreAll(void);
+
+/** 1: GS renderer, 0: software renderer, 2: both (compare mode: the software renderer owns
+ * g_PortVram, the GS output is shown, and the debug dumps compare the two; see display_ps2.c).
+ * Chosen at build time: SH1_GPU=gs|soft|compare for tools/port/port_link.py. */
+#ifndef SH_PORT_GPU
+#define SH_PORT_GPU 1
+#endif
+s32 g_PortGsRenderer = SH_PORT_GPU;
 
 u16 g_PortVram[VRAM_H][VRAM_W] __attribute__((aligned(64)));
 
@@ -42,7 +59,14 @@ static void* ptr24(u32 addr)
 /** @brief Every GPU command packet (GP0 words) ends up here. */
 static void Gpu_Submit(const u32* words, s32 count)
 {
-    GpuSoft_Commands(words, count);
+    if (g_PortGsRenderer)
+    {
+        GpuGs_Commands(words, count);
+    }
+    if (g_PortGsRenderer != 1)
+    {
+        GpuSoft_Commands(words, count);
+    }
     s_FramePackets++;
     s_FrameWords += count;
 }
@@ -93,6 +117,10 @@ int ClearImage(RECT* rect, u_char r, u_char g, u_char b)
             g_PortVram[(rect->y + y) & (VRAM_H - 1)][(rect->x + x) & (VRAM_W - 1)] = c;
         }
     }
+    if (g_PortGsRenderer)
+    {
+        GpuGs_ClearImage(rect->x, rect->y, rect->w, rect->h, r | (g << 8) | (b << 16));
+    }
     return 0;
 }
 
@@ -112,6 +140,10 @@ int LoadImage(RECT* rect, u_long* p)
             g_PortVram[(rect->y + y) & (VRAM_H - 1)][(rect->x + x) & (VRAM_W - 1)] = *src++;
         }
     }
+    if (g_PortGsRenderer)
+    {
+        GpuGs_LoadImage(rect->x, rect->y, rect->w, rect->h);
+    }
     return 0;
 }
 
@@ -119,6 +151,10 @@ int StoreImage(RECT* rect, u_long* p)
 {
     u16* dst = (u16*)p;
     s32 x, y;
+    if (g_PortGsRenderer == 1)
+    {
+        GpuGs_StoreAll(); /* the GS holds the current VRAM */
+    }
     for (y = 0; y < rect->h; y++)
     {
         for (x = 0; x < rect->w; x++)
@@ -210,7 +246,14 @@ DISPENV* PutDispEnv(DISPENV* env)
     /* The game swaps display buffers with PutDispEnv once per frame: present the new display area. */
     if (s_DispMask)
     {
-        Display_Present(&g_PortVram[0][0], env->disp.x, env->disp.y, env->disp.w, env->disp.h, env->isrgb24, env->isinter);
+        if (g_PortGsRenderer)
+        {
+            Display_PresentGs(env->disp.x, env->disp.y, env->disp.w, env->disp.h, env->isrgb24, env->isinter);
+        }
+        else
+        {
+            Display_Present(&g_PortVram[0][0], env->disp.x, env->disp.y, env->disp.w, env->disp.h, env->isrgb24, env->isinter);
+        }
     }
     return env;
 }

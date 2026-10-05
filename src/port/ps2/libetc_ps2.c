@@ -10,6 +10,7 @@
 
 static volatile int s_VBlanks;
 static int          s_Sema = -1;
+static int          s_HandlerId = -1;
 static void (*s_Callback)(void);
 
 extern void Pad_Poll(void);        /* libpad_ps2.c */
@@ -28,9 +29,25 @@ static void heartbeat(void* arg)
     }
 }
 
+static volatile unsigned int s_VBlankCycles; /* CP0 Count at the last vertical blank */
+
+/** Vertical blanks so far, and the EE cycle count when the last one came (for rcnt_ps2.c). */
+int Port_VBlanks(unsigned int* cycles)
+{
+    int n;
+    DI();
+    n       = s_VBlanks;
+    *cycles = s_VBlankCycles;
+    EI();
+    return n;
+}
+
 static int vblank_handler(int cause)
 {
+    unsigned int now;
     (void)cause;
+    __asm__ volatile("mfc0 %0, $9" : "=r"(now));
+    s_VBlankCycles = now;
     s_VBlanks++;
     if (s_VBlanks % 60 == 0)
     {
@@ -67,7 +84,7 @@ static void init(void)
         th.initial_priority = 1;
         StartThread(CreateThread(&th), NULL);
     }
-    AddIntcHandler(INTC_VBLANK_S, vblank_handler, 0);
+    s_HandlerId = AddIntcHandler(INTC_VBLANK_S, vblank_handler, 0);
     EnableIntc(INTC_VBLANK_S);
 }
 
@@ -76,6 +93,22 @@ static void init(void)
 void Port_MainThreadInit(void)
 {
     ChangeThreadPriority(GetThreadId(), 64);
+}
+
+/** gsKit's setup (run again on every display mode change) drops our vertical blank handler: the
+ * count stopped and VSync no longer waited. Called after it, this installs the handler again. */
+void Port_VBlankReinstall(void)
+{
+    if (s_Sema < 0)
+    {
+        return;
+    }
+    if (s_HandlerId >= 0)
+    {
+        RemoveIntcHandler(INTC_VBLANK_S, s_HandlerId);
+    }
+    s_HandlerId = AddIntcHandler(INTC_VBLANK_S, vblank_handler, 0);
+    EnableIntc(INTC_VBLANK_S);
 }
 
 int ResetCallback(void)
@@ -90,7 +123,7 @@ int ResetCallback(void)
  * counts for 0/1; nothing in the game uses those yet.) */
 int VSync(int mode)
 {
-    int n;
+    int n, target;
 
     init();
     if (mode < 0)
@@ -101,9 +134,11 @@ int VSync(int mode)
     {
         return 0;
     }
-    n = mode == 0 ? 1 : mode;
-    PollSema(s_Sema); /* Wait for a fresh vertical blank, not one that already happened. */
-    while (n-- > 0)
+    n      = mode == 0 ? 1 : mode;
+    target = s_VBlanks + n;
+    /* Sleep until the count reaches the target: the semaphore only wakes us up (other code may
+     * signal it too: after gsKit's setup runs again, VSync returned without a vertical blank). */
+    while (s_VBlanks - target < 0)
     {
         WaitSema(s_Sema);
     }

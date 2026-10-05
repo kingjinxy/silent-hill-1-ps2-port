@@ -142,10 +142,12 @@ def main():
 
     # Port runtime sources, and Sony/Konami library code recompiled by tools/port/recomp_all.sh.
     port_objs = []
+    # Renderer: SH1_GPU=gs (default), soft, or compare (both; debug dumps compare them).
+    gpu = {"soft": 0, "gs": 1, "compare": 2}[os.environ.get("SH1_GPU", "gs")]
     for src in sorted(glob.glob("src/port/*.c")):
         obj = os.path.join(OUT, "port", os.path.basename(src) + ".o")
         os.makedirs(os.path.dirname(obj), exist_ok=True)
-        run([CC, "-c", *PORT_CFLAGS, src, "-o", obj])
+        run([CC, "-c", *PORT_CFLAGS, "-DSH_PORT_GPU=%d" % gpu, src, "-o", obj])
         port_objs.append(obj)
     # PS2-side HAL code (src/port/ps2/): compiled against ps2sdk's headers, not the game's.
     for src in sorted(glob.glob("src/port/ps2/*.c")):
