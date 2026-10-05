@@ -384,5 +384,13 @@ void StringCopy(char* prevStr, char* newStr) // 0x80056D64
 {
     *(s32*)&prevStr[4] = 0;
     *(s32*)&prevStr[0] = 0;
+#ifdef SH_PORT
+    // Called with `newStr = NULL` (e.g. `Texture_Init` from `world_map.c`); on the PS1 that copies
+    // the zeros at address 0, leaving the name empty.
+    if (newStr == NULL)
+    {
+        return;
+    }
+#endif
     strncpy(prevStr, newStr, 8);
 }

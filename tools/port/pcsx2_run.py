@@ -9,6 +9,7 @@ run if one was killed). Output is the PCSX2 log after the ELF starts, minus emul
 """
 import argparse
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -62,6 +63,8 @@ def main():
     ap.add_argument("--slowboot", action="store_true", help="boot discs through the BIOS (OSDSYS) instead of fast boot")
     ap.add_argument("--cdvd-verbose", action="store_true", help="log every disc read (CdvdVerboseReads)")
     ap.add_argument("--bios", help="BIOS file name in PCSX2's bios folder to use for this run")
+    ap.add_argument("--stall", type=float, default=15,
+                    help="stop when no new frame has been shown for this many emulated seconds (crash), 0 = off")
     ap.add_argument("--realtime", action="store_true", help="run at normal speed (default: unlimited)")
     args = ap.parse_args()
     elf = os.path.abspath(args.elf)
@@ -74,6 +77,7 @@ def main():
         OVERRIDES["BIOS"] = args.bios
     patch_ini()
     proc = None
+    stalled = False
     try:
         boot = ["--", elf] if elf.lower().endswith(".iso") else ["-elf", elf, "--", elf]
         speed = [] if args.realtime else ["-unlimited"]
@@ -82,8 +86,26 @@ def main():
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                                 start_new_session=True)
         end = time.time() + args.seconds
+        # Crash detection, from the port's heartbeat (one line per 60 vertical blanks, i.e. per emulated
+        # second, with the presented frame count): the game is considered crashed when it presents no
+        # new frame for --stall emulated seconds, or when no heartbeat comes for --stall real seconds
+        # (the EE is stuck, or emulation runs below full speed).
+        beats, frame, frame_beat, last_beat = 0, None, 0, time.time()
         while time.time() < end and proc.poll() is None:
-            if args.until and os.path.exists(log) and args.until in open(log, errors="replace").read():
+            text = open(log, errors="replace").read() if os.path.exists(log) else ""
+            if args.until and args.until in text:
+                break
+            hb = re.findall(r"heartbeat: vblank \d+ frame (\d+)", text)
+            if len(hb) != beats:
+                beats, last_beat = len(hb), time.time()
+                if hb[-1] != frame:
+                    frame, frame_beat = hb[-1], beats
+            if args.stall and beats - frame_beat >= args.stall:
+                stalled = "no new frame for %d emulated seconds (frame %s)" % (beats - frame_beat, frame)
+                break
+            if args.stall and time.time() - last_beat > args.stall:
+                stalled = "no heartbeat for %g s (EE stuck, or %s)" % (
+                    args.stall, "game not started" if not beats else "last frame %s" % frame)
                 break
             time.sleep(0.5)
     finally:
@@ -100,8 +122,10 @@ def main():
     text = open(log, errors="replace").read().splitlines() if os.path.exists(log) else []
     os.remove(log)
     started = 0 if args.all else next((i for i, l in enumerate(text) if "Initializing Elf" in l), 0)
-    out = [l for l in text[started:] if not any(n in l for n in NOISE)]
+    out = [l for l in text[started:] if not any(n in l for n in NOISE) and "heartbeat:" not in l]
     print("\n".join(out))
+    if stalled:
+        print("pcsx2_run: %s, assuming the game crashed" % stalled)
     return 0 if not args.until or any(args.until in l for l in out) else 1
 
 

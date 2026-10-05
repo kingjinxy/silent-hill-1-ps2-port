@@ -206,7 +206,10 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [x] libspu placeholder (`src/port/libspu_port.c`): everything succeeds, nothing plays
 - [x] Konami logo screen (recompiler added symbol offsets twice for weak `.bss` symbols)
 - [x] Events (`OpenEvent`/`TestEvent`/...) + libcard reporting empty slots; boots to the title menu
-- [ ] Pad (input), events/RCnt interrupts (sound driver tick), memory card
+- [x] Pad input (libpad over the BIOS's PADMAN); attract demo plays in-game (town, 320x224)
+- [ ] RCnt interrupts (sound driver tick), memory card
+- [ ] Movies skipped under `SH_PORT` (`movie_main`) until CD streaming + MDEC exist
+- [ ] Software rendering runs in-game at ~10% speed: GS renderer needed
 - [ ] GS hardware renderer (speed), checked against gpu_soft.c
 
 ### Step 4 — Graphics (libgpu → GS)
@@ -219,7 +222,7 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 
 ### Step 5 — Pad, CD sectors, memory card
 
-- [ ] libpad / libkpad shim over `padman`
+- [x] libpad shim over `rom0:PADMAN` (libkpad recompiled with the game)
 - [ ] libcd shim: LBA reads from `SILENT.`/`HILL.` (sector offsets relative to container files)
 - [ ] Memory card: save format + `icon.sys`/icon, real title-ID folder
 

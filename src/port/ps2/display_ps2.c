@@ -94,7 +94,7 @@ static void init(int w, int h, int interlaced)
 
 /* Debug: frames whose number is listed here are also written to host:frame_<n>.ppm (PCSX2 with
  * HostFs on writes them next to the ELF; tools/port/pcsx2_run.py enables it). */
-static const int DUMP_FRAMES[] = { 30, 120, 200, 300, 600, 900, 1200 };
+static const int DUMP_FRAMES[] = { 30, 120, 200, 300, 600, 960, 1200 };
 static int s_Frame;
 
 static void dump_vram(const unsigned short* vram)
@@ -145,6 +145,11 @@ static void dump(int w, int h)
     }
     fclose(f);
     printf("display: wrote %s (%dx%d)\n", name, w, h);
+}
+
+int Display_FrameCount(void)
+{
+    return s_Frame;
 }
 
 void Display_Present(const unsigned short* vram, int x, int y, int w, int h, int rgb24, int isinter)

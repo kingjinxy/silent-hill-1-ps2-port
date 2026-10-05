@@ -773,3 +773,34 @@ the game waited on `SpuIsTransferCompleted` before). The game now goes through g
   every `_card_*` call is accepted and ends with `EvSpTIMOUT` (SwCARD and HwCARD). The KCET state's
   memory card check then finds no cards, the intro movie is skipped (no MDEC yet) and the game
   reaches the title menu (state 7, 320x448i), matching the PS1's image.
+
+### Controller, attract demo in-game
+
+- `src/port/ps2/libpad_ps2.c`: PS1 libpad over ps2sdk's libpad with the BIOS's `rom0:SIO2MAN` /
+  `rom0:PADMAN` (present on every BIOS). The PS1 receive buffers (status, ID, buttons, sticks) have
+  the same 8-byte layout as `padButtonStatus` and are refreshed from `VSync`, as the PS1 BIOS does
+  every vertical blank. `PadInfoMode` answers from values read once per frame: with the BIOS's
+  PADMAN it can go through an IOP RPC, and the game's vibration code calls it several times per frame
+  (the game hung in it in-game).
+- Game code passes NULL to string functions where the PS1 reads address 0 (whose first byte is 0):
+  `MemCard_WorkSet` (`strcat`, filename NULL) and `StringCopy` (`Texture_Init(..., NULL, ...)` from
+  the world map). Both guarded under `SH_PORT`.
+- `movie_main` returns at once under `SH_PORT` (as when a movie file isn't found) until CD streaming
+  and MDEC exist; the intro movie used to loop forever waiting for stream data.
+- `-fno-zero-initialized-in-bss` for the game's EE objects: GCC 15 moved explicitly zero-initialized
+  variables to `.bss`, breaking layouts the game relies on. `HARRY_BASE_ANIM_INFOS` is declared with
+  57 entries followed by zeroed variables that are really the rest of the array (the game copies up
+  to 152 entries into it: weapon anims at 56-75, a map's Harry anims from 76; map6_s04 has 76). With
+  those in `.bss`, the copy overwrote the libkpad function table `D_800AFD08` and the game jumped
+  into data.
+- libspu placeholder: key on/off state per voice (`SpuGetKeyStatus` returns `SPU_ON`/`SPU_OFF`, -1
+  for an empty mask); the sound driver waits for a keyed-on voice to report on.
+- Main thread priority lowered (64), so higher-priority threads run while the game busy-waits.
+- Crash detection: a heartbeat thread prints the vertical blank and frame counts every 60 vertical
+  blanks; `pcsx2_run.py` stops a run when no new frame is shown for 15 emulated seconds, or no
+  heartbeat comes for 15 real seconds (`--stall`). `src/port/ps2/crash_ps2.c` reports TLB/address
+  exceptions on hardware (PCSX2 logs those and carries on instead of raising them).
+- Debugging aid: `SH1_EXTRA_CFLAGS` is passed to the game's EE compile
+  (`tools/port/ee_compile_check.sh`), e.g. `-finstrument-functions` for a shadow call stack.
+- Result: title menu → attract demo; the demo plays in the town (fog, snow, road, Harry) without
+  faults. The software GPU makes it run at ~10% speed in PCSX2.

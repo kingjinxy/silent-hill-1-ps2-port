@@ -207,7 +207,7 @@ def main():
                     "-Wl,-zmax-page-size=128", "-Wl,--unresolved-symbols=report-all", "-o", elf,
                     combined, *port_objs, *extra, "-Wl,--start-group", recomp_lib, "-Wl,--end-group",
                     "configs/USA/relative_syms.ld", "configs/USA/port_relative_syms.ld", "configs/USA/port_syms.ld",
-                    "-L" + os.path.join(GSKIT, "lib"), "-lgskit", "-ldmakit", "-lcdvd"],
+                    "-L" + os.path.join(GSKIT, "lib"), "-lgskit", "-ldmakit", "-lcdvd", "-lpad", "-leedebug"],
                    check=False)
 
     r = final_link([])

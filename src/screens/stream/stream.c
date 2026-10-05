@@ -161,6 +161,11 @@ void movie_main(char* file_name, s32 f_size, s32 sector) // 0x801E2B9C
     s32     search_times;
     s32     prev_frame_no;
 
+#ifdef SH_PORT
+    // TODO: CD streaming and MDEC aren't ported yet; skip the movie, as when its file isn't found.
+    return;
+#endif
+
     frame_cnt = 0;
     max_frame = f_size;
 

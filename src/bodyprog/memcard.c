@@ -1566,6 +1566,11 @@ bool MemCard_WorkSet(e_MemCardIoMode mode, s32 deviceId, s_MemCard_Directory* ou
     g_MemCard_Work.directories = outDir;
 
     MemCard_DevicePathGenerate(deviceId, g_MemCard_Work.filePath);
+#ifdef SH_PORT
+    // Called with `filename = NULL` (e.g. by `MemCard_Process_Init`); on the PS1 that reads address 0,
+    // whose first byte is 0, so nothing is appended.
+    if (filename != NULL)
+#endif
     strcat(g_MemCard_Work.filePath, filename);
 
     g_MemCard_Work.createBlockCount = createBlockCount;
