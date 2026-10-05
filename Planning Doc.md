@@ -198,8 +198,9 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [ ] sys.o's `GEnv` isn't initialised by our ResetGraph: check SetDrawEnv's packets against the PS1
 - [x] Software PS1 GPU (`src/port/gpu_soft.c`) behind `Gpu_Submit`; the display area is shown via
       gsKit (`src/port/ps2/display_ps2.c`). First visible frame: the warning screen
-- [x] Output mode follows the PS1's DISPENV: 240p (640x240 progressive) or 480i (640x448 interlaced,
-      when isinter and > 256 lines); PS1 widths scaled to 640
+- [x] Output mode follows the PS1's DISPENV: 240p or 480i (isinter and > 256 lines), the PS1's own
+      width via the GS's MAGH (256/320/368/512/640) and its line count; pixels copied 1:1 (no
+      scaling or filtering)
 - [x] Root counters from the EE cycle counter (`src/port/ps2/rcnt_ps2.c`): frame timing works, the
       game advances warning screen → Konami → KCET logo states
 - [x] libspu placeholder (`src/port/libspu_port.c`): everything succeeds, nothing plays

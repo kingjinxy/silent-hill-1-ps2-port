@@ -742,3 +742,18 @@ root counters from the EE's CP0 Count (294.912 MHz, extended to 64 bits): counte
 interrupts yet. `src/port/libspu_port.c` makes every libspu call succeed (transfers complete at once;
 the game waited on `SpuIsTransferCompleted` before). The game now goes through game states 0 → 1 → 2.
 46 HAL stubs left.
+
+### Native widths, 1:1 pixels, comparison settings
+
+- Display: the PS1's width is shown at its own resolution through the GS `DISPLAY` register's
+  horizontal magnification (NTSC line = 2560 video clocks; MAGH 9/7/6/4/3 for 256/320/368/512/640 —
+  368 uses the same divider 7 as the PS1), DH = the PS1's line count, centred on gsKit's start
+  coordinates. gsKit computes MAGH from the framebuffer width (wrong for 368), so after gsKit's setup
+  (640-wide framebuffer) `DISPLAY1`/`DISPLAY2` are rewritten. The display area is copied 1:1 into the
+  framebuffer with nearest sampling: no scaling or filtering (the PS1 GPU doesn't filter textures),
+  so dumps are pixel-exact. Observed: 320x240p, 320x224p, then 640x448i at the Konami logo state.
+- `pcsx2_run.py` enforces the comparison settings per run — native resolution
+  (`upscale_multiplier 1`), "Bilinear (Sharp)" output (`linear_present_mode 2`), texture filtering as
+  the program sets it (`filter 2`) — and runs at unlimited speed by default (`--realtime` to turn it
+  off). The DuckStation runners (`warp_sweep.py`, `gte_test`, `lib_test`) enforce native resolution,
+  nearest texture filtering and bilinear-sharp scaling; they already ran at unlimited speed.

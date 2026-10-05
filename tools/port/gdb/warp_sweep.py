@@ -34,6 +34,12 @@ MAPS = [
 ]
 SETTINGS = os.path.expanduser("~/.local/share/duckstation/settings.ini")
 OVERRIDES = {
+    # Native resolution, nearest texture filtering (as the PS1), bilinear-sharp output scaling: the
+    # same comparison settings as tools/port/pcsx2_run.py.
+    "ResolutionScale": "1",
+    "TextureFilter": "Nearest",
+    "SpriteTextureFilter": "Nearest",
+    "Scaling": "BilinearSharp",
     "EmulationSpeed": "0",
     "ConfirmPowerOff": "false",
     "SaveStateOnExit": "false",

@@ -20,8 +20,10 @@ INI = os.path.expanduser("~/.config/PCSX2/inis/PCSX2.ini")
 BACKUP = INI + ".pcsx2_run.bak"
 # OutputMuted: PCSX2's "Mute" (audio is still emulated, just not played). HostFs: lets the program
 # write to host: (= the ELF's folder, e.g. frame dumps from display_ps2.c).
+# For comparisons with DuckStation: native resolution (upscale 1), "Bilinear (Sharp)" output
+# (linear_present_mode 2), texture filtering as the program sets it on the GS (filter 2 = PS2).
 OVERRIDES = {"EnableEEConsole": "true", "EnableIOPConsole": "true", "EnableFileLogging": "true", "OutputMuted": "true",
-             "HostFs": "true"}
+             "HostFs": "true", "upscale_multiplier": "1", "linear_present_mode": "2", "filter": "2"}
 NOISE = ("GL_EXTENSIONS", "UpdateVSyncRate", "Frame rate:", "Set GS CRTC", "Vulkan", "OpenGL")
 
 
@@ -60,6 +62,7 @@ def main():
     ap.add_argument("--slowboot", action="store_true", help="boot discs through the BIOS (OSDSYS) instead of fast boot")
     ap.add_argument("--cdvd-verbose", action="store_true", help="log every disc read (CdvdVerboseReads)")
     ap.add_argument("--bios", help="BIOS file name in PCSX2's bios folder to use for this run")
+    ap.add_argument("--realtime", action="store_true", help="run at normal speed (default: unlimited)")
     args = ap.parse_args()
     elf = os.path.abspath(args.elf)
     log = tempfile.NamedTemporaryFile(suffix=".log", delete=False).name
@@ -73,8 +76,9 @@ def main():
     proc = None
     try:
         boot = ["--", elf] if elf.lower().endswith(".iso") else ["-elf", elf, "--", elf]
+        speed = [] if args.realtime else ["-unlimited"]
         proc = subprocess.Popen([args.pcsx2, "-batch", "-slowboot" if args.slowboot else "-fastboot", "-nofullscreen",
-                                 "-logfile", log, *boot],
+                                 *speed, "-logfile", log, *boot],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                                 start_new_session=True)
         end = time.time() + args.seconds
