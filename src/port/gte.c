@@ -680,6 +680,29 @@ static void gpf_gpl(int base, int sf, int lm)
     push_color();
 }
 
+#ifdef SH_PORT_PROF
+#include "port/prof.h"
+static void gte_command(unsigned int cmd);
+static const char* const OP_NAMES[64] = {
+    "GTE 00", "GTE RTPS", "GTE 02", "GTE 03", "GTE 04", "GTE 05", "GTE NCLIP", "GTE 07",
+    "GTE 08", "GTE 09", "GTE 0A", "GTE 0B", "GTE OP", "GTE 0D", "GTE 0E", "GTE 0F",
+    "GTE DPCS", "GTE INTPL", "GTE MVMVA", "GTE NCDS", "GTE CDP", "GTE 15", "GTE NCDT", "GTE 17",
+    "GTE 18", "GTE 19", "GTE 1A", "GTE NCCS", "GTE CC", "GTE 1D", "GTE NCS", "GTE 1F",
+    "GTE NCT", "GTE 21", "GTE 22", "GTE 23", "GTE 24", "GTE 25", "GTE 26", "GTE 27",
+    "GTE SQR", "GTE DCPL", "GTE DPCT", "GTE 2B", "GTE 2C", "GTE AVSZ3", "GTE AVSZ4", "GTE 2F",
+    "GTE RTPT", "GTE 31", "GTE 32", "GTE 33", "GTE 34", "GTE 35", "GTE 36", "GTE 37",
+    "GTE 38", "GTE 39", "GTE 3A", "GTE 3B", "GTE 3C", "GTE GPF", "GTE GPL", "GTE NCCT",
+};
+void Gte_Command(unsigned int cmd)
+{
+    unsigned int t;
+    Prof_Begin(OP_NAMES[cmd & 63], &t);
+    gte_command(cmd);
+    Prof_End(OP_NAMES[cmd & 63], t);
+}
+#define Gte_Command gte_command
+static
+#endif
 void Gte_Command(unsigned int cmd)
 {
     int sf = (cmd >> 19) & 1;

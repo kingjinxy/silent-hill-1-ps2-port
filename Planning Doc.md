@@ -212,6 +212,9 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [x] GS hardware renderer (`src/port/ps2/gpu_gs.c`), default; software renderer kept (`SH1_GPU=soft|compare`)
 - [ ] GS renderer: polygon edge / rounding differences (in-game speed is fine: see walkthrough)
 - [ ] Render comparison tool: DuckStation vs PCSX2 (GS renderer), RenderDoc-style
+- [x] 60 fps option (`SH1_FPS=60`: gameplay `g_IntervalVBlanks` 1 instead of 2); benchmark `SH1_BENCH=1`
+- [x] Profiling counters (`SH1_PROF=1`, include/port/prof.h)
+- [ ] Performance for 60 fps: GTE emulation (~45% of frame work), GS translation (~28%)
 - [ ] GS renderer gaps: rectangle flips, wrapping VRAM copies, 24-bit display (FMV)
 - [ ] GS hardware renderer (speed), checked against gpu_soft.c
 

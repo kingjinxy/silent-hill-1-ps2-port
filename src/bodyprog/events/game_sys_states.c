@@ -90,7 +90,11 @@ void GameState_InGame_Update(void) // 0x80038BD4
             Game_MapRoomIdxUpdate();
             func_800892A4(1);
 
+#if defined(SH_PORT) && SH_PORT_FPS == 60
+            g_IntervalVBlanks = 1; // Port option (`SH1_FPS=60`): gameplay at 60 fps.
+#else
             g_IntervalVBlanks = 2;
+#endif
             g_GameWork.gameStateSteps[0]++;
             g_SysWork.bgmStatusFlags |= BgmStatusFlag_6;
             break;

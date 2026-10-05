@@ -18,6 +18,7 @@
 #include "libgte.h"
 #include "libgpu.h"
 #include "game.h"
+#include "port/prof.h"
 
 #define VRAM_W 1024
 #define VRAM_H 512
@@ -181,7 +182,16 @@ u_long* ClearOTagR(u_long* ot, int n)
     return ot;
 }
 
+static void DrawOTagImpl(u_long* p);
+
 void DrawOTag(u_long* p)
+{
+    PROF_BEGIN("DrawOTag (GPU packets)")
+    DrawOTagImpl(p);
+    PROF_END("DrawOTag (GPU packets)")
+}
+
+static void DrawOTagImpl(u_long* p)
 {
     u32 addr  = (u32)(unsigned long)p & 0xFFFFFF;
     u32 start = addr;
@@ -242,6 +252,16 @@ DRAWENV* PutDrawEnv(DRAWENV* env)
 
 DISPENV* PutDispEnv(DISPENV* env)
 {
+#ifdef SH_PORT_PROF
+    {
+        static u32 frames;
+        if (++frames == 120)
+        {
+            Prof_Report(frames);
+            frames = 0;
+        }
+    }
+#endif
     s_DispEnv = *env;
     /* The game swaps display buffers with PutDispEnv once per frame: present the new display area. */
     if (s_DispMask)

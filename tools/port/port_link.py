@@ -144,10 +144,12 @@ def main():
     port_objs = []
     # Renderer: SH1_GPU=gs (default), soft, or compare (both; debug dumps compare them).
     gpu = {"soft": 0, "gs": 1, "compare": 2}[os.environ.get("SH1_GPU", "gs")]
+    # Profiling counters (include/port/prof.h): SH1_PROF=1.
+    prof = ["-DSH_PORT_PROF"] if os.environ.get("SH1_PROF") else []
     for src in sorted(glob.glob("src/port/*.c")):
         obj = os.path.join(OUT, "port", os.path.basename(src) + ".o")
         os.makedirs(os.path.dirname(obj), exist_ok=True)
-        run([CC, "-c", *PORT_CFLAGS, "-DSH_PORT_GPU=%d" % gpu, src, "-o", obj])
+        run([CC, "-c", *PORT_CFLAGS, *prof, "-DSH_PORT_GPU=%d" % gpu, src, "-o", obj])
         port_objs.append(obj)
     # PS2-side HAL code (src/port/ps2/): compiled against ps2sdk's headers, not the game's.
     for src in sorted(glob.glob("src/port/ps2/*.c")):
@@ -159,7 +161,7 @@ def main():
         run(["tools/port/recomp_all.sh"])
     recomp_objs = []
     for src in sorted(glob.glob(OUT + "/recomp/*.c")):
-        run([CC, "-c", "-O2", "-G0", "-std=gnu89", "-fno-builtin", "-nostdinc", "-Iinclude", src, "-o", src[:-2] + ".o"])
+        run([CC, "-c", "-O2", "-G0", "-std=gnu89", "-fno-builtin", "-nostdinc", "-Iinclude", *prof, src, "-o", src[:-2] + ".o"])
         run([CC, "-c", "-G0", src[:-2] + ".data.s", "-o", src[:-2] + ".data.o"])
         recomp_objs += [src[:-2] + ".o", src[:-2] + ".data.o"]
     # As an archive: only the recompiled objects something references are linked.

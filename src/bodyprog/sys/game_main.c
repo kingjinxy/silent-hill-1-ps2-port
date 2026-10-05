@@ -1,5 +1,7 @@
 #include "game.h"
 
+#include "port/prof.h"
+
 #include <psyq/libetc.h>
 
 #include "bodyprog/bodyprog.h"
@@ -194,7 +196,9 @@ void MainLoop(void) // 0x80032EE0
         g_SysWork.bgmStatusFlags = BgmStatusFlag_None;
 
         // Call update function for current game state.
+        PROF_BEGIN("MainLoop: game state update")
         g_GameStateUpdateFuncs[g_GameWork.gameState]();
+        PROF_END("MainLoop: game state update")
 
         Demo_Update();
         Demo_GameRandSeedSet();
@@ -205,6 +209,7 @@ void MainLoop(void) // 0x80032EE0
             continue;
         }
 
+        PROF_BEGIN("MainLoop: fade, memory card, sound, files, pad, camera")
         Screen_FadeUpdate();
         MemCard_Update();
 
@@ -217,6 +222,7 @@ void MainLoop(void) // 0x80032EE0
 
         func_80089128();
         func_8008D78C(); // Camera update?
+        PROF_END("MainLoop: fade, memory card, sound, files, pad, camera")
         DrawSync(SyncMode_Wait);
 
         // Handle V sync.
@@ -228,6 +234,9 @@ void MainLoop(void) // 0x80032EE0
             Demo_PresentIntervalUpdate();
 
             interval      = g_Demo_VideoPresentInterval;
+#if defined(SH_PORT) && defined(SH_PORT_BENCH)
+            interval = 1; // Port benchmark (`SH1_BENCH=1`): demo at one frame per vertical blank (desyncs).
+#endif
             g_PrevVBlanks = vBlanks;
 
             if (interval < g_IntervalVBlanks)
@@ -292,10 +301,12 @@ void MainLoop(void) // 0x80032EE0
         GsClearVcount();
 
         // Draw objects?
+        PROF_BEGIN("MainLoop: swap and draw")
         GsSwapDispBuff();
         GsSortClear(g_GameWork.background2dColor.r, g_GameWork.background2dColor.g, g_GameWork.background2dColor.b, &g_OrderingTable0[g_ActiveBufferIdx]);
         GsDrawOt(&g_OrderingTable0[g_ActiveBufferIdx]);
         GsDrawOt(&g_OrderingTable2[g_ActiveBufferIdx]);
+        PROF_END("MainLoop: swap and draw")
     }
 
     #undef TICKS_PER_SECOND_MIN

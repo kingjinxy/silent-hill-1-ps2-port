@@ -849,3 +849,21 @@ texture page cache at 0x200000). The PS1 features map onto GS state almost direc
   counter: a frame is 14.8 M cycles (3 fields), the GS translation of its ordering tables ~1.8 M,
   and the EE waits in VSync for over half of the time, so normal gameplay (2 fields, 30 fps) has
   room to spare.
+
+### 60 fps: option and first profile
+
+- The GameShark 60 fps code (`A70A8FF0 00020001`) changes `g_IntervalVBlanks` from 2 to 1 (DuckStation
+  code type A7: 16-bit write if equal). Its second line (`A70AB38C`) points into `gSDXATable` in this
+  version, probably for another revision. `SH1_FPS=60` (`tools/port/ee_compile_check.sh`) makes
+  gameplay set 1 instead of 2; menus already run at 1.
+- `SH1_BENCH=1` also runs the attract demo at one frame per vertical blank (it desyncs, but renders
+  the same town): at real-time speed, 30-60 fps depending on the view (frames that don't fit one
+  field drop to 30).
+- `SH1_PROF=1`: named cycle counters (include/port/prof.h, src/port/prof.c) around the main loop's
+  parts, `DrawOTag`, each GTE command and every recompiled library entry point; reported every 120
+  frames. Off by default (the macros are empty).
+- First profile (demo scene, kcycles per frame; a field is 4,900): game state update 3,150, of which
+  GTE commands ~1,970 (RTPT ~1,930 cycles per call, RTPS ~710, MVMVA ~540, DPCS ~500, NCLIP ~140);
+  swap and draw 1,280 (the GS translation of the ordering tables); total ~4,400. The software GTE is
+  written for bit-exactness (64-bit MACs with an overflow check after each addition, matrices
+  unpacked per call): RTPS is ~850 instructions.
