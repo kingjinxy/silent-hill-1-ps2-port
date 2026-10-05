@@ -113,6 +113,46 @@ static void gte_test_inputs(int c, int t, unsigned int data[32], unsigned int ct
     ctrl[28] = (unsigned int)gte_rand_range(0x2000000);   /* DQB */
     ctrl[29] = (unsigned int)gte_rand_range(0x1000);      /* ZSF3 */
     ctrl[30] = (unsigned int)gte_rand_range(0x1000);      /* ZSF4 */
+    if ((t & 3) == 2)
+    {
+        /* Game-like: values a 3D scene uses, where nothing saturates (the port's fast paths). */
+        for (i = 0; i < 3; i++)
+        {
+            data[i * 2]     = gte_rand_pair(0x200);
+            data[i * 2 + 1] = (unsigned int)gte_rand_range(0x200);
+        }
+        for (i = 0; i < 5; i++)
+        {
+            ctrl[i]      = gte_rand_pair(0x800);
+            ctrl[8 + i]  = gte_rand_pair(0x800);
+            ctrl[16 + i] = gte_rand_pair(0x800);
+        }
+        ctrl[5]  = (unsigned int)gte_rand_range(0x400);       /* TRX, TRY */
+        ctrl[6]  = (unsigned int)gte_rand_range(0x400);
+        ctrl[7]  = 0x1000 + gte_rng() % 0x2000;               /* TRZ */
+        for (i = 13; i < 16; i++)
+        {
+            ctrl[i] = (unsigned int)gte_rand_range(0x800);    /* BK */
+        }
+        for (i = 21; i < 24; i++)
+        {
+            ctrl[i] = (unsigned int)(gte_rng() % 0x100);      /* FC */
+        }
+        ctrl[24] = (unsigned int)(160 << 16) + (unsigned int)gte_rand_range(0x10000);
+        ctrl[25] = (unsigned int)(112 << 16) + (unsigned int)gte_rand_range(0x10000);
+        ctrl[27] = (unsigned int)gte_rand_range(0x100);       /* DQA */
+        ctrl[28] = gte_rng() % 0x800000;                      /* DQB */
+        ctrl[29] = 0x155;                                     /* ZSF3, ZSF4 as libgte sets them */
+        ctrl[30] = 0x100;
+        for (i = 9; i < 12; i++)
+        {
+            data[i] = (unsigned int)gte_rand_range(0x800);    /* IR1-3 */
+        }
+        for (i = 16; i < 20; i++)
+        {
+            data[i] = 0x100 + gte_rng() % 0x2000;             /* SZ0-3 */
+        }
+    }
 }
 
 /* Data registers written as inputs (skips SXYP, IRGB, ORGB, LZCR, which alias others). */

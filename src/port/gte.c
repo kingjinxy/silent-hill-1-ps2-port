@@ -4,6 +4,7 @@
  * quoted in comments where a detail is non-obvious.
  */
 
+#define GTE_IMPLEMENTATION
 #include "port/gte.h"
 
 /* No <stdint.h>: the port build uses -nostdinc. int is 32-bit and long long 64-bit on both the EE
@@ -52,8 +53,23 @@ enum
 #define F_IR0      (1u << 12)
 #define F_ERROR_MASK 0x7F87E000u /* bits 30-23 and 18-13 feed bit 31 */
 
-static u32 d[32];
-static u32 c[32];
+u32 g_GteData[32];
+u32 g_GteCtrl[32];
+#define d g_GteData
+#define c g_GteCtrl
+
+/* Speed-ups (results unchanged; tools/port/gte_test checks every register on the host and the EE):
+ *  - The rotation, light and light-colour matrices, unpacked from RT/LLM/LCM when written.
+ *  - s_Small: TR, BK and FC are all within +-2^30. Then no 44-bit MAC check can trigger: every
+ *    other operand is 16-bit (products below 2^30), so sums stay below 2^43; mac44() skips its
+ *    checks (s_FastMac, per command: not for GPF/GPL, which add a shifted 32-bit MAC). */
+static s32 m_rt[9], m_llm[9], m_lcm[9];
+#ifdef _EE
+/* RT for MMI (rt_dot3): [r00 r01 r02 0 r10 r11 r12 0], [r20 r21 r22 0 0 0 0 0]. */
+static s16 m_rt_mmi[16] __attribute__((aligned(16)));
+#endif
+static int s_Small = 1;
+static int s_FastMac;
 
 /* Unsigned Newton-Raphson reciprocal table ("GTE Division Inaccuracy"). */
 static u8   unr_table[0x101];
@@ -70,6 +86,48 @@ static void unr_init(void)
     unr_ready = 1;
 }
 
+static void unpack_matrix(int base, s32* m)
+{
+    m[0] = (s16)(c[base + 0] & 0xFFFF); m[1] = (s16)(c[base + 0] >> 16);
+    m[2] = (s16)(c[base + 1] & 0xFFFF); m[3] = (s16)(c[base + 1] >> 16);
+    m[4] = (s16)(c[base + 2] & 0xFFFF); m[5] = (s16)(c[base + 2] >> 16);
+    m[6] = (s16)(c[base + 3] & 0xFFFF); m[7] = (s16)(c[base + 3] >> 16);
+    m[8] = (s16)(c[base + 4] & 0xFFFF);
+}
+
+static int small30(u32 v)
+{
+    return (s32)v >= -0x40000000 && (s32)v < 0x40000000;
+}
+
+/** Keeps the unpacked matrices and s_Small in step with a control register write. */
+static void ctrl_written(unsigned int reg)
+{
+    if (reg <= C_RT4)
+    {
+        unpack_matrix(C_RT0, m_rt);
+#ifdef _EE
+        m_rt_mmi[0] = (s16)m_rt[0]; m_rt_mmi[1] = (s16)m_rt[1]; m_rt_mmi[2]  = (s16)m_rt[2];
+        m_rt_mmi[4] = (s16)m_rt[3]; m_rt_mmi[5] = (s16)m_rt[4]; m_rt_mmi[6]  = (s16)m_rt[5];
+        m_rt_mmi[8] = (s16)m_rt[6]; m_rt_mmi[9] = (s16)m_rt[7]; m_rt_mmi[10] = (s16)m_rt[8];
+#endif
+    }
+    else if (reg >= C_LLM0 && reg <= C_LLM4)
+    {
+        unpack_matrix(C_LLM0, m_llm);
+    }
+    else if (reg >= C_LCM0 && reg <= C_LCM4)
+    {
+        unpack_matrix(C_LCM0, m_lcm);
+    }
+    else if ((reg >= C_TRX && reg <= C_TRZ) || (reg >= C_RBK && reg <= C_BBK) || (reg >= C_RFC && reg <= C_BFC))
+    {
+        s_Small = small30(c[C_TRX]) && small30(c[C_TRY]) && small30(c[C_TRZ]) && small30(c[C_RBK]) &&
+                  small30(c[C_GBK]) && small30(c[C_BBK]) && small30(c[C_RFC]) && small30(c[C_GFC]) &&
+                  small30(c[C_BFC]);
+    }
+}
+
 void Gte_Reset(void)
 {
     int i;
@@ -78,6 +136,11 @@ void Gte_Reset(void)
         d[i] = 0;
         c[i] = 0;
     }
+    for (i = 0; i < 9; i++)
+    {
+        m_rt[i] = m_llm[i] = m_lcm[i] = 0;
+    }
+    s_Small = 1;
 }
 
 /* ----------------------------------------------------------------------------------------------
@@ -204,6 +267,7 @@ void Gte_CtrlWrite(unsigned int reg, unsigned int value)
             c[reg] = value;
             break;
     }
+    ctrl_written(reg);
 }
 
 unsigned int Gte_CtrlRead(unsigned int reg)
@@ -224,7 +288,10 @@ static u32 flag;
 
 /** 44-bit MAC accumulation: flags overflow of MACn (n=1..3) and wraps to 44 bits, as the hardware does
  * after each addition. */
-static s64 mac44(int n, s64 v)
+static s64 mac44_checked(int n, s64 v) __attribute__((noinline));
+#define mac44(n, v) (s_FastMac ? (s64)(v) : mac44_checked((n), (v)))
+
+static s64 mac44_checked(int n, s64 v)
 {
     if (v > 0x7FFFFFFFFFFLL)
     {
@@ -343,11 +410,10 @@ static void push_sxy(s32 x, s32 y)
 /* Matrices as 3x3 s16 from three consecutive control register blocks (RT, LLM, LCM). */
 static void get_matrix(int base, s32 m[3][3])
 {
-    m[0][0] = lo16(c[base + 0]); m[0][1] = hi16(c[base + 0]);
-    m[0][2] = lo16(c[base + 1]); m[1][0] = hi16(c[base + 1]);
-    m[1][1] = lo16(c[base + 2]); m[1][2] = hi16(c[base + 2]);
-    m[2][0] = lo16(c[base + 3]); m[2][1] = hi16(c[base + 3]);
-    m[2][2] = lo16(c[base + 4]);
+    const s32* src = base == C_RT0 ? m_rt : base == C_LLM0 ? m_llm : m_lcm;
+    m[0][0] = src[0]; m[0][1] = src[1]; m[0][2] = src[2];
+    m[1][0] = src[3]; m[1][1] = src[4]; m[1][2] = src[5];
+    m[2][0] = src[6]; m[2][1] = src[7]; m[2][2] = src[8];
 }
 
 static void get_vector(int v, s32 out[3])
@@ -384,6 +450,19 @@ static void mul_mat_vec(const s32 m[3][3], const s32 v[3], const s64 t[3], int s
     ir_from_mac(lm);
 }
 
+/** Leading zero count of a nonzero value below 2^31. */
+static u32 clz32(u32 v)
+{
+#ifdef _EE
+    u64 r;
+    /* MMI PLZCW: leading bits equal to the sign bit, minus one (per 32-bit half). */
+    __asm__("plzcw %0, %1" : "=r"(r) : "r"((u64)v));
+    return (u32)(r & 0xFFFFFFFF) + 1;
+#else
+    return (u32)__builtin_clz(v);
+#endif
+}
+
 /* UNR division for RTPS/RTPT: (((H*20000h/SZ3)+1)/2), saturated to 1FFFFh. */
 static u32 gte_divide(u32 h, u32 sz3)
 {
@@ -391,10 +470,7 @@ static u32 gte_divide(u32 h, u32 sz3)
     {
         u32 z = 0, n, dd, u;
         u64 r;
-        while (z < 16 && !(sz3 & (0x8000u >> z)))
-        {
-            z++;
-        }
+        z = clz32(sz3) - 16; /* sz3 is 1..FFFFh here */
         n  = h << z;
         dd = sz3 << z;
         u  = unr_table[(dd - 0x7FC0) >> 7] + 0x101;
@@ -411,18 +487,30 @@ static u32 gte_divide(u32 h, u32 sz3)
  * Commands
  * --------------------------------------------------------------------------------------------*/
 
-static void rtp(int v, int sf, int lm, int last)
+static __attribute__((noinline)) void rtp(int v, int sf, int lm, int last)
 {
     s32 rt[3][3], vec[3];
     s64 m1, m2, m3, mac0;
     s32 sx, sy;
-    u32 n;
+    u32 n; /* at most 1FFFFh: products are done as s32 x s32 (one MULT on the EE, no 64-bit multiply) */
 
-    get_matrix(C_RT0, rt);
-    get_vector(v, vec);
-    m1 = mat_row(1, (s32)c[C_TRX], rt[0], vec);
-    m2 = mat_row(2, (s32)c[C_TRY], rt[1], vec);
-    m3 = mat_row(3, (s32)c[C_TRZ], rt[2], vec);
+    if (s_FastMac)
+    {
+        /* No 44-bit check can trigger (s_Small): plain sums, matrix from the cache. Products are
+         * s16 x s16 (one 32-bit MULT each). */
+        s32 vx = lo16(d[D_VXY0 + v * 2]), vy = hi16(d[D_VXY0 + v * 2]), vz = lo16(d[D_VZ0 + v * 2]);
+        m1 = ((s64)(s32)c[C_TRX] << 12) + (s64)(m_rt[0] * vx) + (s64)(m_rt[1] * vy) + (s64)(m_rt[2] * vz);
+        m2 = ((s64)(s32)c[C_TRY] << 12) + (s64)(m_rt[3] * vx) + (s64)(m_rt[4] * vy) + (s64)(m_rt[5] * vz);
+        m3 = ((s64)(s32)c[C_TRZ] << 12) + (s64)(m_rt[6] * vx) + (s64)(m_rt[7] * vy) + (s64)(m_rt[8] * vz);
+    }
+    else
+    {
+        get_matrix(C_RT0, rt);
+        get_vector(v, vec);
+        m1 = mat_row(1, (s32)c[C_TRX], rt[0], vec);
+        m2 = mat_row(2, (s32)c[C_TRY], rt[1], vec);
+        m3 = mat_row(3, (s32)c[C_TRZ], rt[2], vec);
+    }
     set_mac123(m1, m2, m3, sf);
 
     d[D_IR1] = (u32)sat_ir(1, (s32)d[D_MAC1], lm);
@@ -443,13 +531,13 @@ static void rtp(int v, int sf, int lm, int last)
 
     n = gte_divide(c[C_H] & 0xFFFF, d[D_SZ3]);
 
-    mac0      = mac0_check((s64)n * (s16)d[D_IR1] + (s32)c[C_OFX]);
+    mac0      = mac0_check((s64)(s32)n * (s16)d[D_IR1] + (s32)c[C_OFX]);
     d[D_MAC0] = (u32)(s32)mac0;
     sx        = (s32)(mac0 >> 16);
     if (sx < -0x400) { sx = -0x400; flag |= F_SX2; }
     if (sx > 0x3FF)  { sx = 0x3FF;  flag |= F_SX2; }
 
-    mac0      = mac0_check((s64)n * (s16)d[D_IR2] + (s32)c[C_OFY]);
+    mac0      = mac0_check((s64)(s32)n * (s16)d[D_IR2] + (s32)c[C_OFY]);
     d[D_MAC0] = (u32)(s32)mac0;
     sy        = (s32)(mac0 >> 16);
     if (sy < -0x400) { sy = -0x400; flag |= F_SY2; }
@@ -459,7 +547,7 @@ static void rtp(int v, int sf, int lm, int last)
     if (last)
     {
         s64 ir0;
-        mac0       = mac0_check((s64)n * (s16)c[C_DQA] + (s32)c[C_DQB]);
+        mac0       = mac0_check((s64)(s32)n * (s16)c[C_DQA] + (s32)c[C_DQB]);
         d[D_MAC0]  = (u32)(s32)mac0;
         ir0        = mac0 >> 12;
         if (ir0 < 0)      { ir0 = 0;      flag |= F_IR0; }
@@ -468,16 +556,230 @@ static void rtp(int v, int sf, int lm, int last)
     }
 }
 
-static void nclip(void)
+/** RTPS/RTPT for one vertex, when nothing saturates or overflows: computed in registers, committed
+ * only if every result is in range (FLAG stays 0, MAC/IR/FIFOs exactly as rtp() would leave them).
+ * Returns 0 without changing any register otherwise, and rtp() then does the full work. */
+#ifdef _EE
+/** RT * V with MMI: PHMADH gives the sums of adjacent products ([r0 r1 r2 0] . [vx vy vz 0] as
+ * r0*vx + r1*vy, r2*vz + 0), exact while no pair sum reaches 2^31 (only possible with vx or vy
+ * = -8000h: the caller checks). */
+static void rt_dot3(u32 vxy, u32 vz, s64 out[3])
 {
-    s64 sx0 = lo16(d[D_SXY0]), sy0 = hi16(d[D_SXY0]);
-    s64 sx1 = lo16(d[D_SXY1]), sy1 = hi16(d[D_SXY1]);
-    s64 sx2 = lo16(d[D_SXY2]), sy2 = hi16(d[D_SXY2]);
-    s64 v   = sx0 * sy1 + sx1 * sy2 + sx2 * sy0 - sx0 * sy2 - sx1 * sy0 - sx2 * sy1;
+    static u64 vbuf[2] __attribute__((aligned(16)));
+    s32        r[8] __attribute__((aligned(16)));
+    u64        x = (u64)vxy | ((u64)(vz & 0xFFFF) << 32);
+    vbuf[0] = x;
+    vbuf[1] = x;
+    __asm__ volatile("lq $8, 0(%1)\n\t"
+                     "lq $9, 0(%2)\n\t"
+                     "lq $10, 16(%2)\n\t"
+                     "phmadh $11, $9, $8\n\t"
+                     "phmadh $12, $10, $8\n\t"
+                     "sq $11, 0(%0)\n\t"
+                     "sq $12, 16(%0)"
+                     :
+                     : "r"(r), "r"(vbuf), "r"(m_rt_mmi)
+                     : "$8", "$9", "$10", "$11", "$12", "hi", "lo", "memory");
+    out[0] = (s64)r[0] + r[1];
+    out[1] = (s64)r[2] + r[3];
+    out[2] = (s64)r[4] + r[5];
+}
+#endif
+
+static __attribute__((noinline)) int rtp_fast(int v, int sf, int lm, int last)
+{
+    s32 vx = (s16)(d[D_VXY0 + v * 2] & 0xFFFF);
+    s32 vy = (s16)(d[D_VXY0 + v * 2] >> 16);
+    s32 vz = (s16)(d[D_VZ0 + v * 2] & 0xFFFF);
+    s64 m1, m2, m3;
+    s32 mac1, mac2, mac3, sz, lo, mx, my, ir0 = 0;
+    s64 mac0x, mac0y, mac0z = 0;
+    u32 n, h, z, nn, dd, u;
+
+    if (!s_Small)
+    {
+        return 0;
+    }
+    /* TR * 1000h + RT * V: below 2^43, no 44-bit overflow (s_Small). Products are s16 x s16. */
+#ifdef _EE
+    if (vx != -0x8000 && vy != -0x8000)
+    {
+        s64 p[3];
+        rt_dot3(d[D_VXY0 + v * 2], d[D_VZ0 + v * 2], p);
+        m1 = ((s64)(s32)c[C_TRX] << 12) + p[0];
+        m2 = ((s64)(s32)c[C_TRY] << 12) + p[1];
+        m3 = ((s64)(s32)c[C_TRZ] << 12) + p[2];
+    }
+    else
+#endif
+    {
+        m1 = ((s64)(s32)c[C_TRX] << 12) + (s64)(m_rt[0] * vx) + (s64)(m_rt[1] * vy) + (s64)(m_rt[2] * vz);
+        m2 = ((s64)(s32)c[C_TRY] << 12) + (s64)(m_rt[3] * vx) + (s64)(m_rt[4] * vy) + (s64)(m_rt[5] * vz);
+        m3 = ((s64)(s32)c[C_TRZ] << 12) + (s64)(m_rt[6] * vx) + (s64)(m_rt[7] * vy) + (s64)(m_rt[8] * vz);
+    }
+    mac1 = (s32)(sf ? m1 >> 12 : m1);
+    mac2 = (s32)(sf ? m2 >> 12 : m2);
+    mac3 = (s32)(sf ? m3 >> 12 : m3);
+    lo   = lm ? 0 : -0x8000;
+    if (mac1 < lo || mac1 > 0x7FFF || mac2 < lo || mac2 > 0x7FFF || mac3 < lo || mac3 > 0x7FFF)
+    {
+        return 0; /* IR saturation */
+    }
+    sz = (s32)(m3 >> 12);
+    if (sz < 0 || sz > 0x7FFF)
+    {
+        return 0; /* IR3 flag check (as lm=0) or SZ saturation */
+    }
+    h = c[C_H] & 0xFFFF;
+    if (h >= (u32)sz * 2)
+    {
+        return 0; /* divide overflow */
+    }
+    z  = clz32((u32)sz) - 16;
+    nn = h << z;
+    dd = (u32)sz << z;
+    u  = unr_table[(dd - 0x7FC0) >> 7] + 0x101;
+    dd = (0x2000080u - (dd * u)) >> 8;
+    dd = (0x0000080u + (dd * u)) >> 8;
+    {
+        u64 r = (((u64)nn * dd) + 0x8000) >> 16;
+        n     = r > 0x1FFFF ? 0x1FFFF : (u32)r;
+    }
+    mac0x = (s64)(s32)n * mac1 + (s32)c[C_OFX];
+    mac0y = (s64)(s32)n * mac2 + (s32)c[C_OFY];
+    if (mac0x != (s32)mac0x || mac0y != (s32)mac0y)
+    {
+        return 0; /* MAC0 overflow */
+    }
+    mx = (s32)(mac0x >> 16);
+    my = (s32)(mac0y >> 16);
+    if (mx < -0x400 || mx > 0x3FF || my < -0x400 || my > 0x3FF)
+    {
+        return 0; /* SX2/SY2 saturation */
+    }
+    if (last)
+    {
+        mac0z = (s64)(s32)n * (s16)c[C_DQA] + (s32)c[C_DQB];
+        if (mac0z != (s32)mac0z)
+        {
+            return 0;
+        }
+        ir0 = (s32)(mac0z >> 12);
+        if (ir0 < 0 || ir0 > 0x1000)
+        {
+            return 0;
+        }
+    }
+
+    /* Commit (same register updates as rtp()). */
+    d[D_MAC1] = (u32)mac1;
+    d[D_MAC2] = (u32)mac2;
+    d[D_MAC3] = (u32)mac3;
+    d[D_IR1]  = (u32)mac1;
+    d[D_IR2]  = (u32)mac2;
+    d[D_IR3]  = (u32)mac3;
+    d[D_SZ0]  = d[D_SZ1];
+    d[D_SZ1]  = d[D_SZ2];
+    d[D_SZ2]  = d[D_SZ3];
+    d[D_SZ3]  = (u32)sz;
+    d[D_SXY0] = d[D_SXY1];
+    d[D_SXY1] = d[D_SXY2];
+    d[D_SXY2] = ((u32)mx & 0xFFFF) | ((u32)my << 16);
+    d[D_MAC0] = (u32)(s32)(last ? mac0z : mac0y);
+    if (last)
+    {
+        d[D_IR0] = (u32)ir0;
+    }
+    return 1;
+}
+
+/** DPCS from `rgb` when nothing saturates (see rtp_fast): MAC = RGB*10000h + (FC*1000h - RGB*10000h)
+ * * IR0, then the colour FIFO. Returns 0 without changing any register otherwise. */
+static __attribute__((noinline)) int dpcs_fast(u32 rgb, int sf, int lm)
+{
+    s32 mac[3], col[3], i, lo = lm ? 0 : -0x8000;
+    s32 ir0 = (s16)d[D_IR0];
+    if (!s_Small)
+    {
+        return 0;
+    }
+    for (i = 0; i < 3; i++)
+    {
+        s32 m0 = (s32)((rgb >> (i * 8)) & 0xFF) << 16;
+        s64 t  = ((s64)(s32)c[C_RFC + i] << 12) - m0;
+        s32 tv = (s32)(sf ? t >> 12 : t);
+        s64 m;
+        if (tv < -0x8000 || tv > 0x7FFF)
+        {
+            return 0;
+        }
+        m      = (s64)(tv * ir0) + m0;
+        mac[i] = (s32)(sf ? m >> 12 : m);
+        if (mac[i] < lo || mac[i] > 0x7FFF)
+        {
+            return 0;
+        }
+        col[i] = mac[i] >> 4;
+        if (col[i] < 0 || col[i] > 0xFF)
+        {
+            return 0;
+        }
+    }
+    d[D_MAC1] = d[D_IR1] = (u32)mac[0];
+    d[D_MAC2] = d[D_IR2] = (u32)mac[1];
+    d[D_MAC3] = d[D_IR3] = (u32)mac[2];
+    d[D_RGB0] = d[D_RGB1];
+    d[D_RGB1] = d[D_RGB2];
+    d[D_RGB2] = (u32)col[0] | ((u32)col[1] << 8) | ((u32)col[2] << 16) | (d[D_RGBC] & 0xFF000000u);
+    return 1;
+}
+
+/** MVMVA with matrix RT/LLM/LCM and translation TR/BK/none when nothing saturates (see rtp_fast).
+ * Returns 0 without changing any register otherwise (and for the garbage matrix and the FC bug). */
+static __attribute__((noinline)) int mvmva_fast(int sf, int mx, int v, int cv, int lm)
+{
+    const s32* m = mx == 0 ? m_rt : mx == 1 ? m_llm : m_lcm;
+    s32 vx, vy, vz, mac[3], i, lo = lm ? 0 : -0x8000;
+    if (!s_Small || mx == 3 || cv == 2)
+    {
+        return 0;
+    }
+    if (v == 3)
+    {
+        vx = (s16)d[D_IR1]; vy = (s16)d[D_IR2]; vz = (s16)d[D_IR3];
+    }
+    else
+    {
+        vx = lo16(d[D_VXY0 + v * 2]); vy = hi16(d[D_VXY0 + v * 2]); vz = lo16(d[D_VZ0 + v * 2]);
+    }
+    for (i = 0; i < 3; i++)
+    {
+        s64 t = cv == 0 ? (s64)(s32)c[C_TRX + i] << 12 : cv == 1 ? (s64)(s32)c[C_RBK + i] << 12 : 0;
+        s64 r = t + (s64)(m[i * 3] * vx) + (s64)(m[i * 3 + 1] * vy) + (s64)(m[i * 3 + 2] * vz);
+        mac[i] = (s32)(sf ? r >> 12 : r);
+        if (mac[i] < lo || mac[i] > 0x7FFF)
+        {
+            return 0;
+        }
+    }
+    d[D_MAC1] = d[D_IR1] = (u32)mac[0];
+    d[D_MAC2] = d[D_IR2] = (u32)mac[1];
+    d[D_MAC3] = d[D_IR3] = (u32)mac[2];
+    return 1;
+}
+
+static __attribute__((noinline)) void nclip(void)
+{
+    s32 sx0 = lo16(d[D_SXY0]), sy0 = hi16(d[D_SXY0]);
+    s32 sx1 = lo16(d[D_SXY1]), sy1 = hi16(d[D_SXY1]);
+    s32 sx2 = lo16(d[D_SXY2]), sy2 = hi16(d[D_SXY2]);
+    /* Products of 16-bit values fit 32 bits (one MULT each); the sum needs 64. */
+    s64 v = (s64)(sx0 * sy1) + (s64)(sx1 * sy2) + (s64)(sx2 * sy0) - (s64)(sx0 * sy2) - (s64)(sx1 * sy0) -
+            (s64)(sx2 * sy1);
     d[D_MAC0] = (u32)(s32)mac0_check(v);
 }
 
-static void avsz(int four)
+static __attribute__((noinline)) void avsz(int four)
 {
     s64 sum = (s64)d[D_SZ1] + d[D_SZ2] + d[D_SZ3];
     s64 v;
@@ -485,12 +787,12 @@ static void avsz(int four)
     {
         sum += d[D_SZ0];
     }
-    v         = mac0_check((s64)(s16)c[four ? C_ZSF4 : C_ZSF3] * sum);
+    v         = mac0_check((s64)(s16)c[four ? C_ZSF4 : C_ZSF3] * (s32)sum); /* sum <= 4 * FFFFh */
     d[D_MAC0] = (u32)(s32)v;
     d[D_OTZ]  = sat_sz(v >> 12);
 }
 
-static void op(int sf, int lm)
+static __attribute__((noinline)) void op(int sf, int lm)
 {
     s64 d1 = lo16(c[C_RT0]), d2 = lo16(c[C_RT2]), d3 = lo16(c[C_RT4]);
     s64 i1 = (s16)d[D_IR1], i2 = (s16)d[D_IR2], i3 = (s16)d[D_IR3];
@@ -501,14 +803,14 @@ static void op(int sf, int lm)
     ir_from_mac(lm);
 }
 
-static void sqr(int sf, int lm)
+static __attribute__((noinline)) void sqr(int sf, int lm)
 {
     s64 i1 = (s16)d[D_IR1], i2 = (s16)d[D_IR2], i3 = (s16)d[D_IR3];
     set_mac123(mac44(1, i1 * i1), mac44(2, i2 * i2), mac44(3, i3 * i3), sf);
     ir_from_mac(lm);
 }
 
-static void mvmva(int sf, int mx, int v, int cv, int lm)
+static __attribute__((noinline)) void mvmva(int sf, int mx, int v, int cv, int lm)
 {
     s32 m[3][3], vec[3];
     s64 t[3] = { 0, 0, 0 };
@@ -593,7 +895,7 @@ static void interp_fc(s64 m[3], int sf, int lm)
 
 /** Color stage shared by NCx/CC/CDP/DCPL/DPCx/INTPL: from the light color result in IR1-3 to the
  * color FIFO. mode: 0 = plain (NCS/NCT), 1 = color (NCCx/CC), 2 = color + depth cue (NCDx/CDP). */
-static void color_stage(int mode, int sf, int lm)
+static __attribute__((noinline)) void color_stage(int mode, int sf, int lm)
 {
     if (mode == 0)
     {
@@ -620,7 +922,7 @@ static void color_stage(int mode, int sf, int lm)
 }
 
 /** (BK*1000h + LCM*IR) SAR sf*12 into MAC/IR. */
-static void light_color(int sf, int lm)
+static __attribute__((noinline)) void light_color(int sf, int lm)
 {
     s32 lcm[3][3], ir[3];
     s64 bk[3];
@@ -630,7 +932,7 @@ static void light_color(int sf, int lm)
     mul_mat_vec(lcm, ir, bk, sf, lm);
 }
 
-static void normal_color(int v, int mode, int sf, int lm)
+static __attribute__((noinline)) void normal_color(int v, int mode, int sf, int lm)
 {
     s32 llm[3][3], vec[3];
     s64 zero[3] = { 0, 0, 0 };
@@ -642,13 +944,13 @@ static void normal_color(int v, int mode, int sf, int lm)
 }
 
 /** DPCS/DPCT/INTPL/DCPL: start values, then MAC + (FC - MAC) * IR0, then FIFO. */
-static void depth_cue_from(s64 m[3], int sf, int lm)
+static __attribute__((noinline)) void depth_cue_from(s64 m[3], int sf, int lm)
 {
     interp_fc(m, sf, lm);
     push_color();
 }
 
-static void dpcs_rgb(u32 rgb, int sf, int lm)
+static __attribute__((noinline)) void dpcs_rgb(u32 rgb, int sf, int lm)
 {
     s64 m[3];
     m[0] = mac44(1, (s64)(rgb & 0xFF) << 16);
@@ -657,7 +959,7 @@ static void dpcs_rgb(u32 rgb, int sf, int lm)
     depth_cue_from(m, sf, lm);
 }
 
-static void gpf_gpl(int base, int sf, int lm)
+static __attribute__((noinline)) void gpf_gpl(int base, int sf, int lm)
 {
     s64 m[3];
     s64 ir0 = (s16)d[D_IR0];
@@ -715,15 +1017,24 @@ void Gte_Command(unsigned int cmd)
     {
         unr_init();
     }
-    flag = 0;
+    flag      = 0;
+    s_FastMac = s_Small && (cmd & 0x3F) != 0x3D && (cmd & 0x3F) != 0x3E;
 
     switch (cmd & 0x3F)
     {
-        case 0x01: rtp(0, sf, lm, 1); break;                                  /* RTPS */
-        case 0x30: rtp(0, sf, lm, 0); rtp(1, sf, lm, 0); rtp(2, sf, lm, 1); break; /* RTPT */
+        case 0x01:                                                            /* RTPS */
+            if (!rtp_fast(0, sf, lm, 1)) rtp(0, sf, lm, 1);
+            break;
+        case 0x30:                                                            /* RTPT */
+            if (!rtp_fast(0, sf, lm, 0)) rtp(0, sf, lm, 0);
+            if (!rtp_fast(1, sf, lm, 0)) rtp(1, sf, lm, 0);
+            if (!rtp_fast(2, sf, lm, 1)) rtp(2, sf, lm, 1);
+            break;
         case 0x06: nclip(); break;                                            /* NCLIP */
         case 0x0C: op(sf, lm); break;                                         /* OP */
-        case 0x10: dpcs_rgb(d[D_RGBC], sf, lm); break;                        /* DPCS */
+        case 0x10:                                                            /* DPCS */
+            if (!dpcs_fast(d[D_RGBC], sf, lm)) dpcs_rgb(d[D_RGBC], sf, lm);
+            break;
         case 0x11:                                                            /* INTPL */
         {
             s64 m[3];
@@ -733,7 +1044,9 @@ void Gte_Command(unsigned int cmd)
             depth_cue_from(m, sf, lm);
             break;
         }
-        case 0x12: mvmva(sf, mx, v, cv, lm); break;                           /* MVMVA */
+        case 0x12:                                                            /* MVMVA */
+            if (!mvmva_fast(sf, mx, v, cv, lm)) mvmva(sf, mx, v, cv, lm);
+            break;
         case 0x13: normal_color(0, 2, sf, lm); break;                         /* NCDS */
         case 0x14: light_color(sf, lm); color_stage(2, sf, lm); break;        /* CDP */
         case 0x16:                                                            /* NCDT */

@@ -30,4 +30,81 @@ void Gte_Command(unsigned int cmd);
 /** @brief Resets all GTE registers to zero. */
 void Gte_Reset(void);
 
+/* Register moves inlined at their call sites (the game's GTE macros always name a constant register,
+ * so a plain register becomes one load or store): the GTE's register files, and wrappers that fall
+ * back to the functions above for registers with side effects. gte.c (GTE_IMPLEMENTATION) defines
+ * the functions themselves. */
+extern unsigned int g_GteData[32];
+extern unsigned int g_GteCtrl[32];
+
+#ifndef GTE_IMPLEMENTATION
+
+static inline void Gte_DataWriteInline(unsigned int reg, unsigned int value)
+{
+    switch (reg)
+    {
+        case 0: case 2: case 4: case 6: case 12: case 13: case 14: /* VXYn, RGBC, SXYn */
+        case 20: case 21: case 22: case 23: case 24: case 25: case 26: case 27: /* RGBn, RES1, MACn */
+            g_GteData[reg] = value;
+            break;
+        case 1: case 3: case 5: case 8: case 9: case 10: case 11: /* VZn, IRn: signed 16-bit */
+            g_GteData[reg] = (unsigned int)(int)(short)value;
+            break;
+        case 7: case 16: case 17: case 18: case 19: /* OTZ, SZn: unsigned 16-bit */
+            g_GteData[reg] = value & 0xFFFF;
+            break;
+        default:
+            (Gte_DataWrite)(reg, value);
+            break;
+    }
+}
+
+static inline unsigned int Gte_DataReadInline(unsigned int reg)
+{
+    if (reg == 15)
+    {
+        return g_GteData[14]; /* SXYP reads SXY2 */
+    }
+    if (reg == 28 || reg == 29)
+    {
+        return (Gte_DataRead)(reg); /* IRGB/ORGB */
+    }
+    return g_GteData[reg & 31];
+}
+
+static inline void Gte_CtrlWriteInline(unsigned int reg, unsigned int value)
+{
+    switch (reg)
+    {
+        case 24: case 25: case 28: /* OFX, OFY, DQB */
+            g_GteCtrl[reg] = value;
+            break;
+        case 27: case 29: case 30: /* DQA, ZSF3, ZSF4 */
+            g_GteCtrl[reg] = (unsigned int)(int)(short)value;
+            break;
+        case 26: /* H */
+            g_GteCtrl[reg] = value & 0xFFFF;
+            break;
+        default: /* matrices and vectors (gte.c caches them), FLAG */
+            (Gte_CtrlWrite)(reg, value);
+            break;
+    }
+}
+
+static inline unsigned int Gte_CtrlReadInline(unsigned int reg)
+{
+    if (reg == 26)
+    {
+        return (unsigned int)(int)(short)g_GteCtrl[26]; /* H reads back sign-expanded */
+    }
+    return g_GteCtrl[reg & 31];
+}
+
+#define Gte_DataWrite(reg, value) Gte_DataWriteInline((reg), (value))
+#define Gte_DataRead(reg)         Gte_DataReadInline(reg)
+#define Gte_CtrlWrite(reg, value) Gte_CtrlWriteInline((reg), (value))
+#define Gte_CtrlRead(reg)         Gte_CtrlReadInline(reg)
+
+#endif
+
 #endif

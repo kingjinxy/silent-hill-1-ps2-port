@@ -214,7 +214,8 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [ ] Render comparison tool: DuckStation vs PCSX2 (GS renderer), RenderDoc-style
 - [x] 60 fps option (`SH1_FPS=60`: gameplay `g_IntervalVBlanks` 1 instead of 2); benchmark `SH1_BENCH=1`
 - [x] Profiling counters (`SH1_PROF=1`, include/port/prof.h)
-- [ ] Performance for 60 fps: GTE emulation (~45% of frame work), GS translation (~28%)
+- [x] GTE speed-up (bit-exact, checked on the host and on the EE): fast paths, cached matrices, inlined register moves, MMI (PLZCW, PHMADH)
+- [ ] Performance for 60 fps: GS translation (~1.3 M cycles/frame), remaining GTE (~1.4 M), heavy views dip to 45-55 fps
 - [ ] GS renderer gaps: rectangle flips, wrapping VRAM copies, 24-bit display (FMV)
 - [ ] GS hardware renderer (speed), checked against gpu_soft.c
 

@@ -867,3 +867,37 @@ texture page cache at 0x200000). The PS1 features map onto GS state almost direc
   swap and draw 1,280 (the GS translation of the ordering tables); total ~4,400. The software GTE is
   written for bit-exactness (64-bit MACs with an overflow check after each addition, matrices
   unpacked per call): RTPS is ~850 instructions.
+
+### Faster GTE (bit-exact)
+
+Chosen over VU0: VU0 computes in 32-bit floats (24-bit mantissas), but GTE products of 16-bit
+values reach 2^30 and sums 2^43, so large coordinates would round (1-unit differences in depth and
+screen positions, i.e. wobble/cracks the PS1 doesn't have). The EE's MMI integer SIMD is exact.
+
+Test bench first:
+- `tools/port/gte_test`: all seven seeds recorded again from DuckStation and kept
+  (`results_seedN.bin`); a third input class (every fourth test) is game-like (nothing saturates),
+  so the fast paths are covered. `check` takes the seed at run time.
+- `check_ee.elf` / `run_ee.py`: the same checker built for the EE, run in PCSX2 (results read
+  through `host:`), so the EE-only code (MMI) is checked too; it also prints EE cycles per command,
+  for game-like inputs run 256 times in a row.
+
+Changes in `src/port/gte.c` (19,040 tests, 0 differences on the host and on the EE):
+- `s_Small`: while TR, BK and FC are within +-2^30, no 44-bit MAC check can trigger (every other
+  operand is 16-bit), so the checks are skipped (not for GPF/GPL, which add a shifted MAC).
+- RT/LLM/LCM unpacked when written instead of per command.
+- Fast paths for RTPS/RTPT (per vertex), DPCS and MVMVA: computed in registers, committed only when
+  nothing saturates (FLAG stays 0), otherwise the full code runs on the untouched registers. The
+  full RTPS/RTPT code also sums directly when `s_Small` (for vertices that saturate, ~16% in-game).
+- 16x16 products done as 32-bit MULTs (some had become 64x64 multiplies: `__muldi3` calls).
+- MMI: `PLZCW` for the UNR division's leading zeros (was a bit loop); `PHMADH` for RT*V in the
+  RTPS/RTPT fast path (no faster than scalar MULTs under PCSX2's timing, exact; kept for hardware).
+- `include/port/gte.h`: register moves are inline (the game's macros name constant registers, so
+  a plain register is one load/store); registers with side effects still call gte.c.
+- Command handlers `noinline`, so `Gte_Command`'s dispatch doesn't save a dozen registers.
+
+Game-like cycles per command (EE, PCSX2): RTPS 767 → 343, RTPT 2007 → 897, DPCS 530 → 259, MVMVA
+547 → 242, NCLIP 146 → 106. In-game (demo scene): GTE ~1.97 → ~1.42 M cycles per frame, game state
+update 3.15 → 2.42 M. With `SH1_FPS=60 SH1_BENCH=1` at real-time speed: 60 fps in most views,
+average 57.7 (was ~45), dips to 43-55 in heavy views. The GS translation (1.3 M) is now the biggest
+single item.
