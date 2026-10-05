@@ -376,6 +376,19 @@ void GameBoot_WorldInit(void) // 0x80035178
 
 void GameBoot_MapLoad(s32 mapIdx) // 0x8003521C
 {
+#ifdef SH_PORT
+    // Test warp (src/port/ps2/warp_ps2.c): the first map load can be redirected; every load is logged.
+    {
+        extern int Port_MapLoadWarp(int mapIdx);
+        s32        warpIdx = Port_MapLoadWarp(mapIdx);
+
+        if (warpIdx != mapIdx)
+        {
+            mapIdx                = warpIdx;
+            g_SavegamePtr->mapIdx = warpIdx;
+        }
+    }
+#endif
     Fs_QueueStartRead(FILE_VIN_MAP0_S00_BIN + mapIdx, g_OvlDynamic);
     Map_EffectTexturesLoad(mapIdx);
     GameFs_PlayerMapAnimLoad(mapIdx);

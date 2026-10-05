@@ -30,7 +30,9 @@ EE = os.path.join(PS2DEV, "ee", "bin", "mips64r5900el-ps2-elf-")
 CC, LD, OBJCOPY, NM = EE + "gcc", EE + "ld", EE + "objcopy", EE + "nm"
 OUT = "build/port"
 EE_C_OBJS = "build/ee_check"
-PORT_CFLAGS = ["-O2", "-G0", "-fno-toplevel-reorder", "-std=gnu89", "-nostdinc", "-Wa,-Iinclude", "-Iinclude", "-Iinclude/psyq", "-Iinclude/decomp",
+# -mno-check-zero-division: as on the PS1, an integer division by zero must not trap (the game
+# relies on it, e.g. sound falloff 0 in map4_s02's demo); MIPS divides return a fixed quotient.
+PORT_CFLAGS = ["-O2", "-G0", "-fno-toplevel-reorder", "-mno-check-zero-division", "-std=gnu89", "-nostdinc", "-Wa,-Iinclude", "-Iinclude", "-Iinclude/psyq", "-Iinclude/decomp",
                "-D_LANGUAGE_C", "-DVER_USA", "-DSH_PORT", "-DNON_MATCHING"]
 
 
