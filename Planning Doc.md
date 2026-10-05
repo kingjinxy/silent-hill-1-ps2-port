@@ -210,7 +210,7 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [ ] RCnt interrupts (sound driver tick), memory card
 - [ ] Movies skipped under `SH_PORT` (`movie_main`) until CD streaming + MDEC exist
 - [x] GS hardware renderer (`src/port/ps2/gpu_gs.c`), default; software renderer kept (`SH1_GPU=soft|compare`)
-- [ ] GS renderer: in-game ~20 fps of 30 at real-time speed (profile); polygon edge / rounding differences
+- [ ] GS renderer: polygon edge / rounding differences (in-game speed is fine: see walkthrough)
 - [ ] Render comparison tool: DuckStation vs PCSX2 (GS renderer), RenderDoc-style
 - [ ] GS renderer gaps: rectangle flips, wrapping VRAM copies, 24-bit display (FMV)
 - [ ] GS hardware renderer (speed), checked against gpu_soft.c

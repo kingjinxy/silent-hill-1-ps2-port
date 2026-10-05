@@ -844,4 +844,8 @@ texture page cache at 0x200000). The PS1 features map onto GS state almost direc
   - Root counter 1 (the game's frame time, `GsGetVcount`) now counts whole fields from the vertical
     blank interrupts (262.5 lines each) instead of the EE cycle counter, which doesn't track time
     between vertical blanks under emulation.
-- In-game at real-time speed: ~20 fps of the game's 30 (to profile).
+- In-game speed: the attract demo runs at 20 fps at real-time speed, which is by design: demo
+  playback uses the recording's frame interval (3 vertical blanks). Measured with the EE cycle
+  counter: a frame is 14.8 M cycles (3 fields), the GS translation of its ordering tables ~1.8 M,
+  and the EE waits in VSync for over half of the time, so normal gameplay (2 fields, 30 fps) has
+  room to spare.
