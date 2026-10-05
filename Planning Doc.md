@@ -204,7 +204,8 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [x] Root counters from the EE cycle counter (`src/port/ps2/rcnt_ps2.c`): frame timing works, the
       game advances warning screen → Konami → KCET logo states
 - [x] libspu placeholder (`src/port/libspu_port.c`): everything succeeds, nothing plays
-- [ ] Konami logo screen not visible yet (480i frame shows leftover buffers)
+- [x] Konami logo screen (recompiler added symbol offsets twice for weak `.bss` symbols)
+- [x] Events (`OpenEvent`/`TestEvent`/...) + libcard reporting empty slots; boots to the title menu
 - [ ] Pad (input), events/RCnt interrupts (sound driver tick), memory card
 - [ ] GS hardware renderer (speed), checked against gpu_soft.c
 

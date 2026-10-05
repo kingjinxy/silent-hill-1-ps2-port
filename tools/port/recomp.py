@@ -203,7 +203,8 @@ def translate_object(path, out_dir, protos, prefix, exports=None):
         """C expression for a relocated HI/LO half."""
         rtype, sidx = trel[off]
         name, is_sec, sec, value = obj.sym_ref(sidx)
-        add = (hi_addend[off] if kind == "hi" else lo_addend[off]) + value
+        # The symbol name is already its address (value is only its offset within its section).
+        add = hi_addend[off] if kind == "hi" else lo_addend[off]
         externs.add(name)
         full = "((unsigned int)(unsigned long)%s + %du)" % (name, add & 0xFFFFFFFF)
         if kind == "hi":
@@ -561,7 +562,7 @@ def translate_object(path, out_dir, protos, prefix, exports=None):
                 if rsec == ".text":
                     s_lines.append("    .word 0x%08X  /* code address .text+0x%X */" % (0xC0DE0000 + add, add))
                 else:
-                    s_lines.append("    .word %s + %d" % (name, add))
+                    s_lines.append("    .word %s + %d" % (name, add - value))
                 o += 4
                 continue
             s_lines.append("    .byte %d" % data[o])

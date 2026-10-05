@@ -757,3 +757,19 @@ the game waited on `SpuIsTransferCompleted` before). The game now goes through g
   the program sets it (`filter 2`) — and runs at unlimited speed by default (`--realtime` to turn it
   off). The DuckStation runners (`warp_sweep.py`, `gte_test`, `lib_test`) enforce native resolution,
   nearest texture filtering and bilinear-sharp scaling; they already ran at unlimited speed.
+
+### Konami logo, events, title menu
+
+- The Konami logo state drew nothing: its draw environment had an empty clip area
+  (`E3008000 E4007C00`; on the PS1 `E4077D3F`, 320x448 from y 32). The libgs objects reference
+  their own weak `.bss` variables (`GsDISPENV`, `CLIP2`, `PSDIDX`, `PSDOFSX`, ...) by symbol, and
+  `recomp.py` added the symbol's offset within `.bss` on top of the symbol's address, so libgs read
+  and wrote the wrong variables (e.g. `GsDISPENV+0x98`). The symbol name already is the address:
+  HI16/LO16 halves and data words no longer add it (jump targets still use it, being offsets into
+  `.text`). Also affected libcd (`StRingAddr`), libgpu (`_que`), libpad and libspu. The strcpy
+  null-pointer read seen at boot is gone too.
+- `src/port/libapi_port.c`: PS1 kernel events (handles `0xF1000000 | n`; `TestEvent` polls and
+  clears, enabled `EvMdINTR` events call their handler on delivery) and a libcard for empty slots:
+  every `_card_*` call is accepted and ends with `EvSpTIMOUT` (SwCARD and HwCARD). The KCET state's
+  memory card check then finds no cards, the intro movie is skipped (no MDEC yet) and the game
+  reaches the title menu (state 7, 320x448i), matching the PS1's image.
