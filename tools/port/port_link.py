@@ -29,7 +29,7 @@ EE = os.path.join(PS2DEV, "ee", "bin", "mips64r5900el-ps2-elf-")
 CC, LD, OBJCOPY, NM = EE + "gcc", EE + "ld", EE + "objcopy", EE + "nm"
 OUT = "build/port"
 EE_C_OBJS = "build/ee_check"
-PORT_CFLAGS = ["-O2", "-G0", "-std=gnu89", "-nostdinc", "-Wa,-Iinclude", "-Iinclude", "-Iinclude/psyq", "-Iinclude/decomp",
+PORT_CFLAGS = ["-O2", "-G0", "-fno-toplevel-reorder", "-std=gnu89", "-nostdinc", "-Wa,-Iinclude", "-Iinclude", "-Iinclude/psyq", "-Iinclude/decomp",
                "-D_LANGUAGE_C", "-DVER_USA", "-DSH_PORT", "-DNON_MATCHING"]
 
 
@@ -152,7 +152,8 @@ def main():
         run([CC, "-c", "-O2", "-G0", "-D_EE", "-Wall", "-I" + os.path.join(PS2SDK, "ee", "include"),
              "-I" + os.path.join(PS2SDK, "common", "include"), src, "-o", obj])
         port_objs.append(obj)
-    run(["tools/port/recomp_all.sh"])
+    if not os.environ.get("SH1_NO_RECOMP"):
+        run(["tools/port/recomp_all.sh"])
     recomp_objs = []
     for src in sorted(glob.glob(OUT + "/recomp/*.c")):
         run([CC, "-c", "-O2", "-G0", "-std=gnu89", "-fno-builtin", "-nostdinc", "-Iinclude", src, "-o", src[:-2] + ".o"])

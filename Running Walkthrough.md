@@ -663,3 +663,40 @@ Result (DVD image, PCSX2): `libcd: SILENT. at DVD sector 3355 (39295 sectors), H
 the warning TIM loads, main's fade loop runs, then bodyprog init: root counters, memory card, events,
 pad, SPU and reverb, OTs, AddPrim — the main loop. Remaining crashes come from stubs returning NULL
 (`ReadTIM` → `Fs_QueuePostLoadTim`; a NULL `strcpy` source). 102 HAL stubs left.
+
+---
+
+## 2026-10-04 — libgpu, VSync: the main loop runs
+
+### libgpu
+
+- Recompiled: the pure objects (p06/p09/p14/p16-18/p26/p33/p34 — AddPrim, TermPrim, SetPoly*, SetTile,
+  SetDrawTPage, SetDrawMove — and tmd.o, OpenTIM/ReadTIM).
+- sys.o (the GPU system layer) mixes hardware access into everything (its driver routines read
+  hardware register addresses from its own data), so it's recompiled with
+  `recomp.py --exports SetDrawMode SetDrawArea SetDrawOffset SetDrawStp SetDrawEnv SetPriority
+  SetTexWindow GetGraphDebug`: only those get C wrappers. The other global functions become
+  **static** — otherwise other recompiled code (libgs) called sys.o's own `rc_ClearOTagR` etc.
+  directly and ended up in PS1 hardware code; now those calls go through bridges to the C versions.
+- Recompiler: code addresses in *writable* data (`.data`/`.sdata`) are function pointers (sys.o's
+  driver table) and become entry points; `jalr` to an `RC_TEXT_MARK` value dispatches to them through a
+  switch (read-only data = jump tables, as before).
+- `src/port/libgpu_port.c`: 1024x512 16-bit VRAM array; Load/Store/ClearImage (with VRAM wrap);
+  ClearOTagR; DrawOTag/DrawPrim walk 24-bit-linked packets into `Gpu_Submit` (counts only for now,
+  logged every 60 calls); PutDrawEnv builds `env->dr_env` with Sony's SetDrawEnv, submits it and does
+  the isbg clear; Put/GetDrawEnv/DispEnv keep state.
+- `src/port/ps2/libetc_ps2.c`: VSync on the EE VBlank interrupt (semaphore; mode 0 waits one, n
+  waits n, <0 returns the count), VSyncCallback runs from the handler, GetVideoMode = NTSC.
+
+### A layout bug: `-fno-toplevel-reorder`
+
+Ordering tables didn't terminate (NULL links). Comparing with the real game (DuckStation + gdb,
+breakpoint on `DrawOTag` at `0x80018A6C`): `g_OrderingTable0[1]` = {length 11, org
+`0x800B7CC8`, tag `0x800B9CC4`} — the tag is one word *past* `g_OtTags1`, i.e. the
+`__pad_bss_800B9CC4` word that `screen_data.c` declares right after the array. GCC 15 reordered the
+file's variables, so in the port that word was `g_DeltaTime`, and the frame delta overwrote an OT
+link. The port is now compiled with `-fno-toplevel-reorder` (declaration order, like GCC 2.8). Note
+GCC still aligns arrays to 8, and layout *across* files follows link order, not the PS1's.
+
+Result: OTs terminate; steady loop, ~1,700 DrawOTag calls a minute, 240 packets per 60 calls
+(probably the first screen: nothing is drawn or read yet). 70 HAL stubs left.

@@ -94,7 +94,7 @@ def sext16(v):
     return v - 0x10000 if v & 0x8000 else v
 
 
-def translate_object(path, out_dir, protos, prefix):
+def translate_object(path, out_dir, protos, prefix, exports=None):
     obj = ObjectFile(path)
     text = obj.elf.get_section_by_name(".text")
     code = text.data() if text is not None else b""
@@ -109,6 +109,25 @@ def translate_object(path, out_dir, protos, prefix):
     names_at = {}
     for v, n, b in funcs:
         names_at.setdefault(v, []).append((n, b))
+    # Code addresses stored in data. In writable data (.data/.sdata) they're function pointers (e.g.
+    # libgpu sys.o's driver table, called through jalr): those become function entry points. In
+    # read-only data they're jump tables (targets of `jr reg` inside a function).
+    data_code_refs = {}
+    for secname, rels in obj.relocs.items():
+        if secname == ".text":
+            continue
+        sec = obj.elf.get_section_by_name(secname)
+        for roff, (rtype, sidx) in rels.items():
+            name, is_sec, rsec, value = obj.sym_ref(sidx)
+            if rtype == R_MIPS_32 and rsec == ".text":
+                data_code_refs.setdefault(secname, set()).add(int.from_bytes(sec.data()[roff:roff + 4], "little") + value)
+    func_ptr_targets = set()
+    for secname in (".data", ".sdata"):
+        func_ptr_targets |= data_code_refs.get(secname, set())
+    for tgt in func_ptr_targets:
+        if tgt not in names_at:
+            names_at[tgt] = [("__rc_%s_sub_%X" % (obj.base, tgt), "STB_LOCAL")]
+
     # Calls (jal) to labels inside this .text that aren't symbols become functions of their own.
     for off in range(0, len(code), 4):
         w = words[off // 4]
@@ -356,9 +375,14 @@ def translate_object(path, out_dir, protos, prefix):
                     # Arguments: a0-a3, then the o32 stack words at sp+16.. (extra ones are ignored).
                     if (w >> 11) & 31 != 31:
                         raise RecompError("jalr with link register %d at 0x%X" % ((w >> 11) & 31, off))
+                    # A marker (RC_TEXT_MARK + offset, from this object's data) is a recompiled function here.
                     stk = ", ".join("RC_R32(r->r[29] + %d)" % (16 + 4 * i) for i in range(8))
-                    lines.append("%s { unsigned int t = %s; %s r->r[31] = 0; r->r[2] = ((unsigned int (*)())(unsigned long)t)"
-                                 "(r->r[4], r->r[5], r->r[6], r->r[7], %s); goto L_%X; }" % (lab, R(rs), delay(), stk, off + 8))
+                    cases = " ".join("case 0x%08Xu: rc_%s(r); break;" % (0xC0DE0000 + t, c_ident(names_at[t][0][0]))
+                                     for t in sorted(func_ptr_targets))
+                    lines.append("%s { unsigned int t = %s; %s r->r[31] = 0; if ((t & 0xFFFF0000u) == RC_TEXT_MARK) { "
+                                 "switch (t) { %s default: Rc_BadJump(t); return; } } else { r->r[2] = "
+                                 "((unsigned int (*)())(unsigned long)t)(r->r[4], r->r[5], r->r[6], r->r[7], %s); } goto L_%X; }"
+                                 % (lab, R(rs), delay(), cases, stk, off + 8))
                 elif op in (2, 3):
                     if off not in trel or trel[off][0] != R_MIPS_26:
                         tgt = (w & 0x3FFFFFF) << 2
@@ -447,12 +471,25 @@ def translate_object(path, out_dir, protos, prefix):
     for n in calls:
         lines.append("void rc_%s(RcRegs* r);" % c_ident(n))
     lines.append("")
+    # With --exports, global functions left out stay private to this object (static): calls to them
+    # from other objects then go through bridges to the port's C replacements (e.g. libgpu sys.o's
+    # ClearOTagR vs src/port/libgpu_port.c), never into the recompiled hardware code.
+    hidden = set()
+    if exports is not None:
+        for start in starts:
+            for name, bind in names_at[start]:
+                if bind == "STB_GLOBAL" and name not in exports:
+                    hidden.add(c_ident(names_at[start][0][0]))
+
+    def storage(fname):
+        return "static " if fname in hidden else ""
+
     for fname, _, _, _, _ in func_bodies:
-        lines.append("void rc_%s(RcRegs* r);" % fname)
+        lines.append("%svoid rc_%s(RcRegs* r);" % (storage(fname), fname))
     lines.append("")
     for fname, start, body, tail, nxt_func in func_bodies:
         lines.append("/* %s (.text+0x%X) */" % (fname, start))
-        lines.append("void rc_%s(RcRegs* r)\n{" % fname)
+        lines.append("%svoid rc_%s(RcRegs* r)\n{" % (storage(fname), fname))
         lines += body
         tail_used = ("goto L_%X;" % tail) in "\n".join(body)
         lines.append("    %s%s return;" % ("L_%X: " % tail if tail_used else "", "rc_%s(r);" % nxt_func if nxt_func else ""))
@@ -462,7 +499,7 @@ def translate_object(path, out_dir, protos, prefix):
     wrapped = []
     for start in starts:
         for name, bind in names_at[start]:
-            if bind != "STB_GLOBAL":
+            if bind != "STB_GLOBAL" or (exports is not None and name not in exports):
                 continue
             if name not in protos:
                 print("warning: no prototype for %s; no wrapper" % name, file=sys.stderr)
@@ -539,10 +576,12 @@ def main():
     ap.add_argument("out_dir")
     ap.add_argument("--protos", nargs="*", default=[])
     ap.add_argument("--prefix")
+    ap.add_argument("--exports", nargs="*", help="only give these functions C wrappers (others stay internal)")
     a = ap.parse_args()
     os.makedirs(a.out_dir, exist_ok=True)
     try:
-        c, s, wrapped = translate_object(a.obj, a.out_dir, load_protos(a.protos), a.prefix)
+        c, s, wrapped = translate_object(a.obj, a.out_dir, load_protos(a.protos), a.prefix,
+                                         set(a.exports) if a.exports is not None else None)
     except RecompError as e:
         sys.exit("%s: %s" % (a.obj, e))
     print("%s -> %s, %s (%s)" % (a.obj, c, s, ", ".join(wrapped)))

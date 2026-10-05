@@ -189,8 +189,14 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [x] libcd (file-queue subset) on libcdvd: `src/port/ps2/libcd_ps2.c`; SILENT. sector-for-sector,
       HILL. raw 2336-byte sectors; synchronous reads. The game now gets through `main` into bodyprog
       init (pad, SPU, root counters, events, main loop)
-- [ ] Next: libgpu — recompile the pure functions (AddPrim, SetPoly*, SetDraw*, OpenTIM/ReadTIM,
-      TermPrim, SetDrawEnv...), C versions of the hardware ones on the GS (Step 4); VSync/root counters
+- [x] libgpu: primitive builders + OpenTIM/ReadTIM recompiled; sys.o recompiled for its packet
+      builders only (`--exports`, rest private); `src/port/libgpu_port.c` (software 1024x512 VRAM,
+      Load/Store/ClearImage, ClearOTagR, DrawOTag/DrawPrim walking OTs into `Gpu_Submit`, draw/disp
+      envs). `src/port/ps2/libetc_ps2.c`: VSync/VSyncCallback on the EE VBlank interrupt
+- [x] Port compiled with `-fno-toplevel-reorder` (the game relies on in-file variable order, e.g.
+      the big OT's last tag is the `__pad_bss_800B9CC4` word after `g_OtTags1`)
+- [ ] sys.o's `GEnv` isn't initialised by our ResetGraph: check SetDrawEnv's packets against the PS1
+- [ ] Next: GS renderer behind `Gpu_Submit` (Step 4); pad, root counters, events, memory card
 
 ### Step 4 — Graphics (libgpu → GS)
 
