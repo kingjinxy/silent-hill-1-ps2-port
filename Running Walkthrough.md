@@ -989,3 +989,16 @@ Frame 400: 2 draws differ in their commands (trailing 2x1 VRAM copies the PS1 se
 draws are all semi-transparent (fog). Last-writer blame can't tell which earlier draw introduced a
 difference that a blend then carries along: that needs per-draw results (replay from the frame's
 starting VRAM, and per-draw readback on the PS2).
+
+### PCSX2 host GPU load: CLUTs out of the render target
+
+PCSX2 showed ~99% (host) GPU in-game (the new-game cutscene dropped to 40 fps). Per-frame GS
+statistics (printed with the libgpu line, `GpuGs_Stats`) in the demo: ~1,700 primitives, ~330
+TEX0 changes, each one a CLUT load from the VRAM buffer, which is the render target (CSM2), and
+50-85 check-mask (DATE) primitives; no texture sampled from the render target. A CLUT loaded from a
+render target makes PCSX2's hardware renderer bring the target's contents back, for each load.
+CLUTs now come from a CLUT cache (`clut_get`: one PSMCT16 row each at 0x2F0000, copied from
+g_PortVram, dropped when VRAM over them changes); GP0 fills and VRAM copies also update g_PortVram.
+Frame comparison with DuckStation unchanged (19,474 / 20,847 differing display pixels at frames 100
+/ 400). `compare_frames.py` and the frame debugger now compare each side's own displayed buffer (the
+double buffer's parity can differ between runs).

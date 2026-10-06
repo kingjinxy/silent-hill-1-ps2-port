@@ -9,8 +9,11 @@
  * Mapping (written from psx-spx and the GS User's Manual; gpu_soft.c is the reference):
  *  - Textures: 15-bit pages are read straight from the VRAM buffer (so render-to-texture works).
  *    4/8-bit pages are uploaded as PSMT4/PSMT8 from the EE copy of VRAM (g_PortVram, kept up to date
- *    by CPU uploads), which packs indices the same way, and cached per page; their CLUTs are read from
- *    the VRAM buffer with CSM2 (TEXCLUT COU/COV = the PS1 CLUT position).
+ *    by CPU uploads), which packs indices the same way, and cached per page. Their CLUTs are copied
+ *    from g_PortVram to a CLUT cache (one row each, loaded with CSM2): loading CLUTs from the VRAM
+ *    buffer itself (the render target) made PCSX2's hardware renderer read the target back for each of
+ *    the ~330 CLUT loads per frame (99% host GPU in-game). GP0 fills and VRAM copies also update
+ *    g_PortVram, so it holds everything but what polygons draw.
  *  - Texel 0x0000 is transparent: TEXA AEM gives it alpha 0, dropped by the alpha test. Other texels
  *    get alpha TA0 = 0x40 (bit 15 clear) or TA1 = 0x80 (bit 15 set), so PABE blends only texels with
  *    bit 15 set (PS1 semi-transparency) and the frame buffer write stores bit 15 from the texel.
@@ -41,7 +44,10 @@ typedef unsigned long long u64x;
 #define VRAM_BW    (VRAM_W / 64)
 #define CACHE_ADDR 0x200000
 #define CACHE_SLOT 0x10000
-#define CACHE_SLOTS 16
+#define CACHE_SLOTS 15
+/* CLUT cache: one 256-pixel PSMCT16 row per CLUT (256x128, the last 64 KiB of the page cache area). */
+#define CLUT_ADDR  0x2F0000
+#define CLUT_ROWS  128
 
 #define PSM_CT32 0x00
 #define PSM_CT16 0x02
@@ -60,6 +66,7 @@ enum
 };
 
 extern u16  g_PortVram[VRAM_H][VRAM_W];
+extern s32  g_PortGsRenderer; /* libgpu_port.c: 1 = GS only (g_PortVram is then this file's copy) */
 extern void Display_EnsureInit(void); /* display_ps2.c */
 
 /* --- GIF packets ------------------------------------------------------------------------------*/
@@ -80,6 +87,9 @@ static u64x s_Reg[REG_COUNT];
 /* Incremented whenever GS state may have changed outside prim_state() (reset, fills, display
  * copies, texture cache changes): its memo of the last primitive's state is then stale. */
 static u32  s_Epoch;
+/* Per-frame statistics (GpuGs_Stats): primitives, texture (TEX0) changes, CLUT loads, primitives
+ * with destination alpha test (check mask), primitives sampling the VRAM buffer (15-bit pages). */
+static u32 s_StPrims, s_StTex0, s_StClut, s_StDate, s_StRtTex, s_StUploads;
 static u8   s_RegValid[REG_COUNT];
 
 static u64x giftag(u32 nloop, u32 eop, u32 flg, u32 nreg)
@@ -242,8 +252,16 @@ typedef struct
 } Slot;
 
 static Slot s_Slots[CACHE_SLOTS];
+
+typedef struct
+{
+    s32 key; /* CLUT attribute | depth << 16, -1 = free */
+    u32 used;
+} ClutSlot;
+
+static ClutSlot s_Cluts[CLUT_ROWS];
+
 static u32  s_UseClock;
-static int  s_ClutDirty = 1;
 static u8   s_Staging[256 * 256] __attribute__((aligned(64)));
 static u64x s_ImgPkt[(256 * 256 / 16 + 8) * 2] __attribute__((aligned(64)));
 
@@ -260,7 +278,6 @@ static void cache_invalidate(s32 x, s32 y, s32 w, s32 h)
 {
     s32 i;
     s_Epoch++;
-    s_ClutDirty = 1;
     for (i = 0; i < CACHE_SLOTS; i++)
     {
         s32 px, py, pw;
@@ -274,11 +291,27 @@ static void cache_invalidate(s32 x, s32 y, s32 w, s32 h)
             s_Slots[i].key = -1;
         }
     }
+    for (i = 0; i < CLUT_ROWS; i++)
+    {
+        s32 cx, cy, cw;
+        if (s_Cluts[i].key < 0)
+        {
+            continue;
+        }
+        cx = (s_Cluts[i].key & 0x3F) * 16;
+        cy = (s_Cluts[i].key >> 6) & 0x1FF;
+        cw = (s_Cluts[i].key >> 16) == 0 ? 16 : 256;
+        if (x < cx + cw && cx < x + w && y <= cy && cy < y + h)
+        {
+            s_Cluts[i].key = -1;
+        }
+    }
 }
 
 /** Host-to-local image transfer of `bytes` (a multiple of 16) from `src`. */
 static void upload(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s32 h, const void* src, u32 bytes)
 {
+    s_StUploads++;
     u32 qwc = bytes / 16;
     GpuGs_Flush();
     ad(R_BITBLTBUF, ((u64x)dbp << 32) | ((u64x)dbw << 48) | ((u64x)psm << 56));
@@ -336,6 +369,46 @@ static u32 cache_get(u32 depth, u32 tpage)
     return (CACHE_ADDR + best * CACHE_SLOT) / 256;
 }
 
+/** Row of the CLUT cache holding `clut` (PS1 CLUT attribute) for a 4- or 8-bit page. */
+static u32 clut_get(u32 clut, u32 depth)
+{
+    s32 key = (s32)((clut & 0x7FFF) | (depth << 16));
+    s32 i, best = -1, x, y, n;
+    u16 row[256] __attribute__((aligned(16)));
+    for (i = 0; i < CLUT_ROWS; i++)
+    {
+        if (s_Cluts[i].key == key)
+        {
+            s_Cluts[i].used = ++s_UseClock;
+            return (u32)i;
+        }
+    }
+    for (i = 0; i < CLUT_ROWS; i++)
+    {
+        if (s_Cluts[i].key < 0)
+        {
+            best = i;
+            break;
+        }
+        if (best < 0 || s_Cluts[i].used < s_Cluts[best].used)
+        {
+            best = i;
+        }
+    }
+    x = (s32)(clut & 0x3F) * 16;
+    y = (s32)((clut >> 6) & 0x1FF);
+    n = depth == 0 ? 16 : 256;
+    for (i = 0; i < n; i++)
+    {
+        row[i] = g_PortVram[y][(x + i) & (VRAM_W - 1)];
+    }
+    upload(CLUT_ADDR / 256, 4, PSM_CT16, 0, best, n, 1, row, (u32)(n * 2));
+    s_Cluts[best].key  = key;
+    s_Cluts[best].used = ++s_UseClock;
+    s_RegValid[R_TEX0] = 0; /* this row's contents changed: load it again */
+    return (u32)best;
+}
+
 /* --- Setup ------------------------------------------------------------------------------------*/
 
 static int s_Ready;
@@ -351,6 +424,10 @@ static void init(void)
     for (i = 0; i < CACHE_SLOTS; i++)
     {
         s_Slots[i].key = -1;
+    }
+    for (i = 0; i < CLUT_ROWS; i++)
+    {
+        s_Cluts[i].key = -1;
     }
     s_Ready = 1;
 }
@@ -449,24 +526,24 @@ static u64x prim_state_impl(const Prim* p)
         else
         {
             u32 tbp = cache_get(depth, p->tpage);
-            u64x texclut = 16 | ((u64x)(p->clut & 0x3F) << 6) | ((u64x)((p->clut >> 6) & 0x1FF) << 12);
+            u64x texclut = 4 | ((u64x)clut_get(p->clut, depth) << 12); /* CBW 4 (256), COU 0, COV = row */
             if (!s_RegValid[R_TEXCLUT] || s_Reg[R_TEXCLUT] != texclut)
             {
                 s_RegValid[R_TEX0] = 0; /* the CLUT is loaded when TEX0 is written */
             }
             set(R_TEXCLUT, texclut);
-            tex0 = (u64x)tbp | ((u64x)4 << 14) | ((u64x)(depth == 0 ? PSM_T4 : PSM_T8) << 20) | ((u64x)VRAM_TBP << 37) |
-                   ((u64x)PSM_CT16 << 51) | (1ULL << 55) | (1ULL << 61); /* CSM2, CLD: load the CLUT */
-            if (s_ClutDirty)
-            {
-                s_RegValid[R_TEX0] = 0; /* VRAM changed: reload the CLUT even if TEX0 is the same */
-                s_ClutDirty        = 0;
-            }
+            tex0 = (u64x)tbp | ((u64x)4 << 14) | ((u64x)(depth == 0 ? PSM_T4 : PSM_T8) << 20) |
+                   ((u64x)(CLUT_ADDR / 256) << 37) | ((u64x)PSM_CT16 << 51) | (1ULL << 55) | (1ULL << 61); /* CSM2, CLD */
         }
         tex0 |= (8ULL << 26) | (8ULL << 30) | (1ULL << 34) | ((u64x)(p->raw ? 1 : 0) << 35); /* 256x256, TCC, TFX */
         if (!s_RegValid[R_TEX0] || s_Reg[R_TEX0] != tex0)
         {
             ad(R_TEXFLUSH, 0);
+            s_StTex0++;
+            if (depth < 2)
+            {
+                s_StClut++;
+            }
         }
         set(R_TEX0, tex0);
         set(R_CLAMP, 3 | (3 << 2) | ((u64x)(0xFF & ~(s_TwMaskX * 8)) << 4) | ((u64x)((s_TwOffX & s_TwMaskX) * 8) << 14) |
@@ -527,6 +604,9 @@ static void emit(const Prim* p, u64x prim, const Vtx* const* v, int n)
     {
         regsTab[p->textured][n] = vertex_regs(p->textured, n, &nregTab[p->textured][n]);
     }
+    s_StPrims++;
+    s_StDate += s_CheckMask;
+    s_StRtTex += p->textured && ((p->tpage >> 7) & 3) >= 2;
     q    = reglist(regsTab[p->textured][n], nregTab[p->textured][n]);
     *q++ = prim;
     for (i = 0; i < n; i++)
@@ -803,6 +883,19 @@ static void fill_rect(s32 x, s32 y, s32 w, s32 h, u32 rgb)
         emit(&p, 6 | (1 << 8), v, 2);
     }
     cache_invalidate(x, y, w, h);
+    if (g_PortGsRenderer == 1)
+    {
+        /* Keep g_PortVram (the source of the texture and CLUT caches) in step. */
+        u16 c = (u16)(((rgb & 0xFF) >> 3) | ((((rgb >> 8) & 0xFF) >> 3) << 5) | ((((rgb >> 16) & 0xFF) >> 3) << 10));
+        s32 yy, xx;
+        for (yy = 0; yy < h; yy++)
+        {
+            for (xx = 0; xx < w; xx++)
+            {
+                g_PortVram[(y + yy) & (VRAM_H - 1)][(x + xx) & (VRAM_W - 1)] = c;
+            }
+        }
+    }
 }
 
 static void fill(const u32* w)
@@ -826,6 +919,16 @@ static void move(s32 sx, s32 sy, s32 dx, s32 dy, s32 w, s32 h)
     ad(R_TRXDIR, 2);
     ad(R_TEXFLUSH, 0);
     cache_invalidate(dx, dy, w, h);
+    if (g_PortGsRenderer == 1)
+    {
+        /* Same copy in g_PortVram (rows in an order that handles overlap). */
+        s32 r;
+        for (r = 0; r < h; r++)
+        {
+            s32 row = dy > sy ? h - 1 - r : r;
+            memmove(&g_PortVram[dy + row][dx], &g_PortVram[sy + row][sx], (u32)w * 2);
+        }
+    }
 }
 
 static void vram_copy(const u32* w)
@@ -1056,4 +1159,17 @@ void GpuGs_DisplayCopy(u32 fbp, u32 fbw, u32 psm, s32 x, s32 y, s32 w, s32 h)
     ad(R_UV, (u64x)((x + w) << 4) | ((u64x)((y + h) << 4) << 16));
     ad(R_XYZ2, (u64x)((2048 + w) << 4) | ((u64x)((2048 + h) << 4) << 16));
     GpuGs_Flush();
+}
+
+/** Prints and clears the statistics (averaged over `frames`). */
+void GpuGs_Stats(u32 frames)
+{
+    if (!frames)
+    {
+        return;
+    }
+    printf("gs stats per frame: %u prims, %u TEX0 changes, %u CLUT loads, %u check-mask prims, %u prims "
+           "texturing from VRAM, %u uploads\n", s_StPrims / frames, s_StTex0 / frames, s_StClut / frames,
+           s_StDate / frames, s_StRtTex / frames, s_StUploads / frames);
+    s_StPrims = s_StTex0 = s_StClut = s_StDate = s_StRtTex = s_StUploads = 0;
 }

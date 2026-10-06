@@ -133,28 +133,27 @@ def compare(n):
     a, da, pa = load("ps1", n)
     b, db, pb = load("ps2", n)
     x, y, w, h = da
+    x2, y2 = db[0], db[1]  # the PS2's displayed buffer (the double buffer's parity can differ)
     lines = ["frame %d: display PS1 %s, PS2 %s" % (n, da, db)]
 
-    # Displayed area (the PS1's), and all of VRAM; bit 15 (mask) compared separately.
-    def stats(x0, y0, ww, hh):
-        diff = mask = 0
-        for yy in range(y0, y0 + hh):
-            for xx in range(x0, x0 + ww):
-                i = (yy & 511) * 1024 + (xx & 1023)
-                diff += (a[i] ^ b[i]) & 0x7FFF != 0
-                mask += (a[i] ^ b[i]) & 0x8000 != 0
-        return diff, mask
-    dd, dm = stats(x, y, w, h)
-    vd, vm = stats(0, 0, 1024, 512)
-    lines.append("  display: %d of %d pixels differ (bit 15: %d); VRAM: %d of 524288 (bit 15: %d)" % (dd, w * h, dm, vd, vm))
+    def pa_px(xx, yy):
+        return a[((y + yy) & 511) * 1024 + ((x + xx) & 1023)]
+
+    def pb_px(xx, yy):
+        return b[((y2 + yy) & 511) * 1024 + ((x2 + xx) & 1023)]
+
+    # Displayed areas (each side's own), and all of VRAM; bit 15 (mask) compared separately.
+    dd = sum(1 for yy in range(h) for xx in range(w) if (pa_px(xx, yy) ^ pb_px(xx, yy)) & 0x7FFF)
+    dm = sum(1 for yy in range(h) for xx in range(w) if (pa_px(xx, yy) ^ pb_px(xx, yy)) & 0x8000)
+    vd = sum(1 for i in range(1024 * 512) if (a[i] ^ b[i]) & 0x7FFF)
+    vm = sum(1 for i in range(1024 * 512) if (a[i] ^ b[i]) & 0x8000)
+    lines.append("  display: %d of %d pixels differ (bit 15: %d); VRAM: %d of 524288 (bit 15: %d)%s" % (
+        dd, w * h, dm, vd, vm, "" if (x, y) == (x2, y2) else " (buffers swapped: VRAM totals not comparable)"))
 
     rows = []
     for yy in range(h):
-        row = b""
-        for src in (a, b):
-            row += b"".join(rgb(src[((y + yy) & 511) * 1024 + ((x + xx) & 1023)]) for xx in range(w))
-        row += b"".join(b"\xff\xff\xff" if (a[((y + yy) & 511) * 1024 + ((x + xx) & 1023)] ^ b[((y + yy) & 511) * 1024 + ((x + xx) & 1023)]) & 0x7FFF
-                        else b"\0\0\0" for xx in range(w))
+        row = b"".join(rgb(pa_px(xx, yy)) for xx in range(w)) + b"".join(rgb(pb_px(xx, yy)) for xx in range(w))
+        row += b"".join(b"\xff\xff\xff" if (pa_px(xx, yy) ^ pb_px(xx, yy)) & 0x7FFF else b"\0\0\0" for xx in range(w))
         rows.append(row)
     write_png(os.path.join(CAP, "cmp_%d_display.png" % n), rows)
     rows = [b"".join(rgb(c) for c in src[yy * 1024:(yy + 1) * 1024]) for src in (a, b) for yy in range(512)]

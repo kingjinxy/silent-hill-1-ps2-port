@@ -250,6 +250,11 @@ static void DrawOTagImpl(u_long* p)
                s_FramePackets, s_FrameWords, g_GameWork.gameState, g_GameWork.gameStateSteps[0]);
         s_FramePackets = 0;
         s_FrameWords   = 0;
+        if (g_PortGsRenderer)
+        {
+            extern void GpuGs_Stats(u32 frames);
+            GpuGs_Stats(30); /* 60 DrawOTag calls: two per frame */
+        }
     }
 }
 

@@ -57,13 +57,20 @@ function vram(bytes) {
 }
 
 async function loadFrame(n) {
-  const [p1, p2, v1, v2, d1] = await Promise.all([
+  const [p1, p2, v1, v2, d1, d2] = await Promise.all([
     bin(`/cap/ps1_${n}_gp0.bin`), bin(`/cap/ps2_${n}_gp0.bin`),
     bin(`/cap/ps1_${n}_vram.bin`), bin(`/cap/ps2_${n}_vram.bin`),
-    text(`/cap/ps1_${n}_disp.txt`),
+    text(`/cap/ps1_${n}_disp.txt`), text(`/cap/ps2_${n}_disp.txt`),
   ]);
   const disp = d1.trim().split(/\s+/).slice(0, 4).map(Number);
-  const f = { n, disp, vram1: vram(v1), vram2: vram(v2) };
+  const disp2 = d2.trim().split(/\s+/).slice(0, 4).map(Number);
+  // The PS2's displayed buffer can be the other one of the double buffer: its pixel for a PS1
+  // display position is at the same offset in its own displayed area.
+  const f = { n, disp, disp2, vram1: vram(v1), vram2: vram(v2) };
+  f.at2 = (i) => {
+    const x = i & 1023, y = i >> 10;
+    return f.vram2[((y - disp[1] + disp2[1]) & 511) * VRAM_W + ((x - disp[0] + disp2[0]) & 1023)];
+  };
   f.draws1 = decode(packets(p1));
   f.draws2 = decode(packets(p2));
   f.owner = coverage(f.draws1);
@@ -254,7 +261,7 @@ function blame(f) {
   for (let y = dy; y < dy + dh; y++) {
     for (let x = dx; x < dx + dw; x++) {
       const i = (y & 511) * VRAM_W + (x & 1023);
-      if ((f.vram1[i] ^ f.vram2[i]) & 0x7FFF) {
+      if ((f.vram1[i] ^ f.at2(i)) & 0x7FFF) {
         total++;
         const o = f.owner[i];
         counts.set(o, (counts.get(o) || 0) + 1);
@@ -287,7 +294,7 @@ function render() {
   for (let y = 0; y < dh; y++) {
     for (let x = 0; x < dw; x++) {
       const i = ((dy + y) & 511) * VRAM_W + ((dx + x) & 1023), o = (y * dw + x) * 4;
-      const a = cur.vram1[i], b = cur.vram2[i], differs = (a ^ b) & 0x7FFF;
+      const a = cur.vram1[i], b = cur.at2(i), differs = (a ^ b) & 0x7FFF;
       let c;
       if (mode === "diff") c = differs ? [255, 255, 255] : rgb(a).map((v) => v >> 2);
       else c = rgb(mode === "ps1" ? a : b);
@@ -420,7 +427,7 @@ $("view").addEventListener("mousemove", (ev) => {
   if (!cur) return;
   const [x, y] = pixelAt(ev), i = (y & 511) * VRAM_W + (x & 1023);
   const f = (c) => rgb(c).map((v) => v >> 3).join(",");
-  $("hover").textContent = `x=${x} y=${y}  PS1 ${f(cur.vram1[i])}  PS2 ${f(cur.vram2[i])} (5-bit)  last draw ${cur.owner[i]}`;
+  $("hover").textContent = `x=${x} y=${y}  PS1 ${f(cur.vram1[i])}  PS2 ${f(cur.at2(i))} (5-bit)  last draw ${cur.owner[i]}`;
 });
 $("view").addEventListener("click", (ev) => {
   if (!cur) return;
