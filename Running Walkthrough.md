@@ -972,3 +972,20 @@ Findings:
 - Rendering: with identical GP0 streams, ~20,000 of 71,680 display pixels differ, nearly all by one
   5-bit step (more often darker on the PS2): rounding in shading/blending/dithering. Next to fix.
 - Open: the second demo (map2_s00 again) crashes ~7 s in, in world chunk streaming; timing dependent.
+
+### Frame debugger
+
+`python3 tools/port/frame_debugger.py`, then http://127.0.0.1:8765/ in a browser: for the frames
+captured by `compare_frames.py`, a PS1-level frame debugger (`tools/port/frame_debugger/`):
+- draw list decoded from both GP0 streams (type, vertices xy/colour/uv, texture page, CLUT, blending,
+  dither, clip, offset, mask, texture window, raw words), draws whose commands differ marked;
+- the display image (PS1, PS2 or difference) with the selected draw's triangles outlined; click a
+  pixel to select the draw that last wrote it;
+- blame: each differing display pixel attributed to the last draw covering it (coverage rasterised
+  with the PS1's rules), ranked.
+`?sync=1&frame=N&select=D` loads synchronously (headless screenshots for checking the page).
+
+Frame 400: 2 draws differ in their commands (trailing 2x1 VRAM copies the PS1 sends); the top blamed
+draws are all semi-transparent (fog). Last-writer blame can't tell which earlier draw introduced a
+difference that a blend then carries along: that needs per-draw results (replay from the frame's
+starting VRAM, and per-draw readback on the PS2).
