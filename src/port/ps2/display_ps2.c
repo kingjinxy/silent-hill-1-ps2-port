@@ -112,10 +112,22 @@ void Display_EnsureInit(void)
     }
 }
 
-/* Debug: frames whose number is listed here are also written to host:frame_<n>.ppm (PCSX2 with
- * HostFs on writes them next to the ELF; tools/port/pcsx2_run.py enables it). */
+/* Debug (build with SH1_DUMP=1): frames whose number is listed here are also written to
+ * host:frame_<n>.ppm (PCSX2 with HostFs on writes them next to the ELF; tools/port/pcsx2_run.py
+ * enables it). Off by default: each dump stalls the game for about a second of emulated time, which
+ * spoils frame rate measurements. Display_RequestDump (host:input.txt "dump") works either way. */
+#ifdef SH_PORT_DUMP_FRAMES
 static const int DUMP_FRAMES[] = { 30, 120, 200, 300, 600, 960, 1200, 2400 };
+#else
+static const int DUMP_FRAMES[] = { -1 };
+#endif
 static int s_Frame;
+static int s_DumpRequested; /* Display_RequestDump: dump the next frame */
+
+void Display_RequestDump(void)
+{
+    s_DumpRequested = 1;
+}
 
 static void dump_vram(const unsigned short* vram)
 {
@@ -346,13 +358,22 @@ void Display_PresentGs(int x, int y, int w, int h, int rgb24, int isinter)
     {
         printf("display: frame %d, %dx%d at (%d,%d)\n", s_Frame, w, h, x, y);
     }
-    for (k = 0; k < sizeof(DUMP_FRAMES) / sizeof(DUMP_FRAMES[0]); k++)
+    for (k = 0; k <= sizeof(DUMP_FRAMES) / sizeof(DUMP_FRAMES[0]); k++)
     {
-        if (DUMP_FRAMES[k] == s_Frame && g_PortGsRenderer == 2)
+        int wanted = k < sizeof(DUMP_FRAMES) / sizeof(DUMP_FRAMES[0]) ? DUMP_FRAMES[k] == s_Frame : s_DumpRequested;
+        if (k == sizeof(DUMP_FRAMES) / sizeof(DUMP_FRAMES[0]))
+        {
+            s_DumpRequested = 0;
+        }
+        if (!wanted)
+        {
+            continue;
+        }
+        if (g_PortGsRenderer == 2)
         {
             compare_dump(x, y, w, h);
         }
-        else if (DUMP_FRAMES[k] == s_Frame)
+        else
         {
             int row;
             GpuGs_StoreAll();

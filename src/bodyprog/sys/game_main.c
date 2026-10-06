@@ -261,11 +261,34 @@ void MainLoop(void) // 0x80032EE0
         }
         else
         {
+#ifdef SH_PORT
+            {
+                // Test runs (pcsx2_run.py --gameplay) time unbroken stretches of gameplay.
+                static s32 inGameplay;
+                s32        now = g_GameWork.gameState == GameState_InGame && g_SysWork.sysState == SysState_Gameplay;
+                if (now != inGameplay)
+                {
+                    printf(now ? "port: gameplay\n" : "port: gameplay ended\n");
+                    inGameplay = now;
+                }
+            }
+#endif
             if (g_SysWork.sysState != SysState_Gameplay)
             {
                 g_VBlanks     = VSync(SyncMode_Count) - g_PrevVBlanks;
                 g_PrevVBlanks = VSync(SyncMode_Count);
+#if defined(SH_PORT) && SH_PORT_FPS == 60
+                // Port option (`SH1_FPS=60`): as in gameplay, wait only when the frame took under a
+                // vertical blank, so a frame running slightly late doesn't drop to 30 fps.
+                while (g_VBlanks < 1)
+                {
+                    VSync(SyncMode_Wait);
+                    g_VBlanks++;
+                    g_PrevVBlanks++;
+                }
+#else
                 VSync(SyncMode_Wait);
+#endif
             }
             else
             {

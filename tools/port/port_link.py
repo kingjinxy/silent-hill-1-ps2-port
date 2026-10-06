@@ -34,7 +34,9 @@ EE_C_OBJS = "build/ee_check"
 # relies on it, e.g. sound falloff 0 in map4_s02's demo); MIPS divides return a fixed quotient.
 # -fno-strict-aliasing: decompiled code type-puns freely (e.g. GTE macros read s16 matrices as
 # words); the PS1's GCC 2.8 never assumed otherwise.
-PORT_CFLAGS = ["-O2", "-G0", "-fno-toplevel-reorder", "-mno-check-zero-division", "-fno-strict-aliasing", "-std=gnu89", "-nostdinc", "-Wa,-Iinclude", "-Iinclude", "-Iinclude/psyq", "-Iinclude/decomp",
+# -O3 (SH1_PORT_OPT overrides): the port's own code (GTE, GS translation) measured 5-7% of a frame
+# faster than -O2 in the opening cutscene; the game's code gains nothing from it and stays at -O2.
+PORT_CFLAGS = [os.environ.get("SH1_PORT_OPT", "-O3"), "-G0", "-fno-toplevel-reorder", "-mno-check-zero-division", "-fno-strict-aliasing", "-std=gnu89", "-nostdinc", "-Wa,-Iinclude", "-Iinclude", "-Iinclude/psyq", "-Iinclude/decomp",
                "-D_LANGUAGE_C", "-DVER_USA", "-DSH_PORT", "-DNON_MATCHING"]
 
 
@@ -150,6 +152,8 @@ def main():
     gpu = {"soft": 0, "gs": 1, "compare": 2}[os.environ.get("SH1_GPU", "gs")]
     # Profiling counters (include/port/prof.h): SH1_PROF=1.
     prof = ["-DSH_PORT_PROF"] if os.environ.get("SH1_PROF") else []
+    # Fixed debug frame dumps (src/port/ps2/display_ps2.c): SH1_DUMP=1.
+    dump = ["-DSH_PORT_DUMP_FRAMES"] if os.environ.get("SH1_DUMP") else []
     for src in sorted(glob.glob("src/port/*.c")):
         obj = os.path.join(OUT, "port", os.path.basename(src) + ".o")
         os.makedirs(os.path.dirname(obj), exist_ok=True)
@@ -158,7 +162,7 @@ def main():
     # PS2-side HAL code (src/port/ps2/): compiled against ps2sdk's headers, not the game's.
     for src in sorted(glob.glob("src/port/ps2/*.c")):
         obj = os.path.join(OUT, "port", "ps2_" + os.path.basename(src) + ".o")
-        run([CC, "-c", "-O2", "-G0", "-D_EE", "-Wall", *prof, "-I" + os.path.join(PS2SDK, "ee", "include"),
+        run([CC, "-c", os.environ.get("SH1_PORT_OPT", "-O3"), "-G0", "-D_EE", "-Wall", *prof, *dump, "-I" + os.path.join(PS2SDK, "ee", "include"),
              "-I" + os.path.join(PS2SDK, "common", "include"), "-I" + os.path.join(GSKIT, "include"),
              "-iquote", "include", src, "-o", obj])
         port_objs.append(obj)

@@ -163,9 +163,11 @@ void Pad_Poll(void)
             }
             if (p == 0)
             {
-                /* Test presses from the map warp (warp_ps2.c); buttons are active low. */
+                /* Test presses from the map warp (warp_ps2.c) and scripted input (input_ps2.c);
+                 * buttons are active low. */
                 extern unsigned int Port_WarpButtons(void);
-                unsigned int        press = Port_WarpButtons();
+                extern unsigned int Port_InputButtons(void); /* input_ps2.c */
+                unsigned int        press = Port_WarpButtons() | Port_InputButtons();
                 s_Recv[p][2] &= (unsigned char)~(press & 0xFF);
                 s_Recv[p][3] &= (unsigned char)~(press >> 8);
             }

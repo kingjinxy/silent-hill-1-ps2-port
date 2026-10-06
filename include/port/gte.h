@@ -30,6 +30,31 @@ void Gte_Command(unsigned int cmd);
 /** @brief Resets all GTE registers to zero. */
 void Gte_Reset(void);
 
+/* Direct entry points for frequent command words (gte.c): constant Gte_Command() calls with these
+ * words go straight to them, skipping the decode (not in profiling builds, which count commands). */
+void Gte_CmdRtps(void);  /* 0x0180001 */
+void Gte_CmdRtpt(void);  /* 0x0280030 */
+void Gte_CmdNclip(void); /* 0x1400006 */
+void Gte_CmdDpcs(void);  /* 0x0780010 */
+#if !defined(GTE_IMPLEMENTATION) && !defined(SH_PORT_PROF)
+static inline void Gte_CommandDirect(unsigned int cmd)
+{
+    if (__builtin_constant_p(cmd))
+    {
+        switch (cmd)
+        {
+            case 0x0180001: Gte_CmdRtps(); return;
+            case 0x0280030: Gte_CmdRtpt(); return;
+            case 0x1400006: Gte_CmdNclip(); return;
+            case 0x0780010: Gte_CmdDpcs(); return;
+            default: break;
+        }
+    }
+    Gte_Command(cmd);
+}
+#define Gte_Command(cmd) Gte_CommandDirect(cmd)
+#endif
+
 /* Register moves inlined at their call sites (the game's GTE macros always name a constant register,
  * so a plain register becomes one load or store): the GTE's register files, and wrappers that fall
  * back to the functions above for registers with side effects. gte.c (GTE_IMPLEMENTATION) defines

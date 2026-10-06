@@ -70,6 +70,8 @@ static s32 m_rt[9], m_llm[9], m_lcm[9];
 static s16 m_rt_mmi[16] __attribute__((aligned(16)));
 #endif
 static int s_Small = 1;
+/* FC within ±2^18: DPCS with sf = 1 fits 32-bit arithmetic (dpcs_tiny). */
+static int s_FcTiny = 1;
 static int s_FastMac;
 
 /* Unsigned Newton-Raphson reciprocal table ("GTE Division Inaccuracy"). */
@@ -116,6 +118,8 @@ static void ctrl_refresh(void)
     s_Small = small30(c[C_TRX]) && small30(c[C_TRY]) && small30(c[C_TRZ]) && small30(c[C_RBK]) &&
               small30(c[C_GBK]) && small30(c[C_BBK]) && small30(c[C_RFC]) && small30(c[C_GFC]) &&
               small30(c[C_BFC]);
+    s_FcTiny = (u32)(c[C_RFC] + 0x40000) < 0x80000 && (u32)(c[C_GFC] + 0x40000) < 0x80000 &&
+               (u32)(c[C_BFC] + 0x40000) < 0x80000;
     g_GteCtrlDirty = 0;
 }
 
@@ -1006,6 +1010,24 @@ static __attribute__((noinline)) void dpcs_small(u32 rgb, int sf, int lm)
     flag |= fl;
 }
 
+/** DPCS with sf = 1 and FC within ±2^18 (s_FcTiny): as dpcs_small, in 32 bits (|(FC << 12) - RGB << 16|
+ * < 2^31, |IR * IR0| + RGB << 16 < 2^31). */
+static __attribute__((noinline)) void dpcs_tiny(u32 rgb, int lm)
+{
+    s32 ir0 = (s16)d[D_IR0], lo = lm ? 0 : -0x8000, i;
+    u32 fl = 0;
+    for (i = 0; i < 3; i++)
+    {
+        s32 base = (s32)((rgb >> (i * 8)) & 0xFF) << 16;
+        s32 v    = SAT16(((s32)c[C_RFC + i] - (base >> 12)), -0x8000, F_IR1 >> i);
+        s32 mac  = (v * ir0 + base) >> 12;
+        d[D_MAC1 + i] = (u32)mac;
+        d[D_IR1 + i]  = (u32)SAT16(mac, lo, F_IR1 >> i);
+    }
+    fl = push_rgb(fl);
+    flag |= fl;
+}
+
 /** DCPL: RGBC * IR, then depth cue. */
 static __attribute__((noinline)) void dcpl_small(int sf, int lm)
 {
@@ -1123,7 +1145,8 @@ void Gte_Command(unsigned int cmd)
         case 0x06: nclip(); break;                                            /* NCLIP */
         case 0x0C: op(sf, lm); break;                                         /* OP */
         case 0x10:                                                            /* DPCS */
-            if (s_Small) dpcs_small(d[D_RGBC], sf, lm);
+            if (s_FcTiny && sf) dpcs_tiny(d[D_RGBC], lm);
+            else if (s_Small) dpcs_small(d[D_RGBC], sf, lm);
             else dpcs_rgb(d[D_RGBC], sf, lm);
             break;
         case 0x11:                                                            /* INTPL */
@@ -1214,4 +1237,80 @@ void Gte_Command(unsigned int cmd)
         flag |= 0x80000000u;
     }
     c[C_FLAG] = flag;
+}
+
+/* Direct entry points for the game's most frequent command words (gte.h routes constant
+ * Gte_Command() calls to them): the same work as Gte_Command without decoding the word. */
+static inline void cmd_begin(void)
+{
+    if (g_GteCtrlDirty)
+    {
+        ctrl_refresh();
+    }
+    flag      = 0;
+    s_FastMac = s_Small;
+}
+
+static inline void cmd_end(void)
+{
+    if (flag & F_ERROR_MASK)
+    {
+        flag |= 0x80000000u;
+    }
+    c[C_FLAG] = flag;
+}
+
+/** RTPS, sf = 1, lm = 0 (0x0180001). */
+void Gte_CmdRtps(void)
+{
+    if (!unr_ready || g_GteCtrlDirty || !s_Small)
+    {
+        Gte_Command(0x0180001);
+        return;
+    }
+    cmd_begin();
+    rtp_small(0, 1, 0, 1);
+    cmd_end();
+}
+
+/** RTPT, sf = 1, lm = 0 (0x0280030). */
+void Gte_CmdRtpt(void)
+{
+    if (!unr_ready || g_GteCtrlDirty || !s_Small)
+    {
+        Gte_Command(0x0280030);
+        return;
+    }
+    cmd_begin();
+    rtp_small(0, 1, 0, 0);
+    rtp_small(1, 1, 0, 0);
+    rtp_small(2, 1, 0, 1);
+    cmd_end();
+}
+
+/** NCLIP (0x1400006). */
+void Gte_CmdNclip(void)
+{
+    cmd_begin();
+    nclip();
+    cmd_end();
+}
+
+/** DPCS, sf = 1, lm = 0 (0x0780010). */
+void Gte_CmdDpcs(void)
+{
+    cmd_begin();
+    if (s_FcTiny)
+    {
+        dpcs_tiny(d[D_RGBC], 0);
+    }
+    else if (s_Small)
+    {
+        dpcs_small(d[D_RGBC], 1, 0);
+    }
+    else
+    {
+        dpcs_rgb(d[D_RGBC], 1, 0);
+    }
+    cmd_end();
 }

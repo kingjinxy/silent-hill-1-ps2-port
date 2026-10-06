@@ -24,7 +24,8 @@ BACKUP = INI + ".pcsx2_run.bak"
 # For comparisons with DuckStation: native resolution (upscale 1), "Bilinear (Sharp)" output
 # (linear_present_mode 2), texture filtering as the program sets it on the GS (filter 2 = PS2).
 OVERRIDES = {"EnableEEConsole": "true", "EnableIOPConsole": "true", "EnableFileLogging": "true", "OutputMuted": "true",
-             "HostFs": "true", "upscale_multiplier": "1", "linear_present_mode": "2", "filter": "2"}
+             "HostFs": "true", "upscale_multiplier": "1", "linear_present_mode": "2", "filter": "2",
+             "Renderer": "13"}  # 13: PCSX2's software GS renderer (test runs use it)
 NOISE = ("GL_EXTENSIONS", "UpdateVSyncRate", "Frame rate:", "Set GS CRTC", "Vulkan", "OpenGL")
 
 
@@ -65,6 +66,9 @@ def main():
     ap.add_argument("--bios", help="BIOS file name in PCSX2's bios folder to use for this run")
     ap.add_argument("--stall", type=float, default=15,
                     help="stop when no new frame has been shown for this many emulated seconds (crash), 0 = off")
+    ap.add_argument("--gameplay", type=float, metavar="SECONDS",
+                    help="stop SECONDS emulated seconds (heartbeats) of unbroken gameplay "
+                         "(the port's \"port: gameplay\" line, without a later \"port: gameplay ended\"); the run then counts as passed")
     ap.add_argument("--heartbeat", action="store_true", help="keep the port's heartbeat lines in the output")
     ap.add_argument("--realtime", action="store_true", help="run at normal speed (default: unlimited)")
     args = ap.parse_args()
@@ -92,11 +96,17 @@ def main():
         # new frame for --stall emulated seconds, or when no heartbeat comes for --stall real seconds
         # (the EE is stuck, or emulation runs below full speed).
         beats, frame, frame_beat, last_beat = 0, None, 0, time.time()
+        gameplay_done = False
         while time.time() < end and proc.poll() is None:
             text = open(log, errors="replace").read() if os.path.exists(log) else ""
             if args.until and args.until in text:
                 break
             hb = re.findall(r"heartbeat: vblank \d+ frame (\d+)", text)
+            if args.gameplay is not None and "port: gameplay\n" in text:
+                after = text[text.rindex("port: gameplay\n"):]
+                if "port: gameplay ended" not in after and after.count("heartbeat: vblank") >= args.gameplay:
+                    gameplay_done = True
+                    break
             if len(hb) != beats:
                 beats, last_beat = len(hb), time.time()
                 if hb[-1] != frame:
@@ -127,6 +137,10 @@ def main():
     print("\n".join(out))
     if stalled:
         print("pcsx2_run: %s, assuming the game crashed" % stalled)
+    if args.gameplay is not None:
+        print("pcsx2_run: %s" % ("%g s of gameplay without a crash" % args.gameplay if gameplay_done
+                                 else "gameplay not reached / not held for %g s" % args.gameplay))
+        return 0 if gameplay_done else 1
     return 0 if not args.until or any(args.until in l for l in out) else 1
 
 

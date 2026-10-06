@@ -1002,3 +1002,39 @@ g_PortVram, dropped when VRAM over them changes); GP0 fills and VRAM copies also
 Frame comparison with DuckStation unchanged (19,474 / 20,847 differing display pixels at frames 100
 / 400). `compare_frames.py` and the frame debugger now compare each side's own displayed buffer (the
 double buffer's parity can differ between runs).
+
+### Opening cutscene at 60 fps
+
+Test: title -> START -> Normal (`build/port/input.txt`: `34 start`, `38 cross`), the opening FMV is
+skipped, then the in-game cutscene (~49-66 emulated s) and gameplay. `pcsx2_run.py --gameplay 30`
+ends a run after 30 emulated seconds of unbroken gameplay (the port prints `port: gameplay` /
+`port: gameplay ended` on entering and leaving it) and counts it as passed. Measured with the
+heartbeat (frames per 60 vertical blanks), PCSX2's software renderer, `SH1_FPS=60`.
+
+Before: the cutscene ran 30-45 fps for several seconds (frames needed ~1.1 fields: game update
+~2.9M EE cycles, of it ~2M in the GTE, plus ~2.5M translating GP0 to GS packets).
+- GTE: constant command words for RTPS, RTPT, NCLIP and DPCS go straight to their own entry points
+  (`Gte_CmdRtps` ... in gte.c, chosen in gte.h at compile time; not in `SH1_PROF` builds, which
+  count commands), and DPCS has a 32-bit path when the far colour is within +-2^18 (`dpcs_tiny`).
+  `tools/port/gte_test/run_ee.py`: all tests still match.
+- GS translation: polygons are packed straight into REGLIST data (no intermediate vertex structs);
+  quads go out as one 4-vertex triangle strip instead of two triangles (the same pixels:
+  `compare_frames.py` counts are identical with strips on and off, and against the previous
+  renderer); texture page and CLUT caches are looked up through direct tables; page uploads copy
+  whole rows into the DMA packet. A 4-entry state memo (replaying recorded registers) measured
+  slower than the single-entry one and was dropped.
+- The port's own code is compiled at -O3 (`SH1_PORT_OPT` overrides): 5-7% of a frame more idle
+  time in the cutscene. The game's code gains nothing from -O3 and stays at -O2.
+- Outside gameplay, MainLoop always waited for one more vertical blank after a frame, so a frame
+  slightly over one field fell to 30 fps. With `SH1_FPS=60` it now waits only when the frame took
+  under one vertical blank, as gameplay does.
+- The fixed debug frame dumps (frames 30 ... 2400) each stalled the game for about a second of
+  emulated time, which showed up as fake frame drops; they now need `SH1_DUMP=1`. `dump` lines in
+  `host:input.txt` (`src/port/ps2/input_ps2.c`) still work.
+
+After: cutscene 1019 frames in 1020 vertical blanks (60 fps every second, 8-29% EE idle); 30 s of
+gameplay at 60 fps every second (7-15% idle). The only dips are while the map loads after choosing
+the difficulty: disc reads are synchronous, each read stalling 0-8 vertical blanks behind the fade
+(the cutscene itself reads nothing). Frame comparison with DuckStation (attract demo): 20,582 /
+20,911 differing display pixels at frames 100 / 400, the same as the previous renderer now that both
+sides show the same buffer (the ±1 rounding still open).

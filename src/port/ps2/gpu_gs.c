@@ -44,7 +44,8 @@ typedef unsigned long long u64x;
 #define VRAM_BW    (VRAM_W / 64)
 #define CACHE_ADDR 0x200000
 #define CACHE_SLOT 0x10000
-#define CACHE_SLOTS 15
+#define CACHE_SLOTS 28 /* 15 at CACHE_ADDR, 13 more from CACHE2_ADDR */
+#define CACHE2_ADDR 0x130000 /* above gsKit's largest display buffer (640x480x4 = 0x12C000) */
 /* CLUT cache: one 256-pixel PSMCT16 row per CLUT (256x128, the last 64 KiB of the page cache area). */
 #define CLUT_ADDR  0x2F0000
 #define CLUT_ROWS  128
@@ -253,6 +254,12 @@ typedef struct
 
 static Slot s_Slots[CACHE_SLOTS];
 
+/** GS block address of page cache slot i. */
+static u32 slot_tbp(s32 i)
+{
+    return (u32)(i < 15 ? CACHE_ADDR + i * CACHE_SLOT : CACHE2_ADDR + (i - 15) * CACHE_SLOT) / 256;
+}
+
 typedef struct
 {
     s32 key; /* CLUT attribute | depth << 16, -1 = free */
@@ -260,6 +267,12 @@ typedef struct
 } ClutSlot;
 
 static ClutSlot s_Cluts[CLUT_ROWS];
+
+/* Direct lookups (slot or row + 1, 0 = not cached): page cache by key, CLUT cache by
+ * CLUT attribute | depth << 15. */
+static u8 s_PageMap[64];
+static u8 s_ClutMap[0x10000];
+#define CLUT_MAP(key) (((key) & 0x7FFF) | (((key) >> 16) << 15))
 
 static u32  s_UseClock;
 static u8   s_Staging[256 * 256] __attribute__((aligned(64)));
@@ -288,7 +301,8 @@ static void cache_invalidate(s32 x, s32 y, s32 w, s32 h)
         page_rect(s_Slots[i].key, &px, &py, &pw);
         if (x < px + pw && px < x + w && y < py + 256 && py < y + h)
         {
-            s_Slots[i].key = -1;
+            s_PageMap[s_Slots[i].key] = 0;
+            s_Slots[i].key            = -1;
         }
     }
     for (i = 0; i < CLUT_ROWS; i++)
@@ -303,16 +317,18 @@ static void cache_invalidate(s32 x, s32 y, s32 w, s32 h)
         cw = (s_Cluts[i].key >> 16) == 0 ? 16 : 256;
         if (x < cx + cw && cx < x + w && y <= cy && cy < y + h)
         {
-            s_Cluts[i].key = -1;
+            s_ClutMap[CLUT_MAP(s_Cluts[i].key)] = 0;
+            s_Cluts[i].key                      = -1;
         }
     }
 }
 
 /** Host-to-local image transfer of `bytes` (a multiple of 16) from `src`. */
-static void upload(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s32 h, const void* src, u32 bytes)
+/** Host-to-local transfer of the `bytes` (a multiple of 16) already placed at &s_ImgPkt[2]. */
+static void upload_staged(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s32 h, u32 bytes)
 {
-    s_StUploads++;
     u32 qwc = bytes / 16;
+    s_StUploads++;
     GpuGs_Flush();
     ad(R_BITBLTBUF, ((u64x)dbp << 32) | ((u64x)dbw << 48) | ((u64x)psm << 56));
     ad(R_TRXPOS, ((u64x)x << 32) | ((u64x)y << 48));
@@ -321,22 +337,26 @@ static void upload(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s32 h, const 
     GpuGs_Flush();
     s_ImgPkt[0] = giftag(qwc, 1, 2, 0);
     s_ImgPkt[1] = 0;
-    memcpy(&s_ImgPkt[2], src, bytes);
     dma_send(s_ImgPkt, qwc + 1);
     ad(R_TEXFLUSH, 0);
+}
+
+/** Host-to-local image transfer of `bytes` (a multiple of 16) from `src`. */
+static void upload(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s32 h, const void* src, u32 bytes)
+{
+    memcpy(&s_ImgPkt[2], src, bytes);
+    upload_staged(dbp, dbw, psm, x, y, w, h, bytes);
 }
 
 static u32 cache_get(u32 depth, u32 tpage)
 {
     s32 key = (s32)((depth << 5) | (tpage & 31));
     s32 i, best = -1, x, y, w, row;
-    for (i = 0; i < CACHE_SLOTS; i++)
+    if (s_PageMap[key])
     {
-        if (s_Slots[i].key == key)
-        {
-            s_Slots[i].used = ++s_UseClock;
-            return (CACHE_ADDR + i * CACHE_SLOT) / 256;
-        }
+        i               = s_PageMap[key] - 1;
+        s_Slots[i].used = ++s_UseClock;
+        return slot_tbp(i);
     }
     /* A free slot, else the least recently used one. */
     for (i = 0; i < CACHE_SLOTS; i++)
@@ -352,21 +372,34 @@ static u32 cache_get(u32 depth, u32 tpage)
         }
     }
     /* Upload the page's indices: 256 rows of 64 (4-bit) or 128 (8-bit) VRAM words. */
+    /* Rows straight into the transfer packet (whole rows with memcpy unless the page wraps). */
     page_rect(key, &x, &y, &w);
     for (row = 0; row < 256; row++)
     {
-        s32 col;
-        u16* dst = (u16*)&s_Staging[row * w * 2];
-        for (col = 0; col < w; col++)
+        u16* dst = (u16*)&s_ImgPkt[2] + row * w;
+        const u16* src = &g_PortVram[(y + row) & (VRAM_H - 1)][0];
+        if (x + w <= VRAM_W)
         {
-            dst[col] = g_PortVram[(y + row) & (VRAM_H - 1)][(x + col) & (VRAM_W - 1)];
+            memcpy(dst, src + x, (u32)w * 2);
+        }
+        else
+        {
+            s32 col;
+            for (col = 0; col < w; col++)
+            {
+                dst[col] = src[(x + col) & (VRAM_W - 1)];
+            }
         }
     }
-    upload((CACHE_ADDR + best * CACHE_SLOT) / 256, 4, depth == 0 ? PSM_T4 : PSM_T8, 0, 0, 256, 256, s_Staging,
-           (u32)(w * 2 * 256));
+    upload_staged(slot_tbp(best), 4, depth == 0 ? PSM_T4 : PSM_T8, 0, 0, 256, 256, (u32)(w * 2 * 256));
+    if (s_Slots[best].key >= 0)
+    {
+        s_PageMap[s_Slots[best].key] = 0;
+    }
     s_Slots[best].key  = key;
     s_Slots[best].used = ++s_UseClock;
-    return (CACHE_ADDR + best * CACHE_SLOT) / 256;
+    s_PageMap[key]     = (u8)(best + 1);
+    return slot_tbp(best);
 }
 
 /** Row of the CLUT cache holding `clut` (PS1 CLUT attribute) for a 4- or 8-bit page. */
@@ -375,13 +408,11 @@ static u32 clut_get(u32 clut, u32 depth)
     s32 key = (s32)((clut & 0x7FFF) | (depth << 16));
     s32 i, best = -1, x, y, n;
     u16 row[256] __attribute__((aligned(16)));
-    for (i = 0; i < CLUT_ROWS; i++)
+    if (s_ClutMap[CLUT_MAP(key)])
     {
-        if (s_Cluts[i].key == key)
-        {
-            s_Cluts[i].used = ++s_UseClock;
-            return (u32)i;
-        }
+        i               = s_ClutMap[CLUT_MAP(key)] - 1;
+        s_Cluts[i].used = ++s_UseClock;
+        return (u32)i;
     }
     for (i = 0; i < CLUT_ROWS; i++)
     {
@@ -403,8 +434,13 @@ static u32 clut_get(u32 clut, u32 depth)
         row[i] = g_PortVram[y][(x + i) & (VRAM_W - 1)];
     }
     upload(CLUT_ADDR / 256, 4, PSM_CT16, 0, best, n, 1, row, (u32)(n * 2));
-    s_Cluts[best].key  = key;
-    s_Cluts[best].used = ++s_UseClock;
+    if (s_Cluts[best].key >= 0)
+    {
+        s_ClutMap[CLUT_MAP(s_Cluts[best].key)] = 0;
+    }
+    s_Cluts[best].key            = key;
+    s_Cluts[best].used           = ++s_UseClock;
+    s_ClutMap[CLUT_MAP(key)]     = (u8)(best + 1);
     s_RegValid[R_TEX0] = 0; /* this row's contents changed: load it again */
     return (u32)best;
 }
@@ -429,11 +465,20 @@ static void init(void)
     {
         s_Cluts[i].key = -1;
     }
+    memset(s_PageMap, 0, sizeof(s_PageMap));
+    memset(s_ClutMap, 0, sizeof(s_ClutMap));
     s_Ready = 1;
 }
 
 static u64x dimx(void)
 {
+    static u64x cached;
+    static int  ready;
+    if (ready)
+    {
+        return cached;
+    }
+    ready = 1;
     static const s32 M[4][4] = { { -4, 0, -3, 1 }, { 2, -2, 3, -1 }, { -3, 1, -4, 0 }, { 3, -1, 2, -2 } };
     u64x v = 0;
     s32  i, j;
@@ -444,12 +489,20 @@ static u64x dimx(void)
             v |= (u64x)(M[i][j] & 7) << (i * 16 + j * 4);
         }
     }
+    cached = v;
     return v;
 }
 
 /** Fixed per-frame-buffer state: drawing into the VRAM buffer. */
 static void base_state(void)
 {
+    /* Unchanged since the last call unless something else rewrote GS state (s_Epoch). */
+    static u32 doneEpoch = ~0u;
+    if (doneEpoch == s_Epoch && s_RegValid[R_FRAME])
+    {
+        return;
+    }
+    doneEpoch = s_Epoch;
     set(R_FRAME, (u64x)VRAM_FBP | ((u64x)VRAM_BW << 16) | ((u64x)PSM_CT16 << 24));
     set(R_ZBUF, (u64x)(CACHE_ADDR / 8192) | (1ULL << 32)); /* Z writes masked, never tested */
     set(R_XYOFFSET, (u64x)(2048 << 4) | ((u64x)(2048 << 4) << 32));
@@ -595,8 +648,8 @@ static u64x vertex_regs(int textured, int n, int* nreg)
 /** A primitive (PRIM + n vertices) as one REGLIST loop. */
 static void emit(const Prim* p, u64x prim, const Vtx* const* v, int n)
 {
-    static u64x regsTab[2][4];
-    static int  nregTab[2][4];
+    static u64x regsTab[2][5];
+    static int  nregTab[2][5];
     u64x*       q;
     u32         a = p->textured ? 0x80 : 0;
     int         i;
@@ -623,23 +676,6 @@ static void emit(const Prim* p, u64x prim, const Vtx* const* v, int n)
 static s32 absd(s32 a, s32 b)
 {
     return a > b ? a - b : b - a;
-}
-
-static void triangle(const Prim* p, u64x prim, const Vtx* v0, const Vtx* v1, const Vtx* v2)
-{
-    /* The GPU skips polygons spanning more than 1023x511. */
-    if (absd(v0->x, v1->x) > 1023 || absd(v1->x, v2->x) > 1023 || absd(v0->x, v2->x) > 1023 ||
-        absd(v0->y, v1->y) > 511 || absd(v1->y, v2->y) > 511 || absd(v0->y, v2->y) > 511)
-    {
-        return;
-    }
-    {
-        const Vtx* v[3];
-        v[0] = v0;
-        v[1] = v1;
-        v[2] = v2;
-        emit(p, prim | 3, v, 3);
-    }
 }
 
 /* --- Commands ---------------------------------------------------------------------------------*/
@@ -670,65 +706,117 @@ static void quantize(Vtx* v, s32 n)
     }
 }
 
-static u32 polygon(const u32* w, s32 n)
+/** One REGLIST loop of PRIM and `nv` vertices from packed register values. */
+static void emit_packed(int textured, u64x prim, const u64x* rgbaq, const u64x* uv, const u64x* xyz, int nv)
 {
-    u32  cmd = w[0] >> 24;
-    Prim p;
-    Vtx  v[4];
-    s32  nv = (cmd & 0x08) ? 4 : 3;
-    s32  i, k = 0;
-    u64x prim;
-
-    p.gouraud  = (cmd >> 4) & 1;
-    p.textured = (cmd >> 2) & 1;
-    p.raw      = (cmd & 1) && p.textured;
-    p.semi     = (cmd >> 1) & 1;
-    p.tpage    = s_TexPage;
-    p.clut     = 0;
-
+    static u64x regsTab[2][5];
+    static int  nregTab[2][5];
+    u64x*       q;
+    int         i;
+    if (!nregTab[textured][nv])
+    {
+        regsTab[textured][nv] = vertex_regs(textured, nv, &nregTab[textured][nv]);
+    }
+    s_StPrims++;
+    q    = reglist(regsTab[textured][nv], nregTab[textured][nv]);
+    *q++ = prim;
     for (i = 0; i < nv; i++)
     {
-        if (i == 0 || p.gouraud)
+        *q++ = rgbaq[i];
+        if (textured)
         {
-            if (k >= n) return n;
-            read_rgb(w[k++], &v[i]);
+            *q++ = uv[i];
+        }
+        *q++ = xyz[i];
+    }
+}
+
+/** Whether the triangle a, b, c spans more than the GPU draws (1023x511). */
+static int too_big_xy(const s32* x, const s32* y, int a, int b, int c)
+{
+    return absd(x[a], x[b]) > 1023 || absd(x[b], x[c]) > 1023 || absd(x[a], x[c]) > 1023 ||
+           absd(y[a], y[b]) > 511 || absd(y[b], y[c]) > 511 || absd(y[a], y[c]) > 511;
+}
+
+static u32 polygon(const u32* w, s32 n)
+{
+    u32  cmd      = w[0] >> 24;
+    s32  nv       = (cmd & 0x08) ? 4 : 3;
+    u32  gouraud  = (cmd >> 4) & 1;
+    u32  textured = (cmd >> 2) & 1;
+    u32  raw      = (cmd & 1) && textured;
+    s32  words    = nv * (1 + (s32)textured) + (gouraud ? nv : 1);
+    u32  rgb[4], clut = 0, tpage = s_TexPage, colorMask = 0xFFFFFF;
+    s32  x[4], y[4], i, k = 0;
+    u64x rgbaq[4], uv[4], xyz[4], prim, a;
+    Prim p;
+
+    if (n < words)
+    {
+        return (u32)n;
+    }
+    for (i = 0; i < nv; i++)
+    {
+        u32 xy;
+        rgb[i] = (i == 0 || gouraud) ? w[k++] & 0xFFFFFF : rgb[0];
+        xy     = w[k++];
+        x[i]   = sext11(xy) + s_OffX;
+        y[i]   = sext11(xy >> 16) + s_OffY;
+        if (textured)
+        {
+            u32 t = w[k++];
+            uv[i] = (u64x)((t & 0xFF) << 4) | ((u64x)(((t >> 8) & 0xFF) << 4) << 16);
+            if (i == 0) clut = t >> 16;
+            if (i == 1) tpage = (s_TexPage & ~0x1FFu) | ((t >> 16) & 0x1FF);
+        }
+    }
+    p.gouraud  = gouraud;
+    p.textured = textured;
+    p.raw      = raw;
+    p.semi     = (cmd >> 1) & 1;
+    p.tpage    = tpage;
+    p.clut     = clut;
+    if (textured)
+    {
+        s_TexPage = tpage; /* textured polygons also set the current texture page */
+    }
+    p.semiMode = (tpage >> 5) & 3;
+    p.dither   = ((s_TexPage >> 9) & 1) && (gouraud || (textured && !raw));
+    if (!textured && !gouraud && !p.dither)
+    {
+        colorMask = 0xF8F8F8; /* as quantize() */
+    }
+    a = textured ? 0x80ULL << 24 : 0;
+    for (i = 0; i < nv; i++)
+    {
+        rgbaq[i] = (u64x)(raw ? 0x808080 : (rgb[i] & colorMask)) | a | (0x3F800000ULL << 32);
+        xyz[i]   = (u64x)((x[i] + 2048) << 4 & 0xFFFF) | ((u64x)((y[i] + 2048) << 4 & 0xFFFF) << 16);
+    }
+    prim = prim_state(&p);
+    s_StDate += s_CheckMask * (nv == 4 ? 2 : 1);
+    s_StRtTex += (textured && ((tpage >> 7) & 3) >= 2) * (nv == 4 ? 2 : 1);
+    if (nv == 4)
+    {
+        int big0 = too_big_xy(x, y, 0, 1, 2), big1 = too_big_xy(x, y, 1, 2, 3);
+        if (!big0 && !big1)
+        {
+            emit_packed((int)textured, prim | 4, rgbaq, uv, xyz, 4); /* both halves as one strip */
         }
         else
         {
-            v[i].r = v[0].r; v[i].g = v[0].g; v[i].b = v[0].b;
-        }
-        if (k >= n) return n;
-        read_xy(w[k++], &v[i]);
-        v[i].u = v[i].v = 0;
-        if (p.textured)
-        {
-            if (k >= n) return n;
-            v[i].u = w[k] & 0xFF;
-            v[i].v = (w[k] >> 8) & 0xFF;
-            if (i == 0) p.clut = w[k] >> 16;
-            if (i == 1) p.tpage = (s_TexPage & ~0x1FFu) | ((w[k] >> 16) & 0x1FF);
-            k++;
+            if (!big0)
+            {
+                emit_packed((int)textured, prim | 3, rgbaq, uv, xyz, 3);
+            }
+            if (!big1)
+            {
+                emit_packed((int)textured, prim | 3, rgbaq + 1, uv + 1, xyz + 1, 3);
+            }
         }
     }
-    if (p.textured)
+    else if (!too_big_xy(x, y, 0, 1, 2))
     {
-        s_TexPage = p.tpage; /* textured polygons also set the current texture page */
-    }
-    p.semiMode = (p.tpage >> 5) & 3;
-    p.dither   = ((s_TexPage >> 9) & 1) && (p.gouraud || (p.textured && !p.raw));
-    if (p.raw)
-    {
-        for (i = 0; i < nv; i++) { v[i].r = v[i].g = v[i].b = 0x80; }
-    }
-    if (!p.textured && !p.gouraud && !p.dither)
-    {
-        quantize(&v[0], nv);
-    }
-    prim = prim_state(&p);
-    triangle(&p, prim, &v[0], &v[1], &v[2]);
-    if (nv == 4)
-    {
-        triangle(&p, prim, &v[1], &v[2], &v[3]);
+        emit_packed((int)textured, prim | 3, rgbaq, uv, xyz, 3);
     }
     return (u32)k;
 }

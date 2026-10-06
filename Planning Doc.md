@@ -216,7 +216,10 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [x] Profiling counters (`SH1_PROF=1`, include/port/prof.h)
 - [x] GTE speed-up (bit-exact, checked on the host and on the EE): fast paths, cached matrices, inlined register moves, MMI (PLZCW, PHMADH)
 - [x] 60 fps in the demo scene: EE 11-38% idle; the remaining dips are file loads (VSync waits while streaming), as on the PS1
-- [ ] Further GS translation speed-ups if heavier scenes need them (parse straight into packets; state per primitive is ~500 cycles)
+- [x] GS translation speed-ups: polygons packed straight into REGLIST data, quads as one triangle strip, direct page/CLUT cache lookups, row copies for page uploads
+- [x] Opening new-game cutscene at a solid 60 fps (`SH1_FPS=60`; PCSX2 software renderer): direct GTE command entry points, 32-bit DPCS, port code at -O3, late frames outside gameplay no longer snap to 30 fps
+- [ ] Gameplay after the cutscene: 60 fps but only ~7-15% EE idle; heavier rooms will need more (GTE RTPT/DPCS, GS translation)
+- [ ] Disc reads are synchronous (each HILL. sector its own DVD request): stalls 0-8 vertical blanks per read while loading; make asynchronous and batch
 - [x] All-map 60 fps sweep (one boot): most maps 54-59 fps average; slowest map7_s03 (~43)
 - [ ] Overlay .data/.bss reset on reload (code in place, off: breaks the second demo)
 - [x] Frame comparison tool vs DuckStation (`tools/port/compare_frames.py`): same demo frame, display + VRAM + GP0 stream + game state
