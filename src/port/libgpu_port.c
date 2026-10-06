@@ -19,6 +19,8 @@
 #include "libgpu.h"
 #include "game.h"
 #include "port/prof.h"
+#include "bodyprog/demo.h"
+#include "bodyprog/screen/screen_data.h"
 
 #define VRAM_W 1024
 #define VRAM_H 512
@@ -57,9 +59,28 @@ static void* ptr24(u32 addr)
     return (void*)(unsigned long)(addr & 0xFFFFFF);
 }
 
+extern void Capture_Packet(int step, const unsigned int* words, int count); /* src/port/ps2/capture_ps2.c */
+extern void Capture_Display(const unsigned short* vram, int x, int y, int w, int h, const void* state, int stateSize,
+                            const void* state2, int state2Size, int deltaTime);
+extern int  Capture_Pending(void);
+
+/** The first attract demo's id (captures are only of it), -1 until a demo runs. */
+static s32 s_CaptureDemoId = -1;
+
 /** @brief Every GPU command packet (GP0 words) ends up here. */
 static void Gpu_Submit(const u32* words, s32 count)
 {
+    if (g_SysWork.sysFlags & SysFlag_DemoActive)
+    {
+        if (s_CaptureDemoId < 0)
+        {
+            s_CaptureDemoId = g_Demo_DemoId;
+        }
+        if (g_Demo_DemoId == s_CaptureDemoId)
+        {
+            Capture_Packet(g_Demo_DemoStep, words, count);
+        }
+    }
     if (g_PortGsRenderer)
     {
         GpuGs_Commands(words, count);
@@ -252,6 +273,15 @@ DRAWENV* PutDrawEnv(DRAWENV* env)
 
 DISPENV* PutDispEnv(DISPENV* env)
 {
+    if (Capture_Pending())
+    {
+        if (g_PortGsRenderer == 1)
+        {
+            GpuGs_StoreAll();
+        }
+        Capture_Display(&g_PortVram[0][0], env->disp.x, env->disp.y, env->disp.w, env->disp.h, &g_SysWork,
+                        (int)sizeof(g_SysWork), &g_GameWork, (int)sizeof(g_GameWork), g_DeltaTime);
+    }
 #ifdef SH_PORT_PROF
     {
         static u32 frames;

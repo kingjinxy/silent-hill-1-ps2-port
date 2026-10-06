@@ -219,7 +219,13 @@ q19_12 Anim_DurationGet(s_Model* unused, s_AnimInfo* animInfo) // 0x800449AC
         return animInfo->duration.constant;
     }
 
+#ifdef SH_PORT
+    // The variable duration functions take the model (`Player_VariableAnimDurationGet(s_Model*)`); on
+    // PS1 the call works because `a0` still holds it. Pass it explicitly.
+    return ((q19_12 (*)(s_Model*))animInfo->duration.variableFunc)(unused);
+#else
     return animInfo->duration.variableFunc();
+#endif
 }
 
 void Anim_PlaybackOnce(s_Model* model, s_AnmHeader* anmHdr, GsCOORDINATE2* boneCoords, s_AnimInfo* animInfo) // 0x800449F0

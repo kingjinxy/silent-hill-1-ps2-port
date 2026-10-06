@@ -219,7 +219,11 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [ ] Further GS translation speed-ups if heavier scenes need them (parse straight into packets; state per primitive is ~500 cycles)
 - [x] All-map 60 fps sweep (one boot): most maps 54-59 fps average; slowest map7_s03 (~43)
 - [ ] Overlay .data/.bss reset on reload (code in place, off: breaks the second demo)
-- [ ] Graphics vs DuckStation (first attract demo): world largely unrendered, flashlight lighting, wrong player textures
+- [x] Frame comparison tool vs DuckStation (`tools/port/compare_frames.py`): same demo frame, display + VRAM + GP0 stream + game state
+- [x] First attract demo in sync with the PS1 (Harry's run animation froze: `variableFunc` called without its model argument)
+- [ ] Renderer rounding: display pixels mostly +-1/31 off DuckStation's software renderer (identical GP0 streams)
+- [ ] Crash in the second attract demo (map2_s00 again, ~7 s in; world chunk streaming, `WorldMap_CollisionDataGet`): timing dependent
+- [ ] Flashlight lighting / player textures: re-check once the above are done
 - [ ] GS renderer gaps: rectangle flips, wrapping VRAM copies, 24-bit display (FMV)
 - [ ] GS hardware renderer (speed), checked against gpu_soft.c
 

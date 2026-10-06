@@ -147,6 +147,20 @@ void Pad_Poll(void)
         if ((state == PAD_STATE_STABLE || state == PAD_STATE_FINDCTP1) && padRead(p, 0, &st) != 0 && st.ok == 0)
         {
             memcpy(s_Recv[p], &st, 8);
+            /* Sticks resting near the centre read as exactly 80h, as PS1 pads (and DuckStation) report:
+             * the game reads the live sticks even during the attract demo, and a PS2 pad at rest
+             * (7Fh) changed Harry's run animation speed there. The game's own dead zone is larger. */
+            {
+                int k;
+                for (k = 4; k < 8; k++)
+                {
+                    int d = (int)s_Recv[p][k] - 0x80;
+                    if (d >= -8 && d <= 8)
+                    {
+                        s_Recv[p][k] = 0x80;
+                    }
+                }
+            }
             if (p == 0)
             {
                 /* Test presses from the map warp (warp_ps2.c); buttons are active low. */

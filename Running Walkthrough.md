@@ -944,3 +944,31 @@ come with *more* idle time: they are file loads (the loader waits in VSync loops
 - Overlay data reset (`SH_PORT_OVERLAY_RESET`, off): restores an overlay's .data/.bss when its file
   is read again (port_link.py markers + startup snapshot). Fixes a map loaded twice in a row in the
   sweep, but the PS1 overlay memory isn't fully modelled yet; TODO.
+
+### Comparing with DuckStation frame by frame
+
+`tools/port/compare_frames.py --frames 26,100,400` captures the same frames of the first attract demo
+(by `g_Demo_DemoStep`) from both:
+- PS2 (`src/port/ps2/capture_ps2.c`, `host:capture.txt`): every GP0 packet the frame drew, then at the
+  next PutDispEnv the VRAM (read back from the GS), display rectangle, `g_SysWork`, `g_GameWork`,
+  `g_DeltaTime`.
+- PS1 (`tools/port/gdb/capture_ps1.py`, DuckStation with the software renderer): the ordering tables
+  walked at DrawOTag plus PutDrawEnv's packet; VRAM by calling the game's own StoreImage/DrawSync
+  from gdb in 64-line chunks through a scratch RAM area (restored after); the same state structures.
+It writes PS1 | PS2 | difference images of the display and of VRAM, and reports differing pixels,
+the first differing GP0 packets (ignoring the bits the GPU ignores: the upper half of a textured
+polygon's later UV words holds leftover memory) and differing state fields by name
+(`tools/port/struct_layout.py` reads the struct layout from DWARF).
+
+Findings:
+- The game state diverged from frame 26 of the demo: Harry's run animation stopped advancing, so his
+  position, the camera and the world drawn all differed (much of the "unrendered world").
+  `Anim_DurationGet` calls `duration.variableFunc()` with no argument, but
+  `Player_VariableAnimDurationGet(s_Model*)` reads the model: on PS1 `a0` still holds it. Under
+  `SH_PORT` the model is passed. Now `g_SysWork`/`g_GameWork` match (except vertical blank counters
+  and pad state) and the GP0 streams are identical through frame 400.
+- The game reads the live sticks during the demo; PCSX2's pad rests at 7Fh, PS1 pads at 80h: sticks
+  within 8 of the centre now read 80h.
+- Rendering: with identical GP0 streams, ~20,000 of 71,680 display pixels differ, nearly all by one
+  5-bit step (more often darker on the PS2): rounding in shading/blending/dithering. Next to fix.
+- Open: the second demo (map2_s00 again) crashes ~7 s in, in world chunk streaming; timing dependent.
