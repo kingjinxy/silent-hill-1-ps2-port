@@ -918,3 +918,29 @@ matters more on hardware). More importantly, measuring idle time (vertical blank
 EE is 11-38% idle per second in-game at 60 fps; the frame rate dips (36-54 fps for a second or two)
 come with *more* idle time: they are file loads (the loader waits in VSync loops), as on the PS1.
 `SH1_FPS=60 SH1_BENCH=1`: average 58.3 fps; the rendering itself fits in a field in this scene.
+
+### Faster GTE (2), one-boot warp sweep, strict aliasing
+
+- `tools/port/warp_sweep_ps2.py`: sweeps measure the game's frame rate in emulated time (frames per
+  60 vertical blanks, from the heartbeat, which now also reports the share of time spent waiting in
+  VSync), so the emulator's speed doesn't matter. Now one boot visits every map: `warp.txt` lists
+  the maps; each run of the first attract demo warps to the next one, the port presses L2 after
+  `seconds=N` to end it (`Port_WarpButtons`), other demos are ended after 5 s. Same-demo warps
+  only: warping another demo carries its recorded state into the map (map4_s02 crashed that way).
+- Lean exact GTE paths for `s_Small` (saturation and flags inline): RTPS/RTPT, DPCS/DPCT, DCPL,
+  NCS/NCT/NCCS/NCDS/NCDT. A 32x32->64 multiply via MULT/MFHI (`mul32`): GCC turned some of these
+  into `__muldi3` calls.
+- Control register writes inline and lazy: matrix/TR/BK/FC writes only store and mark the cache dirty;
+  the next command refreshes it once. The profile (`src/port/prof_fn.c`, function-level exclusive
+  cycles with `-finstrument-functions`) had shown ~8,000 out-of-line control writes per frame in
+  map7_s00, each unpacking a matrix.
+- `-fno-strict-aliasing` for game, port and recompiled code: with the register writes inlined, GCC
+  reordered the GTE macros' type-punned matrix reads (s16 matrices read as words) before the stores
+  that built the matrix: the second attract demo then read garbage world-object pointers. The PS1's
+  GCC 2.8 never assumed strict aliasing.
+- Results (60 fps benchmark, emulated time): most maps average 54-59 fps; map7_s00 35 -> 55-58,
+  map1_s06 36 -> 49-58, map5_s00 37 -> 51-59; map7_s03 is the slowest (~43). A few maps fail only in
+  the one-boot sweep (visited after others): not investigated.
+- Overlay data reset (`SH_PORT_OVERLAY_RESET`, off): restores an overlay's .data/.bss when its file
+  is read again (port_link.py markers + startup snapshot). Fixes a map loaded twice in a row in the
+  sweep, but the PS1 overlay memory isn't fully modelled yet; TODO.

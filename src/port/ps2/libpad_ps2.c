@@ -147,6 +147,14 @@ void Pad_Poll(void)
         if ((state == PAD_STATE_STABLE || state == PAD_STATE_FINDCTP1) && padRead(p, 0, &st) != 0 && st.ok == 0)
         {
             memcpy(s_Recv[p], &st, 8);
+            if (p == 0)
+            {
+                /* Test presses from the map warp (warp_ps2.c); buttons are active low. */
+                extern unsigned int Port_WarpButtons(void);
+                unsigned int        press = Port_WarpButtons();
+                s_Recv[p][2] &= (unsigned char)~(press & 0xFF);
+                s_Recv[p][3] &= (unsigned char)~(press >> 8);
+            }
         }
         else
         {

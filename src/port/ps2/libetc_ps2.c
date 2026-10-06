@@ -2,7 +2,8 @@
  *
  * Also a heartbeat for tools/port/pcsx2_run.py's crash detection: a high-priority thread prints the
  * vertical blank and presented frame counts once per 60 vertical blanks (an emulated second), so a
- * game that stops presenting frames can be told from a slow emulator.
+ * game that stops presenting frames can be told from a slow emulator, and the share of that second
+ * spent waiting in VSync (idle: headroom).
  */
 
 #include <kernel.h>
@@ -12,6 +13,8 @@ static volatile int s_VBlanks;
 static int          s_Sema = -1;
 static int          s_HandlerId = -1;
 static void (*s_Callback)(void);
+volatile int g_PortInInterrupt; /* set while the game's vertical blank callback runs (profilers) */
+static unsigned int s_WaitCycles; /* EE cycles spent waiting in VSync (idle), for the heartbeat */
 
 extern void Pad_Poll(void);        /* libpad_ps2.c */
 extern int  Display_FrameCount(void); /* display_ps2.c */
@@ -25,7 +28,10 @@ static void heartbeat(void* arg)
     for (;;)
     {
         WaitSema(s_HeartbeatSema);
-        printf("heartbeat: vblank %d frame %d\n", s_VBlanks, Display_FrameCount());
+        /* idle: share of the last second the game spent waiting for a vertical blank (EE at
+         * 294.912 MHz: 2,949,120 cycles = 1%). */
+        printf("heartbeat: vblank %d frame %d idle %u%%\n", s_VBlanks, Display_FrameCount(), s_WaitCycles / 2949120);
+        s_WaitCycles = 0;
     }
 }
 
@@ -55,7 +61,9 @@ static int vblank_handler(int cause)
     }
     if (s_Callback)
     {
+        g_PortInInterrupt = 1;
         s_Callback();
+        g_PortInInterrupt = 0;
     }
     iSignalSema(s_Sema);
     ExitHandler();
@@ -138,9 +146,15 @@ int VSync(int mode)
     target = s_VBlanks + n;
     /* Sleep until the count reaches the target: the semaphore only wakes us up (other code may
      * signal it too: after gsKit's setup runs again, VSync returned without a vertical blank). */
-    while (s_VBlanks - target < 0)
     {
-        WaitSema(s_Sema);
+        unsigned int t0, t1;
+        __asm__ volatile("mfc0 %0, $9" : "=r"(t0));
+        while (s_VBlanks - target < 0)
+        {
+            WaitSema(s_Sema);
+        }
+        __asm__ volatile("mfc0 %0, $9" : "=r"(t1));
+        s_WaitCycles += t1 - t0;
     }
     Pad_Poll(); /* the PS1 BIOS refreshes the pad buffers every vertical blank */
     return 0;

@@ -2,12 +2,15 @@
 """Warps the attract demo into each map on the PS2 build in PCSX2 and checks the game survives
 (the PS2 counterpart of tools/port/gdb/warp_sweep.py).
 
-For each map: writes build/port/warp.txt (read by src/port/ps2/warp_ps2.c), boots the disc image,
-and waits for the map load after the warped one (the warped demo ran and the game got back to the
-title). pcsx2_run.py's stall detection reports crashes. With --realtime, also reports the frame rate
-while in the warped map (build with SH1_FPS=60 SH1_BENCH=1 to measure 60 fps headroom).
+Boots once for the whole list: build/port/warp.txt (read by src/port/ps2/warp_ps2.c) lists the maps;
+each run of the first demo warps to the next one (other demos are ended quickly), runs --seconds-per-map emulated seconds, then the port presses a
+button to end it, and the next demo takes the next map. A map passes when the game gets back to a
+map load after it. pcsx2_run.py's stall detection reports crashes; the sweep then boots again from
+the following map. Also reports the game's frame rate while in
+the warped map, in emulated time (frames per 60 vertical blanks, from the port's heartbeat), so it
+doesn't depend on the emulator's speed: build with SH1_FPS=60 SH1_BENCH=1 to measure 60 fps headroom.
 
-    python3 tools/port/warp_sweep_ps2.py [--maps map1_s02,5,...] [--realtime] [--timeout 240]
+    python3 tools/port/warp_sweep_ps2.py [--maps map1_s02,5,...] [--seconds-per-map 40] [--realtime]
 """
 import argparse
 import os
@@ -33,59 +36,83 @@ DONE = "(next map load after the warp)"
 
 
 def frame_rates(lines):
-    """Frames per second for each 60-frame display line while in the warped map, in gameplay (the
-    game's 320-wide 224-line mode), skipping the first one (still loading)."""
-    rates, prev, inside = [], None, False
+    """(frame rate, idle %) for each emulated second (heartbeat: one line per 60 vertical blanks) in
+    a map's segment of the log, skipping the first five (loading and the fade-in, which waits an
+    extra vertical blank per frame by design)."""
+    rates, prev = [], None
     for line in lines:
-        if "(warp from" in line:
-            inside = True
-        elif DONE in line:
-            break
-        m = re.search(r"\[\s*([\d.]+)\] display: frame \d+, (\d+)x(\d+)", line)
-        if m and inside:
-            t = float(m.group(1))
-            if prev is not None and m.group(3) == "224":
-                rates.append(60 / (t - prev))
-            prev = t
-    return rates[1:]
+        m = re.search(r"heartbeat: vblank (\d+) frame (\d+) idle (\d+)%", line)
+        if m:
+            vb, fr, idle = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if prev is not None and vb > prev[0]:
+                rates.append(((fr - prev[1]) * 60.0 / (vb - prev[0]), idle))
+            prev = (vb, fr)
+    return rates[5:]
 
 
-def run_map(name, args, log):
-    open(WARP, "w").write(name + "\n")
-    cmd = [sys.executable, os.path.join(HERE, "pcsx2_run.py"), "--seconds", str(args.timeout), "--until", DONE, ISO]
+def run_list(names, args, log):
+    """One boot through `names`; returns [(name, status, why, rates)] for the maps it got to."""
+    open(WARP, "w").write("seconds=%d\n%s\n" % (args.seconds_per_map, " ".join(names)))
+    timeout = len(names) * (args.seconds_per_map + 60) + 60
+    cmd = [sys.executable, os.path.join(HERE, "pcsx2_run.py"), "--heartbeat", "--seconds", str(timeout),
+           "--until", "port: warp list done", ISO]
     if args.realtime:
         cmd.insert(2, "--realtime")
     out = subprocess.run(cmd, capture_output=True, text=True).stdout
-    log.write("==== %s\n%s\n" % (name, out))
+    log.write("==== %s\n%s\n" % (" ".join(names), out))
     log.flush()
-    lines = out.splitlines()
-    if not any("(warp from" in l for l in lines):
-        return "ERROR", "warp never triggered", []
-    rates = frame_rates(lines)
-    if any(DONE in l for l in lines):
-        return "PASS", "", rates
-    stall = [l for l in lines if l.startswith("pcsx2_run:")]
-    faults = [l.split("] ", 1)[-1] for l in lines if "TLB Miss, pc=" in l or "Exception" in l]
-    return "FAIL", (stall[0][11:] if stall else "timed out") + ("; " + faults[0] if faults else ""), rates
+    results, current, seg, measured = [], None, [], None
+    for line in out.splitlines():
+        m = re.search(r"port: map load (\S+) \(warp from", line)
+        if m:
+            current, seg, measured = m.group(1), [], None
+            continue
+        if current and DONE in line:
+            results.append((current, "PASS", "", frame_rates(measured if measured is not None else seg)))
+            current, measured = None, None
+            continue
+        if current and "port: ending demo" in line:
+            measured = list(seg) # frame rates: the time in the map, not the way back to the title
+            continue
+        if current:
+            seg.append(line)
+    if current:
+        stall = [l for l in out.splitlines() if l.startswith("pcsx2_run:")]
+        faults = [l.split("] ", 1)[-1] for l in seg if "TLB Miss, pc=" in l or "Exception" in l]
+        why = (stall[0][11:] if stall else "timed out") + ("; " + faults[0] if faults else "")
+        results.append((current, "FAIL", why, frame_rates(seg)))
+    return results
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--maps", help="comma-separated names or numbers (default: all)")
-    ap.add_argument("--realtime", action="store_true", help="run at normal speed and report frame rates")
-    ap.add_argument("--timeout", type=int, default=240, help="seconds per map")
+    ap.add_argument("--seconds-per-map", type=int, default=40, help="emulated seconds in each map")
+    ap.add_argument("--realtime", action="store_true", help="run at normal speed (frame rates don't need it)")
     args = ap.parse_args()
     maps = MAPS
     if args.maps:
         maps = [MAPS[int(m)] if m.isdigit() else m for m in args.maps.split(",")]
     log = open(os.path.join(REPO, "build", "port", "warp_sweep_ps2.log"), "w")
-    results = []
+    results, todo = [], list(maps)
     try:
-        for name in maps:
-            status, why, rates = run_map(name, args, log)
-            fps = " fps min %.0f avg %.1f" % (min(rates), sum(rates) / len(rates)) if rates and args.realtime else ""
-            print("%-9s %-5s%s %s" % (name, status, fps, why), flush=True)
-            results.append(status)
+        while todo:
+            got = run_list(todo, args, log)
+            if not got:
+                for name in todo:
+                    print("%-9s ERROR warp never triggered" % name, flush=True)
+                    results.append("ERROR")
+                break
+            for name, status, why, rates in got:
+                fps = ""
+                if rates:
+                    srt = sorted(r for r, _ in rates)
+                    idle = sorted(i for _, i in rates)
+                    fps = " fps avg %.1f, 10%% low %.0f (%d s); idle avg %d%%, min %d%%" % (
+                        sum(srt) / len(srt), srt[len(srt) // 10], len(srt), sum(idle) // len(idle), idle[0])
+                print("%-9s %-5s%s %s" % (name, status, fps, why), flush=True)
+                results.append(status)
+            todo = todo[len(got):]
     finally:
         if os.path.exists(WARP):
             os.remove(WARP)

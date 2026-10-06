@@ -258,6 +258,10 @@ DISPENV* PutDispEnv(DISPENV* env)
         if (++frames == 120)
         {
             Prof_Report(frames);
+            {
+                extern void ProfFn_Report(unsigned int frames);
+                ProfFn_Report(frames);
+            }
             frames = 0;
         }
     }

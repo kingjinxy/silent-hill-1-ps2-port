@@ -13,7 +13,7 @@ check() {
     f=$1
     m=$(echo "$f" | sed -nE 's|src/maps/(map[0-9]_s[0-9]+)/.*|\1|p' | tr a-z A-Z)
     o="$OUT/$(echo "$f" | tr / _)"
-    "$CC" -c -O2 ${SH1_EXTRA_CFLAGS:-} ${SH1_FPS:+-DSH_PORT_FPS=$SH1_FPS} ${SH1_BENCH:+-DSH_PORT_BENCH} ${SH1_PROF:+-DSH_PORT_PROF} -G0 -fno-toplevel-reorder -fno-zero-initialized-in-bss -mno-check-zero-division -std=gnu89 -nostdinc -Iinclude -Ibuild/USA -Iinclude/psyq -Iinclude/decomp -Wa,-Iinclude \
+    "$CC" -c -O2 ${SH1_EXTRA_CFLAGS:-} ${SH1_FPS:+-DSH_PORT_FPS=$SH1_FPS} ${SH1_BENCH:+-DSH_PORT_BENCH} ${SH1_PROF:+-DSH_PORT_PROF} -G0 -fno-toplevel-reorder -fno-zero-initialized-in-bss -mno-check-zero-division -fno-strict-aliasing -std=gnu89 -nostdinc -Iinclude -Ibuild/USA -Iinclude/psyq -Iinclude/decomp -Wa,-Iinclude \
         -D_LANGUAGE_C -DVER_USA -DSH_PORT -DNON_MATCHING ${m:+-D$m -DSH_MAP_OVERLAY} \
         -Wno-error=implicit-function-declaration -Wno-error=int-conversion \
         -Wno-error=incompatible-pointer-types -Wno-error=implicit-int -Wno-error=return-mismatch \

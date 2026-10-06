@@ -65,6 +65,7 @@ def main():
     ap.add_argument("--bios", help="BIOS file name in PCSX2's bios folder to use for this run")
     ap.add_argument("--stall", type=float, default=15,
                     help="stop when no new frame has been shown for this many emulated seconds (crash), 0 = off")
+    ap.add_argument("--heartbeat", action="store_true", help="keep the port's heartbeat lines in the output")
     ap.add_argument("--realtime", action="store_true", help="run at normal speed (default: unlimited)")
     args = ap.parse_args()
     elf = os.path.abspath(args.elf)
@@ -122,7 +123,7 @@ def main():
     text = open(log, errors="replace").read().splitlines() if os.path.exists(log) else []
     os.remove(log)
     started = 0 if args.all else next((i for i, l in enumerate(text) if "Initializing Elf" in l), 0)
-    out = [l for l in text[started:] if not any(n in l for n in NOISE) and "heartbeat:" not in l]
+    out = [l for l in text[started:] if not any(n in l for n in NOISE) and (args.heartbeat or "heartbeat:" not in l)]
     print("\n".join(out))
     if stalled:
         print("pcsx2_run: %s, assuming the game crashed" % stalled)

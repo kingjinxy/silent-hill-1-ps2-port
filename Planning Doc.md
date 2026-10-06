@@ -217,6 +217,9 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [x] GTE speed-up (bit-exact, checked on the host and on the EE): fast paths, cached matrices, inlined register moves, MMI (PLZCW, PHMADH)
 - [x] 60 fps in the demo scene: EE 11-38% idle; the remaining dips are file loads (VSync waits while streaming), as on the PS1
 - [ ] Further GS translation speed-ups if heavier scenes need them (parse straight into packets; state per primitive is ~500 cycles)
+- [x] All-map 60 fps sweep (one boot): most maps 54-59 fps average; slowest map7_s03 (~43)
+- [ ] Overlay .data/.bss reset on reload (code in place, off: breaks the second demo)
+- [ ] Graphics vs DuckStation (first attract demo): world largely unrendered, flashlight lighting, wrong player textures
 - [ ] GS renderer gaps: rectangle flips, wrapping VRAM copies, 24-bit display (FMV)
 - [ ] GS hardware renderer (speed), checked against gpu_soft.c
 
