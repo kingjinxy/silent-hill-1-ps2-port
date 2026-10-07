@@ -1038,3 +1038,33 @@ the difficulty: disc reads are synchronous, each read stalling 0-8 vertical blan
 (the cutscene itself reads nothing). Frame comparison with DuckStation (attract demo): 20,582 /
 20,911 differing display pixels at frames 100 / 400, the same as the previous renderer now that both
 sides show the same buffer (the ±1 rounding still open).
+
+### Asynchronous disc reads; faster warp sweeps
+
+`src/port/ps2/libcd_ps2.c`: CdRead now starts a request and returns; CdReadSync(1), which the file
+queue and the sound loader poll, reports the sectors still to come and moves the request along (a
+finished DVD chunk is copied out and the next one started); CdReadSync(0) waits. Chunks are up to 32
+DVD sectors: a run of raw HILL. sectors is one contiguous byte range, so ~27 PS1 sectors come in one
+DVD read instead of one each. Two bugs found on the way:
+- The sound code sends `CdlNop` every frame (status poll). Treating every command but Setloc as
+  "stop the read" ended file reads early and reported them complete: half-loaded files (a TIM with
+  no header: null pointer in `Fs_QueuePostLoadTim`). Only Stop/Pause/Init end a read now, and that
+  read then reports an error (the file queue resets and retries).
+- map1_s04 reads an empty file (0 sectors). The synchronous code finished it at once; the async code
+  failed it, and the queue retried forever (the game sat on the title screen). 0 sectors now
+  completes immediately.
+The loading after choosing the difficulty went from 37-51 fps to 50-60 fps in its worst seconds.
+
+Warp sweeps (`host:warp.txt`, `Port_WarpActive` in game.h): no boot logos, no 20 s title wait, only
+the first demo (never the others or the intro movie); a warped map's own loads (area transitions,
+e.g. map0_s00 into map0_s01) count as part of its test, and only the demo's boot load is redirected
+(`Port_MapLoadWarp(mapIdx, demoBoot)`). `pcsx2_run.py --progress TEXT` fails a run when TEXT hasn't
+appeared for `--progress-seconds` emulated seconds (a game on the title screen still draws frames,
+so the stall check alone missed it); the sweep uses it with `port: map load`. One boot reaches the
+first map ~3 s (real time) after boot; 15 s per map takes ~2.5 s.
+
+Sweep (`SH1_FPS=60 SH1_BENCH=1`, 15 s per map): 43/43 pass. Most maps 60 fps; below: map5_s00 (38.9
+avg, 10% low 20), map0_s00 (46.3, 30), map7_s01 (57.0, 33), map7_s02 (58.6, 47); 30 fps with idle
+left (a non-gameplay state): map1_s06, map7_s00, map7_s03; tight: map6_s00 (4-7% idle). Many maps
+sit at a steady 66-67% idle: probably a fade or black screen rather than the map itself (the maps
+known to fail from the title demo pass by not crashing); the sweep checks survival, not rendering.

@@ -69,6 +69,10 @@ def main():
     ap.add_argument("--gameplay", type=float, metavar="SECONDS",
                     help="stop SECONDS emulated seconds (heartbeats) of unbroken gameplay "
                          "(the port's \"port: gameplay\" line, without a later \"port: gameplay ended\"); the run then counts as passed")
+    ap.add_argument("--progress", metavar="TEXT",
+                    help="count the run as stuck when TEXT hasn't appeared for --progress-seconds emulated "
+                         "seconds (heartbeats), e.g. a game sitting on the title screen still draws frames")
+    ap.add_argument("--progress-seconds", type=float, default=60)
     ap.add_argument("--heartbeat", action="store_true", help="keep the port's heartbeat lines in the output")
     ap.add_argument("--realtime", action="store_true", help="run at normal speed (default: unlimited)")
     args = ap.parse_args()
@@ -111,6 +115,12 @@ def main():
                 beats, last_beat = len(hb), time.time()
                 if hb[-1] != frame:
                     frame, frame_beat = hb[-1], beats
+            if args.progress:
+                at = text.rfind(args.progress)
+                since = text[at:].count("heartbeat: vblank") if at >= 0 else len(hb)
+                if since >= args.progress_seconds:
+                    stalled = "no \"%s\" for %g emulated seconds" % (args.progress, args.progress_seconds)
+                    break
             if args.stall and beats - frame_beat >= args.stall:
                 stalled = "no new frame for %d emulated seconds (frame %s)" % (beats - frame_beat, frame)
                 break

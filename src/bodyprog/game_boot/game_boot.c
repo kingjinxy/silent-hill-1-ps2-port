@@ -78,7 +78,13 @@ void GameBoot_InGameStartup(void)
             break;
 
         case 1:
-            if (g_SysWork.gameStateStepCounter > SECONDS_60_FPS(20) && 
+#ifdef SH_PORT
+            // Test warp runs (src/port/ps2/warp_ps2.c): the demo loads at once instead of after 20 s on the title screen.
+            if (g_SysWork.gameStateStepCounter > (Port_WarpActive() ? 0 : SECONDS_60_FPS(20)) &&
+#else
+            if (g_SysWork.gameStateStepCounter > SECONDS_60_FPS(20) &&
+#endif
+                
                 Fs_QueueGetLength() == 0 && Sd_AudioStreamingCheck() == AudioStreamingState_None)
             {
                 Demo_DemoFileSavegameUpdate();
@@ -379,8 +385,8 @@ void GameBoot_MapLoad(s32 mapIdx) // 0x8003521C
 #ifdef SH_PORT
     // Test warp (src/port/ps2/warp_ps2.c): the first map load can be redirected; every load is logged.
     {
-        extern int Port_MapLoadWarp(int mapIdx);
-        s32        warpIdx = Port_MapLoadWarp(mapIdx);
+        extern int Port_MapLoadWarp(int mapIdx, int demoBoot);
+        s32        warpIdx = Port_MapLoadWarp(mapIdx, g_SysWork.processFlags == ProcessFlag_BootDemo);
 
         if (warpIdx != mapIdx)
         {

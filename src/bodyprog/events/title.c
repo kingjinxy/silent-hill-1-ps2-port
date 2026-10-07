@@ -68,6 +68,12 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
     // demo gameplay segment should be played. If the next value from `g_Demo_ReproducedCount`
     // is a value divisible by 3, the intro FMV will play. Otherwise, it defaults to a gameplay demo.
     playInGameDemo = ((g_Demo_ReproducedCount + 1) % 3) != 0;
+#ifdef SH_PORT
+    if (Port_WarpActive())
+    {
+        playInGameDemo = true; // Test warp runs: always a gameplay demo, never the intro movie.
+    }
+#endif
 
     if (g_GameWork.gameStateSteps[0] == 0)
     {

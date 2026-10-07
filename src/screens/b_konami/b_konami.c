@@ -1,4 +1,10 @@
 #include "game.h"
+#ifdef SH_PORT
+// Test warp runs (src/port/ps2/warp_ps2.c): no logo delays.
+#define PORT_LOGO_SKIP || Port_WarpActive()
+#else
+#define PORT_LOGO_SKIP
+#endif
 
 #include <psyq/libcd.h>
 #include <psyq/libetc.h>
@@ -50,7 +56,7 @@ void GameState_KonamiLogo_Update(void) // 0x800C95AC
                 break;
 
             case KonamiLogoStateStep_LogoDelay:
-                if (g_Controller0->buttonFlags.held != 0 || g_SysWork.gameStateCounter > SECONDS_60_FPS(3))
+                if (g_Controller0->buttonFlags.held != 0 || g_SysWork.gameStateCounter > SECONDS_60_FPS(3) PORT_LOGO_SKIP)
                 {
                     ScreenFade_Start(false, false, false);
                     g_ScreenFadeTimestep         = Q12(0.2f);
@@ -288,7 +294,7 @@ void GameState_KcetLogo_Update(void) // 0x800C99A4
                 break;
 
             case KcetLogoStateStep_LogoDelay:
-                if (g_Controller0->buttonFlags.held != 0 || g_SysWork.gameStateCounter > SECONDS_60_FPS(3))
+                if (g_Controller0->buttonFlags.held != 0 || g_SysWork.gameStateCounter > SECONDS_60_FPS(3) PORT_LOGO_SKIP)
                 {
                     ScreenFade_Start(false, false, false);
                     g_ScreenFadeTimestep = Q12(0.2f);

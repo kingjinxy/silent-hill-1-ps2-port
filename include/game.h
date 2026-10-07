@@ -797,4 +797,10 @@ static inline void Game_StateSetPreviousA()
     SysWork_StateSetNext(SysState_Gameplay);
 }
 
+#ifdef SH_PORT
+/** @brief Port test runs: whether a map warp list (host:warp.txt) is active (src/port/ps2/warp_ps2.c);
+ * boot logos, the title screen wait and the demo cycle are then skipped. */
+int Port_WarpActive(void);
+#endif
+
 #endif

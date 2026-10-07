@@ -43,6 +43,13 @@ bool Demo_SequenceAdvance(s32 incAmount) // 0x8008EF20
 #endif
     };
 
+#ifdef SH_PORT
+    if (Port_WarpActive())
+    {
+        g_Demo_DemoId = 0; // Test warp runs: always the first demo, which warp_ps2.c redirects.
+        incAmount     = 0;
+    }
+#endif
     g_Demo_DemoId += incAmount;
 
     while (true)

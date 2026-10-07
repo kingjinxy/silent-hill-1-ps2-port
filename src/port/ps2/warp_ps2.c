@@ -4,7 +4,9 @@
  * the list instead of its own, as the gdb `warp` command does in DuckStation (tools/port/gdb/sh1.py),
  * so one boot visits every listed map, always with the same demo's state. With `seconds=N`, the port
  * presses L2 after N emulated seconds in a map (any button ends a demo; L2 does nothing on the title
- * screen); the other demos in the cycle are ended after 5 seconds. Map loads are logged ("port: map load"); used by tools/port/warp_sweep_ps2.py.
+ * screen); loads the warped map triggers itself (area transitions) are part of its test. While a list
+ * is active the game skips the boot logos and the title screen wait, and replays the first demo only
+ * (never the others or the intro movie): Port_WarpActive. Map loads are logged ("port: map load"); used by tools/port/warp_sweep_ps2.py.
  * Without the file (or on hardware), nothing changes.
  */
 
@@ -33,8 +35,7 @@ static int s_ListNext;
 static int s_Seconds;     /* 0: let each demo run to its end */
 static int s_Loaded = -1; /* list read: -1 not yet, 0 no file, 1 yes */
 static int s_WarpedAt = -1; /* vertical blank count at the current warped map's load, -1 none */
-static int s_DemoMap = -1;  /* the warped demo's own map (the first map load seen) */
-static int s_SkipAt = -1;   /* another demo: vertical blank count at its load */
+static unsigned int cycles_unused;
 static int s_Ended;         /* "ending demo" logged for the current map */
 
 static const char* map_name(int idx)
@@ -95,36 +96,42 @@ static void read_list(void)
     }
 }
 
-/** Called by GameBoot_MapLoad: returns the map to load instead of `mapIdx`. */
-int Port_MapLoadWarp(int mapIdx)
+/** Whether a warp list is active (game code skips the boot logos, the title screen wait and the
+ * demo cycle then: see Port_WarpActive in game.h). */
+int Port_WarpActive(void)
 {
-    unsigned int cycles;
     if (s_Loaded < 0)
     {
         read_list();
+    }
+    return s_Loaded > 0;
+}
+
+/** Called by GameBoot_MapLoad: returns the map to load instead of `mapIdx`. `demoBoot`: the load
+ * that starts a demo (the only one redirected); other loads while a warped map is being tested are
+ * its own transitions and count as part of its test. */
+int Port_MapLoadWarp(int mapIdx, int demoBoot)
+{
+    if (s_Loaded < 0)
+    {
+        read_list();
+    }
+    if (!demoBoot)
+    {
+        printf("port: map load %s%s\n", map_name(mapIdx), s_WarpedAt >= 0 ? " (follow-on, part of the warped map's test)" : "");
+        return mapIdx;
     }
     if (s_WarpedAt >= 0)
     {
         printf("port: map load %s (next map load after the warp)\n", map_name(mapIdx));
         s_WarpedAt = -1;
     }
-    if (s_DemoMap < 0)
-    {
-        s_DemoMap = mapIdx;
-    }
     s_Ended = 0;
-    if (s_Loaded > 0 && s_ListNext < s_ListCount && mapIdx != s_DemoMap)
-    {
-        /* Another demo of the cycle: end it soon. */
-        printf("port: map load %s (other demo, ending it)\n", map_name(mapIdx));
-        s_SkipAt = Port_VBlanks(&cycles);
-        return mapIdx;
-    }
     if (s_Loaded > 0 && s_ListNext < s_ListCount)
     {
         int warp = s_List[s_ListNext++];
         printf("port: map load %s (warp from %s, %d of %d)\n", map_name(warp), map_name(mapIdx), s_ListNext, s_ListCount);
-        s_WarpedAt = Port_VBlanks(&cycles);
+        s_WarpedAt = Port_VBlanks(&cycles_unused);
         return warp;
     }
     if (s_Loaded > 0 && s_ListNext == s_ListCount)
@@ -142,15 +149,6 @@ unsigned int Port_WarpButtons(void)
 {
     unsigned int cycles;
     int          t;
-    if (s_SkipAt >= 0)
-    {
-        t = Port_VBlanks(&cycles) - s_SkipAt - 5 * 60; /* once the demo plays (pressing while it loads hung) */
-        if (t >= 30)
-        {
-            s_SkipAt = -1;
-        }
-        return t >= 0 && t < 30 ? 1u << 8 : 0; /* L2 */
-    }
     if (s_WarpedAt < 0 || s_Seconds <= 0)
     {
         return 0;

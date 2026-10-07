@@ -3,7 +3,7 @@
 (the PS2 counterpart of tools/port/gdb/warp_sweep.py).
 
 Boots once for the whole list: build/port/warp.txt (read by src/port/ps2/warp_ps2.c) lists the maps;
-each run of the first demo warps to the next one (other demos are ended quickly), runs --seconds-per-map emulated seconds, then the port presses a
+each run of the first demo (the only one played, right after boot with no logos or title wait) warps to the next one, runs --seconds-per-map emulated seconds, then the port presses a
 button to end it, and the next demo takes the next map. A map passes when the game gets back to a
 map load after it. pcsx2_run.py's stall detection reports crashes; the sweep then boots again from
 the following map. Also reports the game's frame rate while in
@@ -55,7 +55,8 @@ def run_list(names, args, log):
     open(WARP, "w").write("seconds=%d\n%s\n" % (args.seconds_per_map, " ".join(names)))
     timeout = len(names) * (args.seconds_per_map + 60) + 60
     cmd = [sys.executable, os.path.join(HERE, "pcsx2_run.py"), "--heartbeat", "--seconds", str(timeout),
-           "--until", "port: warp list done", ISO]
+           "--until", "port: warp list done", "--progress", "port: map load",
+           "--progress-seconds", str(args.seconds_per_map + 30), ISO]
     if args.realtime:
         cmd.insert(2, "--realtime")
     out = subprocess.run(cmd, capture_output=True, text=True).stdout

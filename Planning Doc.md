@@ -219,7 +219,9 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [x] GS translation speed-ups: polygons packed straight into REGLIST data, quads as one triangle strip, direct page/CLUT cache lookups, row copies for page uploads
 - [x] Opening new-game cutscene at a solid 60 fps (`SH1_FPS=60`; PCSX2 software renderer): direct GTE command entry points, 32-bit DPCS, port code at -O3, late frames outside gameplay no longer snap to 30 fps
 - [ ] Gameplay after the cutscene: 60 fps but only ~7-15% EE idle; heavier rooms will need more (GTE RTPT/DPCS, GS translation)
-- [ ] Disc reads are synchronous (each HILL. sector its own DVD request): stalls 0-8 vertical blanks per read while loading; make asynchronous and batch
+- [x] Disc reads asynchronous and batched (CdRead starts, CdReadSync moves along; ~27 HILL. sectors per DVD read)
+- [x] Fast warp sweeps: with host:warp.txt no boot logos, no title wait, only the first demo; follow-on loads part of a map's test; stuck-run detection (`pcsx2_run.py --progress`); 43/43 pass in a few minutes
+- [ ] Sweep: maps at a steady ~66% idle may be showing a fade/black screen rather than the map (the 7 maps that fail from the title demo "pass" by not crashing); 30 fps maps with idle left (map1_s06, map7_s00, map7_s03); heavy: map5_s00 (39 fps avg), map0_s00 (46), map6_s00 (4-7% idle)
 - [x] All-map 60 fps sweep (one boot): most maps 54-59 fps average; slowest map7_s03 (~43)
 - [ ] Overlay .data/.bss reset on reload (code in place, off: breaks the second demo)
 - [x] Frame comparison tool vs DuckStation (`tools/port/compare_frames.py`): same demo frame, display + VRAM + GP0 stream + game state
