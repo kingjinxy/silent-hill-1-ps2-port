@@ -1068,3 +1068,28 @@ avg, 10% low 20), map0_s00 (46.3, 30), map7_s01 (57.0, 33), map7_s02 (58.6, 47);
 left (a non-gameplay state): map1_s06, map7_s00, map7_s03; tight: map6_s00 (4-7% idle). Many maps
 sit at a steady 66-67% idle: probably a fade or black screen rather than the map itself (the maps
 known to fail from the title demo pass by not crashing); the sweep checks survival, not rendering.
+
+### Mesh rendering on the EE: exact batches instead of per-call GTE
+
+The user chose exact results for any GTE work moved off the per-command path. The function profile
+(`SH1_EXTRA_CFLAGS=-finstrument-functions SH1_PROF=1`) in the cutscene: Gfx_MeshDraw ~1.9M cycles
+per frame (instrumented), the vertex pass func_80057B7C ~1.06M, snow ~0.6M.
+- `Gte_RtpBatch` (gte.c): RTPS for a whole vertex array in place, exactly (no per-vertex FLAG or
+  register bookkeeping). func_80057B7C batches all triples but the last, which still goes through
+  the GTE. Vertex pass ~1.06M -> ~0.36M.
+- Port Gfx_MeshDraw: the back-face test is computed inline (the GTE's NCLIP formula); the fog path's
+  two colours per corner depend only on the vertex's fog byte, and the lit path's colour only on the
+  corner's light byte, so they are memoized by that byte for the call (first use through the GTE).
+  4-8 DPCS per face become a few per mesh.
+- Checks (`SH1_EXTRA_CFLAGS=-DSH_PORT_CHECK_BATCH`): the batch against the GTE per triple (0
+  mismatches, 4.8M vertices over all maps); Gfx_MeshDraw's original and port versions into the same
+  packet area and OT, compared byte for byte (0 mismatches, 86,016 meshes over all maps, 49,152 in
+  the cutscene run). A first run showed mismatches from the check harness itself (96-entry copies;
+  meshes have up to 99 vertices).
+- Cutscene idle (average per second) ~20% -> ~27%, gameplay ~18% -> ~24% (both 60 fps); sweep:
+  map2_s00 idle 25% -> 31%.
+- VU: an exact VU0 transform would need split-float arithmetic for the dot products and the UNR
+  divide (25-34-bit intermediates), with per-vertex table reads through the 16-bit integer unit and
+  copies in and out of VU memory: little or nothing to gain over the EE batch, so not done.
+- Not helped: map6_s00 (4-7% idle; other drawing paths, func_8005A900/func_8005AC50); map5_s00 and
+  map0_s00 drop frames with 30-50% idle, so something other than EE time limits them.
