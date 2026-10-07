@@ -1093,3 +1093,39 @@ per frame (instrumented), the vertex pass func_80057B7C ~1.06M, snow ~0.6M.
   copies in and out of VU memory: little or nothing to gain over the EE batch, so not done.
 - Not helped: map6_s00 (4-7% idle; other drawing paths, func_8005A900/func_8005AC50); map5_s00 and
   map0_s00 drop frames with 30-50% idle, so something other than EE time limits them.
+
+### Playing to the cafe: four port bugs
+
+The user played the new game in PCSX2 (`pcsx2_run.py --realtime --stall 0`, disc-read trace
+`SH1_TRACE_CD=1`); each problem was found from save states or logs.
+- **Map load hung on a black screen** (THR). `world_diag.py` on the save state: four active chunks
+  needed 10 full-page textures for 8 slots, so materials stayed without textures and
+  WorldGfx_ChunkInitCheck never passed. The same transition in DuckStation (`duckstation_world_watch.py`,
+  a gdb script logging every map load with PS1 RAM) spawned the player at x -96.4 instead of 0.4:
+  `g_MapPoint.positionX` had been zeroed. `s_EventData* g_ItemTriggerEvents[];` (unsized: one entry
+  with GCC; 0x14 bytes in the PS1 layout) was cleared as 5 entries, over `g_RadioNoise` and
+  `g_MapPoint`. Sized under SH_PORT. An audit of PS1 symbol sizes against the port found no other
+  overrun.
+- **Harry walked in circles, controls dead** (heavy area). Two save states: PADMAN's DMA buffer was
+  live, the port's receive buffer frozen. The pad was refreshed only after a VSync wait, and 60 fps
+  frames running late never wait. Now refreshed at most once per vertical blank from any VSync
+  call.
+- **Held Square dropped every half second** (after that change): half the reads came while the pad
+  was executing a command, and a failed read marked the pad disconnected for a frame. Failed reads
+  keep the previous data; vibration (padSetActDirect) is only sent when the values change. A log
+  line counts reads that weren't ready.
+- **Two freezes in the alley** (child ghosts). The first: Stalker code with a garbage character
+  pointer: `func_8006FD90` (los.c) passed a `VECTOR3` local to `Ray_CharaTraceQuery`, which writes an
+  `s_RayTrace`; on the PS1 the rest landed in the next local (which the code then reads), on the EE on
+  saved registers. The second: the PC (from the save state's `cpuRegs`) in `func_800CC8FC`
+  (particle.c), whose hull walk read `((DVECTOR*)&sp10)[i + 8]`, meaning `sp30[i]` only in the PS1's
+  stack layout. Both fixed under SH_PORT; a search for other indexing past stack locals found none.
+
+New tools: a load watchdog (`libgpu_port.c`: map load screen with an empty file queue for 10 s
+writes `host:ramdump.bin`, `src/port/ps2/debug_ps2.c`), `tools/port/world_diag.py` (world streaming
+diagnosis from a PCSX2 save state, a port RAM dump or PS1 RAM), `tools/port/duckstation_world_watch.py`
+(DuckStation at normal speed with a gdb script dumping PS1 RAM and the diagnosis at every map load).
+The per-second libgpu line also shows sysState and the file queue.
+
+Performance from the session: the alley end and onward ran 34-55 fps with the EE fully busy for
+long stretches (e.g. 207-297 s at 46-54 fps); the cafe cutscene plays.

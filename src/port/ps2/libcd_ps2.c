@@ -171,6 +171,7 @@ static void advance(int wait)
             }
             if (sceCdGetError() != SCECdErNO)
             {
+                printf("libcd: drive error %d at PS1 sector %d\n", sceCdGetError(), s_Req.pos);
                 s_Req.inFlight = 0;
                 s_Req.active   = 0;
                 s_Req.error    = 1;
@@ -180,12 +181,16 @@ static void advance(int wait)
         }
         if (s_Req.left <= 0)
         {
+#ifdef SH_PORT_TRACE_CD
+            printf("libcd: read done at PS1 sector %d\n", s_Req.pos);
+#endif
             s_Req.active = 0;
             s_Pos        = s_Req.pos;
             return;
         }
         if (!chunk_start())
         {
+            printf("libcd: read failed to start at PS1 sector %d (%d left)\n", s_Req.pos, s_Req.left);
             s_Req.active = 0;
             s_Req.error  = 1;
             return;
@@ -263,6 +268,7 @@ int CdControl(unsigned char com, unsigned char* param, unsigned char* result)
         s_Req.active   = 0;
         s_Req.inFlight = 0;
         s_Req.error    = 1;
+        printf("libcd: command %02X stopped a read at PS1 sector %d\n", com, s_Req.pos);
     }
     if (com == CdlSetloc && param)
     {
@@ -302,6 +308,9 @@ int CdRead(int sectors, unsigned int* buf, int mode)
     }
     s_Req.active   = 1;
     s_Req.pos      = s_Pos;
+#ifdef SH_PORT_TRACE_CD
+    printf("libcd: read PS1 sector %d, %d sectors\n", s_Pos, sectors);
+#endif
     s_Req.left     = sectors;
     s_Req.dst      = (unsigned char*)buf;
     s_Req.inFlight = 0;

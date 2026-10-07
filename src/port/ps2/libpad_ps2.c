@@ -95,6 +95,9 @@ void PadStopCom(void)
     s_Started = 0;
 }
 
+static int s_ActSent[PORTS]; /* s_Act holds what was last sent to the motors */
+static int s_Polls, s_NotReady[PORTS]; /* reads that weren't ready, logged every 600 polls */
+
 /** Refreshes the receive buffers (the PS1 BIOS does this every vertical blank). */
 void Pad_Poll(void)
 {
@@ -103,6 +106,15 @@ void Pad_Poll(void)
     {
         return;
     }
+    if (++s_Polls >= 600)
+    {
+        if (s_NotReady[0] || s_NotReady[1])
+        {
+            printf("libpad: reads not ready in the last 600 polls: port 1 %d, port 2 %d (previous data kept)\n",
+                   s_NotReady[0], s_NotReady[1]);
+        }
+        s_Polls = s_NotReady[0] = s_NotReady[1] = 0;
+    }
     for (p = 0; p < PORTS; p++)
     {
         struct padButtonStatus st;
@@ -110,10 +122,18 @@ void Pad_Poll(void)
 
         if (s_ActSrc[p] && state == PAD_STATE_STABLE)
         {
-            int n = s_ActLen[p] < 6 ? s_ActLen[p] : 6;
-            memset(s_Act[p], 0, sizeof(s_Act[p]));
-            memcpy(s_Act[p], s_ActSrc[p], n);
-            padSetActDirect(p, 0, s_Act[p]);
+            /* Only when the motor values change: every padSetActDirect is a pad command (state
+             * EXECCMD until it completes), and sending one every poll left half the reads not
+             * ready. */
+            unsigned char act[6] = { 0 };
+            int           n      = s_ActLen[p] < 6 ? s_ActLen[p] : 6;
+            memcpy(act, s_ActSrc[p], n);
+            if (!s_ActSent[p] || memcmp(act, s_Act[p], 6) != 0)
+            {
+                memcpy(s_Act[p], act, 6);
+                padSetActDirect(p, 0, s_Act[p]);
+                s_ActSent[p] = 1;
+            }
         }
         if (state != s_LastState[p])
         {
@@ -135,7 +155,7 @@ void Pad_Poll(void)
                 s_IdTable[p][i + 1] = i < s_IdTable[p][0] ? padInfoMode(p, 0, PAD_MODETABLE, i) : 0;
             }
         }
-        else
+        else if (state == PAD_STATE_DISCONN || state == PAD_STATE_FINDPAD)
         {
             memset(s_Info[p], 0, sizeof(s_Info[p]));
             memset(s_IdTable[p], 0, sizeof(s_IdTable[p]));
@@ -172,11 +192,19 @@ void Pad_Poll(void)
                 s_Recv[p][3] &= (unsigned char)~(press >> 8);
             }
         }
+        else if (state != PAD_STATE_DISCONN && state != PAD_STATE_FINDPAD)
+        {
+            s_NotReady[p]++; /* previous data kept (below) */
+        }
         else
         {
             s_Recv[p][0] = 0xFF;
             s_Recv[p][1] = 0;
+            s_ActSent[p] = 0; /* a pad plugged in again gets the motor values anew */
         }
+        /* Otherwise (a read that isn't ready, a mode change in progress) the previous frame's data
+         * stays: the pad is polled at any point of a frame, and a one-frame "disconnected" made the
+         * game drop held buttons (running stopped every half second). */
     }
 }
 

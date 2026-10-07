@@ -191,8 +191,21 @@ bool func_8006FD90(s_SubCharacter* chara, s32 count, q19_12 baseDistMax, q19_12 
                     (chara->position.vy - chara->collision.box.offsetY);
     }
 
+#ifdef SH_PORT
+    // Port: the trace is a whole `s_RayTrace` (0x20 bytes). The PS1 code passes `sp10` (a `VECTOR3`)
+    // and reads `sp20.vx`, the trace's `character` field, which only works with the PS1's stack layout:
+    // on the EE the trace overwrote saved registers (the caller's character pointer: Stalker hang).
+    {
+        s_RayTrace trace;
+
+        (void)sp10;
+        (void)sp20;
+        return !Ray_CharaTraceQuery(&trace, &pos, &offset, chara) || trace.character != NULL;
+    }
+#else
     // TODO: Maybe `sp10` is not `VECTOR3`. Might need to rewrite this whole function if it's `s_RayTrace`?
     return !Ray_CharaTraceQuery(&sp10, &pos, &offset, chara) || sp20.vx != Q12(0.0f);
+#endif
 }
 
 bool Los_CharaToTargetHitCheck(s_SubCharacter* fromChara, q19_12 toX, q19_12 toY, q19_12 toZ)

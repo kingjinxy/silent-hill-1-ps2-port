@@ -129,6 +129,20 @@ int ResetCallback(void)
 /** PS1 semantics: mode 0 waits for the next vertical blank, n > 1 waits n of them, 1 returns
  * immediately, a negative mode returns the vertical blank count. (The PS1 returns horizontal-blank
  * counts for 0/1; nothing in the game uses those yet.) */
+/** The PS1 BIOS refreshes the pad buffers every vertical blank. Here: at most once per vertical blank,
+ * from any VSync call (a 60 fps frame running late never waits, but the main loop still asks for
+ * the count: polling only after a wait froze the pad in heavy scenes). Not from the interrupt:
+ * mode and vibration calls can go through the IOP. */
+static void pad_refresh(void)
+{
+    static int polledAt = -1;
+    if (polledAt != s_VBlanks)
+    {
+        polledAt = s_VBlanks;
+        Pad_Poll();
+    }
+}
+
 int VSync(int mode)
 {
     int n, target;
@@ -136,10 +150,12 @@ int VSync(int mode)
     init();
     if (mode < 0)
     {
+        pad_refresh();
         return s_VBlanks;
     }
     if (mode == 1)
     {
+        pad_refresh();
         return 0;
     }
     n      = mode == 0 ? 1 : mode;
@@ -156,7 +172,7 @@ int VSync(int mode)
         __asm__ volatile("mfc0 %0, $9" : "=r"(t1));
         s_WaitCycles += t1 - t0;
     }
-    Pad_Poll(); /* the PS1 BIOS refreshes the pad buffers every vertical blank */
+    pad_refresh();
     return 0;
 }
 

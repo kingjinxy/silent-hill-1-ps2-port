@@ -64,7 +64,14 @@ MATCH_STATIC q19_12 g_DeltaTimeCpy;
 // GLOBAL VARIABLES
 // ========================================
 
+#ifdef SH_PORT
+// Port: sized (5 entries, as `g_ItemTriggerItemIds`). Unsized, GCC makes it one entry; on the PS1 the
+// linker layout gave it 0x14 bytes. Writes to entries 1-4 overran `g_RadioNoise` and `g_MapPoint`
+// (Event_ItemTriggersClear zeroed `g_MapPoint.positionX`: wrong spawn position after area loads).
+s_EventData* g_ItemTriggerEvents[5];
+#else
 s_EventData* g_ItemTriggerEvents[];
+#endif
 s_RadioNoise g_RadioNoise[2];
 s_MapPoint2d g_MapPoint;
 s32          g_ItemTriggerItemIds[5];

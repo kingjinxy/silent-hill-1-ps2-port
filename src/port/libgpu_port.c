@@ -20,6 +20,7 @@
 #include "game.h"
 #include "port/prof.h"
 #include "bodyprog/demo.h"
+#include "main/fsqueue.h"
 #include "bodyprog/screen/screen_data.h"
 
 #define VRAM_W 1024
@@ -246,10 +247,32 @@ static void DrawOTagImpl(u_long* p)
 
     if (++s_DrawOTags % 60 == 0)
     {
-        printf("libgpu: %u DrawOTag calls; last 60: %u packets, %u words; gameState %d step %d\n", s_DrawOTags,
-               s_FramePackets, s_FrameWords, g_GameWork.gameState, g_GameWork.gameStateSteps[0]);
+        printf("libgpu: %u DrawOTag calls; last 60: %u packets, %u words; gameState %d step %d sysState %d; "
+               "file queue %d entries, state %u, post-load %u, read idx %d\n", s_DrawOTags,
+               s_FramePackets, s_FrameWords, g_GameWork.gameState, g_GameWork.gameStateSteps[0], g_SysWork.sysState,
+               Fs_QueueGetLength(), g_FsQueue.state, g_FsQueue.postLoadState, g_FsQueue.read.idx);
         s_FramePackets = 0;
         s_FrameWords   = 0;
+        {
+            /* Load watchdog: the map load screen with nothing left to read for 10 s is a hang (the
+             * game waits for something that will never load): dump RAM for tools/port/world_diag.py. */
+            static u32 stuckTicks;
+            extern int Port_RamDump(const char* path); /* src/port/ps2/debug_ps2.c */
+            if (g_GameWork.gameState == GameState_MainLoadScreen && Fs_QueueGetLength() == 0)
+            {
+                if (++stuckTicks == 20)
+                {
+                    printf("port: load watchdog: map load stuck for 10 s (step %d) with no file left to read; "
+                           "writing RAM to host:ramdump.bin\n", g_GameWork.gameStateSteps[0]);
+                    printf("port: load watchdog: %s; then tools/port/world_diag.py --ps2-ram build/port/ramdump.bin\n",
+                           Port_RamDump("host:ramdump.bin") ? "written" : "could not write it");
+                }
+            }
+            else
+            {
+                stuckTicks = 0;
+            }
+        }
         if (g_PortGsRenderer)
         {
             extern void GpuGs_Stats(u32 frames);

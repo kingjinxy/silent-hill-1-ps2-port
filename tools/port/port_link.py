@@ -154,6 +154,8 @@ def main():
     prof = ["-DSH_PORT_PROF"] if os.environ.get("SH1_PROF") else []
     # Fixed debug frame dumps (src/port/ps2/display_ps2.c): SH1_DUMP=1.
     dump = ["-DSH_PORT_DUMP_FRAMES"] if os.environ.get("SH1_DUMP") else []
+    # Disc read trace (src/port/ps2/libcd_ps2.c): SH1_TRACE_CD=1.
+    dump += ["-DSH_PORT_TRACE_CD"] if os.environ.get("SH1_TRACE_CD") else []
     for src in sorted(glob.glob("src/port/*.c")):
         obj = os.path.join(OUT, "port", os.path.basename(src) + ".o")
         os.makedirs(os.path.dirname(obj), exist_ok=True)

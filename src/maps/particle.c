@@ -1626,7 +1626,14 @@ s32 func_800CC8FC(VECTOR3* arg0, s32* arg1, s_func_800CC8FC* arg2) // 0x800CC8FC
 
     for (i = 3; i < count; i++)
     {
+#ifdef SH_PORT
+        // Port: `(DVECTOR*)&sp10 + i + 8` is `sp30[i]` only with the PS1's stack layout (sp10 at
+        // 0x10, sp30 at 0x30); elsewhere it read other stack data and the hull walk below never
+        // ended (game froze in the alley when the child ghosts' effect ran).
+        dVecPtr = sp30 - 8;
+#else
         dVecPtr = &sp10;
+#endif
 
         j = 0;
 
