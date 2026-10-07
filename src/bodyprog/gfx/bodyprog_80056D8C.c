@@ -502,6 +502,117 @@ void func_80057A3C(s_MeshHeader* meshHdr, s32 offset, s_GteScratchData* scratchD
     }
 }
 
+#ifdef SH_PORT
+/** Port version: the same results, with all vertex triples but the last transformed in one batch
+ * (`Gte_RtpBatch`, exact); the last goes through the GTE as before, so its registers end up as on
+ * the PS1. */
+void func_80057B7C(s_MeshHeader* meshHdr, s32 offset, s_GteScratchData* scratchData, MATRIX* mat) // 0x80057B7C
+{
+    DVECTOR* screenXy;
+    s16*     temp_a2;
+    s32      temp_s2;
+    s32      triples;
+    s32      done;
+    s32      i;
+
+    temp_s2 = g_WorldEnvWork.fog.depthShift;
+
+    SetRotMatrix(mat);
+    SetTransMatrix(mat);
+
+    // As the PS1 loop: the first triple always, then triples while vertices remain.
+    triples = meshHdr->vertexCount <= 3 ? 1 : (meshHdr->vertexCount + 2) / 3;
+    done    = 0;
+#ifdef SH_PORT_CHECK_BATCH
+    // Check build: the batch on a copy against the GTE per triple (below, done = 0).
+    {
+        static u32 xyCopy[128];
+        static s16 zCopy[128];
+        static s32 checks, mismatches;
+        s32        n = triples * 3;
+        memcpy(xyCopy, &scratchData->screenXy_0[offset], n * 4);
+        memcpy(zCopy, &scratchData->field_18C[offset], n * 2);
+        if (Gte_RtpBatch(xyCopy, zCopy, n))
+        {
+            for (i = 0; i < n; i += 3)
+            {
+                screenXy = &scratchData->screenXy_0[offset + i];
+                temp_a2  = &scratchData->field_18C[offset + i];
+                *(s32*)&scratchData->field_380.field_0.m[0][0] = *(s32*)&screenXy[0];
+                *(s32*)&scratchData->field_380.field_0.m[1][1] = *(s32*)&screenXy[1];
+                *(s32*)&scratchData->field_380.field_0.m[2][2] = *(s32*)&screenXy[2];
+                scratchData->field_380.field_0.m[0][2]      = temp_a2[0];
+                scratchData->field_380.field_0.m[2][0]      = temp_a2[1];
+                *(s16*)&scratchData->field_380.field_0.t[0] = temp_a2[2];
+                gte_ldv3c(&scratchData->field_380.field_0);
+                gte_rtpt();
+                gte_stsxy3c(screenXy);
+                gte_stsz3(&scratchData->field_380.field_0.m[0][2], &scratchData->field_380.field_0.m[2][0], &scratchData->field_380.field_0.t[0]);
+                temp_a2[0] = scratchData->field_380.field_0.m[0][2];
+                temp_a2[1] = scratchData->field_380.field_0.m[2][0];
+                temp_a2[2] = scratchData->field_380.field_0.t[0];
+            }
+            for (i = 0; i < n; i++)
+            {
+                checks++;
+                if (xyCopy[i] != *(u32*)&scratchData->screenXy_0[offset + i] || zCopy[i] != scratchData->field_18C[offset + i])
+                {
+                    if (mismatches++ < 20)
+                    {
+                        printf("batch check: vertex %d: batch %08x z %d, GTE %08x z %d\n", i, xyCopy[i], zCopy[i],
+                               *(u32*)&scratchData->screenXy_0[offset + i], scratchData->field_18C[offset + i]);
+                    }
+                }
+            }
+            if ((checks & 0xFFFF) < n)
+            {
+                printf("batch check: %d vertices, %d mismatches\n", checks, mismatches);
+            }
+            done = n; // all done by the GTE above
+        }
+    }
+#endif
+    if (done == 0 && triples > 1 &&
+        Gte_RtpBatch((u32*)&scratchData->screenXy_0[offset], &scratchData->field_18C[offset], (triples - 1) * 3))
+    {
+        done = (triples - 1) * 3;
+    }
+
+    for (i = done; i < triples * 3; i += 3)
+    {
+        screenXy = &scratchData->screenXy_0[offset + i];
+        temp_a2  = &scratchData->field_18C[offset + i];
+
+        *(s32*)&scratchData->field_380.field_0.m[0][0] = *(s32*)&screenXy[0];
+        *(s32*)&scratchData->field_380.field_0.m[1][1] = *(s32*)&screenXy[1];
+        *(s32*)&scratchData->field_380.field_0.m[2][2] = *(s32*)&screenXy[2];
+
+        scratchData->field_380.field_0.m[0][2]      = temp_a2[0];
+        scratchData->field_380.field_0.m[2][0]      = temp_a2[1];
+        *(s16*)&scratchData->field_380.field_0.t[0] = temp_a2[2];
+
+        gte_ldv3c(&scratchData->field_380.field_0);
+        gte_rtpt();
+        gte_stsxy3c(screenXy);
+        gte_stsz3(&scratchData->field_380.field_0.m[0][2], &scratchData->field_380.field_0.m[2][0], &scratchData->field_380.field_0.t[0]);
+
+        temp_a2[0] = scratchData->field_380.field_0.m[0][2];
+        temp_a2[1] = scratchData->field_380.field_0.m[2][0];
+        temp_a2[2] = scratchData->field_380.field_0.t[0];
+    }
+
+    if (g_WorldEnvWork.isFogEnabled)
+    {
+        u8* fog = &scratchData->field_252[offset];
+
+        temp_a2 = &scratchData->field_18C[offset];
+        for (i = 0; i < triples * 3; i++)
+        {
+            fog[i] = temp_a2[i] < (1 << temp_s2) ? g_WorldEnvWork.fogRamp[(temp_a2[i] << 7) >> temp_s2] : 0xFF;
+        }
+    }
+}
+#else
 void func_80057B7C(s_MeshHeader* meshHdr, s32 offset, s_GteScratchData* scratchData, MATRIX* mat) // 0x80057B7C
 {
     DVECTOR* screenXy;
@@ -597,6 +708,8 @@ void func_80057B7C(s_MeshHeader* meshHdr, s32 offset, s_GteScratchData* scratchD
         }
     }
 }
+
+#endif
 
 void Gfx_MeshDraw(s_MeshHeader* meshHdr, s_GteScratchData* scratchData, GsOT_TAG* tag, s32 otShift) // 0x8005801C
 {

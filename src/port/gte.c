@@ -1314,3 +1314,81 @@ void Gte_CmdDpcs(void)
     }
     cmd_end();
 }
+
+/** Batched RTPS (sf = 1, lm = 0) over `count` vertices, in place: xy[i] holds VX | VY << 16 and z[i]
+ * VZ on entry, SX | SY << 16 and SZ on return, exactly as RTPS/RTPT would compute them with the
+ * current matrices. GTE registers and FLAG are left untouched (callers run their last command
+ * through the GTE itself when they need its state). Returns 0, doing nothing, when TR/BK/FC are
+ * outside the fast path's range: the caller then uses the GTE per vertex. */
+int Gte_RtpBatch(u32* xy, s16* z, int count)
+{
+    u32 h;
+    s32 ofx, ofy, i;
+    if (g_GteCtrlDirty)
+    {
+        ctrl_refresh();
+    }
+    if (!unr_ready)
+    {
+        unr_init();
+    }
+    if (!s_Small)
+    {
+        return 0;
+    }
+    h   = c[C_H] & 0xFFFF;
+    ofx = (s32)c[C_OFX];
+    ofy = (s32)c[C_OFY];
+    for (i = 0; i < count; i++)
+    {
+        s32 vx = (s16)xy[i], vy = (s16)(xy[i] >> 16), vz = z[i];
+        s64 m1, m2, m3, z3, mac0;
+        s32 ir1, ir2, sz, sx, sy;
+        u32 n;
+#ifdef _EE
+        if (vx != -0x8000 && vy != -0x8000)
+        {
+            s64 p[3];
+            rt_dot3(xy[i], (u32)(u16)vz, p);
+            m1 = ((s64)(s32)c[C_TRX] << 12) + p[0];
+            m2 = ((s64)(s32)c[C_TRY] << 12) + p[1];
+            m3 = ((s64)(s32)c[C_TRZ] << 12) + p[2];
+        }
+        else
+#endif
+        {
+            m1 = ((s64)(s32)c[C_TRX] << 12) + (s64)(m_rt[0] * vx) + (s64)(m_rt[1] * vy) + (s64)(m_rt[2] * vz);
+            m2 = ((s64)(s32)c[C_TRY] << 12) + (s64)(m_rt[3] * vx) + (s64)(m_rt[4] * vy) + (s64)(m_rt[5] * vz);
+            m3 = ((s64)(s32)c[C_TRZ] << 12) + (s64)(m_rt[6] * vx) + (s64)(m_rt[7] * vy) + (s64)(m_rt[8] * vz);
+        }
+        ir1 = (s32)(m1 >> 12);
+        ir1 = ir1 < -0x8000 ? -0x8000 : ir1 > 0x7FFF ? 0x7FFF : ir1;
+        ir2 = (s32)(m2 >> 12);
+        ir2 = ir2 < -0x8000 ? -0x8000 : ir2 > 0x7FFF ? 0x7FFF : ir2;
+        z3  = m3 >> 12;
+        sz  = z3 < 0 ? 0 : z3 > 0xFFFF ? 0xFFFF : (s32)z3;
+        if (h < (u32)sz * 2)
+        {
+            u32 zz = clz32((u32)sz) - 16, nn = h << zz, dd = (u32)sz << zz, u;
+            u64 r;
+            u  = unr_table[(dd - 0x7FC0) >> 7] + 0x101;
+            dd = (0x2000080u - (dd * u)) >> 8;
+            dd = (0x0000080u + (dd * u)) >> 8;
+            r  = (((u64)nn * dd) + 0x8000) >> 16;
+            n  = r > 0x1FFFF ? 0x1FFFF : (u32)r;
+        }
+        else
+        {
+            n = 0x1FFFF;
+        }
+        mac0 = mul32((s32)n, ir1) + ofx;
+        sx   = (s32)(mac0 >> 16);
+        sx   = sx < -0x400 ? -0x400 : sx > 0x3FF ? 0x3FF : sx;
+        mac0 = mul32((s32)n, ir2) + ofy;
+        sy   = (s32)(mac0 >> 16);
+        sy   = sy < -0x400 ? -0x400 : sy > 0x3FF ? 0x3FF : sy;
+        xy[i] = ((u32)sx & 0xFFFF) | ((u32)sy << 16);
+        z[i]  = (s16)sz;
+    }
+    return 1;
+}
