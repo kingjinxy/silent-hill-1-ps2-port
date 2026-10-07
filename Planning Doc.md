@@ -221,7 +221,7 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [ ] Gameplay after the cutscene: 60 fps but only ~7-15% EE idle; heavier rooms will need more (GTE RTPT/DPCS, GS translation)
 - [x] Disc reads asynchronous and batched (CdRead starts, CdReadSync moves along; ~27 HILL. sectors per DVD read)
 - [x] Fast warp sweeps: with host:warp.txt no boot logos, no title wait, only the first demo; follow-on loads part of a map's test; stuck-run detection (`pcsx2_run.py --progress`); 43/43 pass in a few minutes
-- [x] Exact batched mesh vertex transform (`Gte_RtpBatch`) and port Gfx_MeshDraw (inline NCLIP, fog/light colours memoized by their byte): checked packet-for-packet against the original (`-DSH_PORT_CHECK_BATCH`); cutscene idle ~16% -> ~27%, gameplay ~12% -> ~24%
+- [x] Exact batched mesh vertex transform (`Gte_RtpBatch`) and port Gfx_MeshDraw (inline NCLIP, fog/light colours memoized by their byte): checked packet-for-packet against the original (`-DSH_PORT_CHECK_BATCH`); cutscene idle ~16% -> ~27%, gameplay ~14% -> ~24% (both changes)
 - [ ] VU0/VU1 GTE: an exact VU transform saves little over the EE batch (the UNR divide needs split-float maths and per-vertex table reads); revisit for other paths if the profile points there
 - [ ] map6_s00 (4-7% idle): other drawing paths (func_8005A900/func_8005AC50, likely world geometry); map5_s00 / map0_s00 drop frames with 30-50% idle (not EE-bound: loading or event pacing?)
 - [ ] Sweep: maps at a steady ~66% idle may be showing a fade/black screen rather than the map (the 7 maps that fail from the title demo "pass" by not crashing); 30 fps maps with idle left (map1_s06, map7_s00, map7_s03); heavy: map5_s00 (39 fps avg), map0_s00 (46), map6_s00 (4-7% idle)
