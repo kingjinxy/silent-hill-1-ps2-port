@@ -5,7 +5,8 @@
  * context (where printf works; on hardware under Neutrino it goes over the network: ministack's
  * udptty, tools/port/ps2_log.py).
  *
- * Then, for hardware testing, it counts down 6 s and restarts the game from its disc (Port_Restart(), also used by agent_ps2.c):
+ * Then it keeps the crashed state (tools/port/ps2_ctl.py md reads memory, ps2_ctl.py restart
+ * restarts). With SH1_CRASH_RESTART=1 it instead counts down 6 s and restarts the game from its disc (Port_Restart(), also used by agent_ps2.c):
  * under Neutrino that reloads it from the image on the VM. Holding Triangle for 3 s during the
  * countdown keeps the crashed state instead (RESET restarts). An IOP reset of our own (to restart
  * Neutrino from the USB stick) doesn't work under Neutrino: the module loader never answers after
@@ -55,6 +56,7 @@ void Port_Restart(void)
 }
 
 /** 6 s countdown (over the network log); Triangle held for 3 s keeps the crashed state. */
+#ifdef SH_PORT_CRASH_RESTART
 static void countdown_and_restart(void)
 {
     int t, held = 0;
@@ -84,6 +86,8 @@ static void countdown_and_restart(void)
     stay();
 }
 
+#endif
+
 static void crash_report(void)
 {
     static const char* const CAUSE[] = { "int", "TLB mod", "TLB load", "TLB store", "addr load", "addr store",
@@ -95,7 +99,15 @@ static void crash_report(void)
            s_Frame.a3[0], s_Frame.v0[0], s_Frame.v1[0]);
     printf("CRASH: s0=%08X s1=%08X s2=%08X s3=%08X s4=%08X s5=%08X s6=%08X s7=%08X\n", s_Frame.s0[0], s_Frame.s1[0],
            s_Frame.s2[0], s_Frame.s3[0], s_Frame.s4[0], s_Frame.s5[0], s_Frame.s6[0], s_Frame.s7[0]);
+#ifdef SH_PORT_CRASH_RESTART
     countdown_and_restart();
+#else
+    /* Default: keep the crashed state for inspection (tools/port/ps2_ctl.py md reads memory; the
+     * agent thread still runs), restart with ps2_ctl.py restart (or deploy). SH1_CRASH_RESTART=1
+     * builds count down and restart by themselves instead. */
+    printf("CRASH: state kept (ps2_ctl.py md to read memory, ps2_ctl.py restart to restart)\n");
+    stay();
+#endif
 }
 
 static int crash_handler(EE_RegFrame* frame)

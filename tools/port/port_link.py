@@ -158,6 +158,8 @@ def main():
     dump += ["-DSH_PORT_TRACE_CD"] if os.environ.get("SH1_TRACE_CD") else []
     # Hardware test of the crash reporter (src/port/ps2/input_ps2.c): SH1_TEST_CRASH=1.
     dump += ["-DSH_PORT_TEST_CRASH"] if os.environ.get("SH1_TEST_CRASH") else []
+    # Crash reporter restarts the game by itself after 6 s (default: keeps the crashed state): SH1_CRASH_RESTART=1.
+    dump += ["-DSH_PORT_CRASH_RESTART"] if os.environ.get("SH1_CRASH_RESTART") else []
     for src in sorted(glob.glob("src/port/*.c")):
         obj = os.path.join(OUT, "port", os.path.basename(src) + ".o")
         os.makedirs(os.path.dirname(obj), exist_ok=True)
