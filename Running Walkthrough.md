@@ -1161,3 +1161,24 @@ launchELF, the game boots from the VM (~1.4 MB/s reads).
   the module loader never answered afterwards, also with Neutrino's `-gc=3` (unhook syscalls).
 - Rebuilding the ISO while the PS2 ran from it gave garbage crashes (mixed old and new data);
   `make_iso.sh` now writes a temporary file and renames it over the image.
+
+### Remote control (phase 3)
+
+- `src/port/iop/sh1agent/` (built by port_link.py with ps2sdk's IOP makefiles, embedded with bin2c):
+  binds UDP port 62968 in Neutrino's ministack (its "mstack" exports: udp_bind, udp_packet_init,
+  udp_packet_send_ll); the first two payload bytes are the command ("RS", "PI"). It answers the
+  sender and copies the command into a 16-byte EE mailbox by SIF DMA (address passed as "mb=0x...").
+  In PCSX2 the module doesn't link (no ministack: -200) and nothing changes.
+- `src/port/ps2/agent_ps2.c`: loads it (SifExecModuleBuffer after sbv_patch_enable_lmb), reads the
+  mailbox uncached from the vertical blank handler, wakes an agent thread at priority 2 (the game:
+  64) which restarts the game the crash reporter's way (Port_Restart).
+- `tools/port/ps2_ctl.py ping|restart|deploy`; `deploy` first has `tools/port/udpfs_serve.py`
+  (Neutrino's udpfs_server.py loaded unchanged, plus a watcher thread) reopen open files whose path
+  now names a new file (make_iso.sh's rename), then restarts: the game comes back on the new build.
+- The startup line shows the build time (`SH1 port: starting (build ...)`).
+- On the PS2: ping answered; restart ~7 s from command to the game starting; deploy: build at
+  19:48:28, the restarted game reported that build.
+
+Workflow now: `python3 tools/port/udpfs_serve.py` and `python3 tools/port/ps2_log.py` running on the
+VM; Neutrino started once on the PS2 from launchELF; then build and `python3 tools/port/ps2_ctl.py
+deploy` for each change.

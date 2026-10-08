@@ -170,6 +170,14 @@ def main():
              "-I" + os.path.join(PS2SDK, "common", "include"), "-I" + os.path.join(GSKIT, "include"),
              "-iquote", "include", src, "-o", obj])
         port_objs.append(obj)
+    # IOP module embedded in the ELF: sh1agent.irx (remote control on hardware, src/port/ps2/agent_ps2.c).
+    env = dict(os.environ, PS2SDK=PS2SDK, PATH=os.environ["PATH"] + os.pathsep + os.path.join(os.path.dirname(PS2SDK), "iop", "bin")
+               + os.pathsep + os.path.join(PS2SDK, "bin"))
+    subprocess.run(["make", "-s", "-C", "src/port/iop/sh1agent"], env=env, check=True)
+    irx = os.path.join(OUT, "iop", "sh1agent", "sh1agent.irx")
+    run([os.path.join(PS2SDK, "bin", "bin2c"), irx, irx[:-4] + "_irx.c", "sh1agent_irx"])
+    run([CC, "-c", "-O2", "-G0", irx[:-4] + "_irx.c", "-o", irx[:-4] + "_irx.o"])
+    port_objs.append(irx[:-4] + "_irx.o")
     if not os.environ.get("SH1_NO_RECOMP"):
         run(["tools/port/recomp_all.sh"])
     recomp_objs = []
@@ -267,7 +275,7 @@ def main():
                     "-Wl,-zmax-page-size=128", "-Wl,--unresolved-symbols=report-all", "-o", elf,
                     combined, *port_objs, *extra, "-Wl,--start-group", recomp_lib, "-Wl,--end-group",
                     "configs/USA/relative_syms.ld", "configs/USA/port_relative_syms.ld", "configs/USA/port_syms.ld",
-                    "-L" + os.path.join(GSKIT, "lib"), "-lgskit", "-ldmakit", "-lcdvd", "-lpad", "-leedebug"],
+                    "-L" + os.path.join(GSKIT, "lib"), "-lgskit", "-ldmakit", "-lcdvd", "-lpad", "-leedebug", "-lpatches"],
                    check=False)
 
     r = final_link([])

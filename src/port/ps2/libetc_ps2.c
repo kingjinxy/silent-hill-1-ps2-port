@@ -59,6 +59,10 @@ static int vblank_handler(int cause)
     {
         iSignalSema(s_HeartbeatSema);
     }
+    {
+        extern void Port_AgentVBlank(void); /* agent_ps2.c: commands from the VM */
+        Port_AgentVBlank();
+    }
     if (s_Callback)
     {
         g_PortInInterrupt = 1;

@@ -336,7 +336,13 @@ new game crashes, and we can't see why.
   answers afterwards, with or without `-gc=3`).
 - [x] NULL-read safety net on hardware: addresses 0-0x1FFF mapped read-only to zeros (as PCSX2
   behaves); skipped in PCSX2 (host file system present), where "TLB Miss" lines show sites to fix.
-- [ ] Phase 3: remote restart, new build served to a running PS2.
+- [x] Phase 3: remote control. `sh1agent.irx` (src/port/iop/sh1agent, embedded in the ELF, loaded by
+  the game; only loads where ministack is present) listens on UDP 62968 and DMAs each command into
+  an EE mailbox; the vertical blank handler wakes an agent thread above the game's priority.
+  `tools/port/ps2_ctl.py ping|restart|deploy`; `tools/port/udpfs_serve.py` (Neutrino's server plus a
+  switch of open images to the new build on deploy). Restart ~7 s; deploy tested end to end.
+- [ ] Phase 4: tool integration (`pcsx2_run.py --hardware`, sweeps and benchmarks on hardware, RAM
+  dumps over the network).
 
 **Phases** (each ends with a test on the real PS2):
 - *0. Verify the building blocks.* Which modules exist (ps2sdk here has `smap.irx`, `udptty.irx`,

@@ -5,7 +5,7 @@
  * context (where printf works; on hardware under Neutrino it goes over the network: ministack's
  * udptty, tools/port/ps2_log.py).
  *
- * Then, for hardware testing, it counts down 6 s and restarts the game from its disc (restart()):
+ * Then, for hardware testing, it counts down 6 s and restarts the game from its disc (Port_Restart(), also used by agent_ps2.c):
  * under Neutrino that reloads it from the image on the VM. Holding Triangle for 3 s during the
  * countdown keeps the crashed state instead (RESET restarts). An IOP reset of our own (to restart
  * Neutrino from the USB stick) doesn't work under Neutrino: the module loader never answers after
@@ -44,9 +44,9 @@ static void stay(void)
  * core handles that as a game starting another ELF from its disc: the IOP is rebooted into the
  * emulation environment and the ELF is loaded from the image on the VM again. Returns only if that
  * fails. The TV background shows the step reached (stage_color). */
-static void restart(void)
+void Port_Restart(void)
 {
-    printf("CRASH: restarting %s\n", RELAUNCH_ELF);
+    printf("port: restarting %s\n", RELAUNCH_ELF);
     VSync(0); /* let the message go out before the network modules go away */
     VSync(0);
     stage_color(0xC00000); /* blue: restarting */
@@ -79,7 +79,7 @@ static void countdown_and_restart(void)
             printf("CRASH: restarting in %d s\n", 6 - t / 60);
         }
     }
-    restart();
+    Port_Restart();
     printf("CRASH: could not start %s\n", RELAUNCH_ELF);
     stay();
 }
@@ -133,6 +133,10 @@ void Crash_Install(void)
 {
     int cause;
     map_zero_page();
+    {
+        extern void Port_AgentInit(void); /* agent_ps2.c: remote control on hardware */
+        Port_AgentInit();
+    }
     ee_dbg_install(1);
     for (cause = 1; cause <= 5; cause++)
     {

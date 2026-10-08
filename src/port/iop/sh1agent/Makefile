@@ -1,0 +1,10 @@
+# sh1agent.irx (see main.c). Built by tools/port/port_link.py: make -C src/port/iop/sh1agent
+IOP_BIN  = sh1agent.irx
+IOP_OBJS = main.o imports.o
+IOP_OBJS_DIR = ../../../../build/port/iop/sh1agent/
+IOP_BIN := $(IOP_OBJS_DIR)$(IOP_BIN)
+
+all: $(IOP_BIN)
+
+include $(PS2SDK)/samples/Makefile.pref
+include $(PS2SDK)/samples/Makefile.iopglobal

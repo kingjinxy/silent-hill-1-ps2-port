@@ -12,7 +12,7 @@ int main(int argc, char** argv)
 {
     (void)argc;
     (void)argv;
-    printf("SH1 port: starting\n");
+    printf("SH1 port: starting (build " __DATE__ " " __TIME__ ")\n");
     Port_MainThreadInit();
     Port_OverlaySnapshot();
     Crash_Install();
