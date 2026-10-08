@@ -66,11 +66,15 @@ s32 MainLoop_ShouldWarmReset(void) // 0x80034108
     {
         return ResetType_WarmBoot;
     }
+#ifndef SH_PORT
+    // Port: off for now; the port uses this combo (held for a second) to exit to the PS2 browser
+    // (src/port/ps2/libpad_ps2.c), since the RESET button doesn't work under Neutrino.
     else if (g_Controller0->buttonFlags.held == WARM_BOOT_COMBO_PRESS &&
              (g_Controller0->buttonFlags.clicked & WARM_BOOT_COMBO_PRESS))
     {
         return ResetType_WarmBoot;
     }
+#endif
     else if (g_Controller0->buttonFlags.held == WARM_BOOT_COMBO_PRESS_ALT &&
              (g_Controller0->buttonFlags.clicked & ControllerFlag_Start))
     {
