@@ -103,4 +103,17 @@ static inline void Rc_Multu(RcRegs* r, unsigned int a, unsigned int b)
     r->hi = (unsigned int)(p >> 32);
 }
 
+/* Debugging (SH1_WATCH_PACKET=1): every wrapped recompiled function checks that it doesn't move
+ * GsOUT_PACKET_P out of the PS1 RAM area (src/port/ps2/crash_ps2.c: Port_WatchBegin/End). */
+#ifdef SH_PORT_WATCH_PACKET
+unsigned int Port_WatchBegin(void);
+void         Port_WatchEnd(unsigned int before, const char* name, unsigned int a0, unsigned int a1, unsigned int a2,
+                           unsigned int a3, unsigned int ret);
+#define RC_WATCH_BEGIN unsigned int rcWatchBefore = Port_WatchBegin();
+#define RC_WATCH_END(name, a0, a1, a2, a3, ret) Port_WatchEnd(rcWatchBefore, name, a0, a1, a2, a3, ret);
+#else
+#define RC_WATCH_BEGIN
+#define RC_WATCH_END(name, a0, a1, a2, a3, ret)
+#endif
+
 #endif

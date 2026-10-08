@@ -1505,6 +1505,20 @@ static void Gfx_MeshDrawOrig(s_MeshHeader* meshHdr, s_GteScratchData* scratchDat
 void Gfx_MeshDraw(s_MeshHeader* meshHdr, s_GteScratchData* scratchData, GsOT_TAG* tag, s32 otShift) // 0x8005801C
 {
     s_PortMeshGen++;
+#ifdef SH_PORT_WATCH_PACKET
+    {
+        // Debugging (SH1_WATCH_PACKET=1): the packet pointer must be inside the PS1 RAM area (found
+        // GsTMDfast*LFG declared void: the recompiled wrappers dropped the returned packet pointer).
+        static s32 reported;
+        u8*        p = (u8*)GsOUT_PACKET_P;
+        if (!reported && (p < (u8*)g_PsxRam || p >= (u8*)g_PsxRam + PSX_RAM_SIZE))
+        {
+            reported = 1;
+            printf("port: packet pointer outside PS1 RAM at a mesh draw: %p (game state %d/%d, sysState %d)\n", p,
+                   g_GameWork.gameState, g_GameWork.gameStateSteps[0], g_SysWork.sysState);
+        }
+    }
+#endif
 #ifdef SH_PORT_CHECK_BATCH
     {
         // Check build: the original into the same packet area and OT, then the port version; the

@@ -341,6 +341,10 @@ new game crashes, and we can't see why.
   an EE mailbox; the vertical blank handler wakes an agent thread above the game's priority.
   `tools/port/ps2_ctl.py ping|restart|deploy`; `tools/port/udpfs_serve.py` (Neutrino's server plus a
   switch of open images to the new build on deploy). Restart ~7 s; deploy tested end to end.
+- [x] Hardware testing tools: crashes keep their state by default (`SH1_CRASH_RESTART=1` for the
+  countdown), `ps2_ctl.py md` reads memory, `SH1_WATCH_PACKET=1` checks the packet pointer around
+  recompiled calls; found the item-pickup crash (GsTMDfast*LFG declared void)
+- [ ] Exit to the PS2 browser under Neutrino (LoadExecPS2 rom0:OSDSYS fails in its environment)
 - [ ] Phase 4: tool integration (`pcsx2_run.py --hardware`, sweeps and benchmarks on hardware, RAM
   dumps over the network).
 

@@ -518,7 +518,9 @@ def translate_object(path, out_dir, protos, prefix, exports=None):
                 else:
                     lines.append("    stack[RC_STACK_WORDS - 64 + %d] = a%d;" % (i, i))
             lines.append("    PROF_BEGIN(\"%s\")" % name)
+            lines.append("    RC_WATCH_BEGIN")
             lines.append("    rc_%s(&regs);" % c_ident(names_at[start][0][0]))
+            lines.append("    RC_WATCH_END(\"%s\", %s, regs.r[2])" % (name, ", ".join("a%d" % i if i < nargs else "0" for i in range(4))))
             lines.append("    PROF_END(\"%s\")" % name)
             if ret:
                 lines.append("    return regs.r[2];")

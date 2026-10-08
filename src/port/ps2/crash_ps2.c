@@ -16,6 +16,7 @@
 #include <ee_debug.h>
 #include <sifrpc.h>
 #include <stdio.h>
+#include <string.h>
 
 #ifndef RELAUNCH_ELF
 #define RELAUNCH_ELF "cdrom0:\\SHPS_000.01;1" /* the disc's BOOT2 (SYSTEM.CNF) */
@@ -32,6 +33,10 @@ static void stage_color(unsigned int rgb)
 extern unsigned int Port_PadButtons(void);     /* libpad_ps2.c */
 
 static EE_RegFrame s_Frame;
+#ifdef SH_PORT_WATCH_PACKET
+extern void* GsOUT_PACKET_P; /* libgs: the watched pointer */
+static int   s_Watch;        /* the report is for the watch (watch_handler), not a crash */
+#endif
 
 static void stay(void)
 {
@@ -88,8 +93,17 @@ static void countdown_and_restart(void)
 
 #endif
 
+static int crash_handler(EE_RegFrame* frame);
+
 static void crash_report(void)
 {
+#ifdef SH_PORT_WATCH_PACKET
+    if (s_Watch)
+    {
+        printf("CRASH: WATCH: GsOUT_PACKET_P set to %08X by the store at pc=%08X (ra=%08X)\n",
+               *(unsigned int*)&GsOUT_PACKET_P, s_Frame.epc, s_Frame.ra[0]);
+    }
+#endif
     static const char* const CAUSE[] = { "int", "TLB mod", "TLB load", "TLB store", "addr load", "addr store",
                                          "bus ifetch", "bus data", "syscall", "break" };
     int code = (s_Frame.cause >> 2) & 31;
@@ -109,6 +123,138 @@ static void crash_report(void)
     stay();
 #endif
 }
+
+#ifdef SH_PORT_WATCH_PACKET
+/* Debugging (SH1_WATCH_PACKET=1): a hardware data breakpoint on stores of 0x0058xxxx to
+ * GsOUT_PACKET_P (on a real PS2 the packet pointer was moved into the game's variables around
+ * g_OtTags1, and meshes overwrote g_WorldMapWork). The debug exception reports the storing
+ * instruction through the crash reporter. */
+extern unsigned char g_PsxRam[]; /* src/port/psx_mem.c */
+
+static int in_psx_ram(unsigned int p)
+{
+    return p >= (unsigned int)g_PsxRam && p < (unsigned int)g_PsxRam + 0x200000;
+}
+
+/* Also watched: the first primitive header of each model GsSortObject4J draws (on a real PS2 one
+ * got the object's primitive count written over its first two bytes). */
+#define WATCH_MAX 32
+static unsigned int s_WatchAddr[WATCH_MAX], s_WatchVal[WATCH_MAX];
+static int          s_WatchCount;
+static const char*  s_WatchLast = "(start)";
+
+static void watch_stop(void)
+{
+    printf("CRASH: state kept (ps2_ctl.py md to read memory, ps2_ctl.py restart to restart)\n");
+    for (;;)
+    {
+        SleepThread();
+    }
+}
+
+static void watch_check(const char* when, const char* name)
+{
+    int i;
+    for (i = 0; i < s_WatchCount; i++)
+    {
+        unsigned int v = *(volatile unsigned int*)s_WatchAddr[i];
+        if (v != s_WatchVal[i])
+        {
+            printf("CRASH: WATCH: model primitive header at %08X changed from %08X to %08X %s %s (previous call: %s)\n",
+                   s_WatchAddr[i], s_WatchVal[i], v, when, name, s_WatchLast);
+            watch_stop();
+        }
+    }
+}
+
+/** Around every wrapped recompiled call (include/port/recomp.h): the packet pointer before. */
+unsigned int Port_WatchBegin(void)
+{
+    watch_check("before", "the next recompiled call");
+    return (unsigned int)GsOUT_PACKET_P;
+}
+
+/** ...and after: moved out of the PS1 RAM area by this call: report and keep the state. */
+void Port_WatchEnd(unsigned int before, const char* name, unsigned int a0, unsigned int a1, unsigned int a2,
+                   unsigned int a3, unsigned int ret)
+{
+    if (!strncmp(name, "GsTMDfast", 9))
+    {
+        printf("port: %s(%08X, %08X, %08X, %08X) = %08X\n", name, a0, a1, a2, a3, ret);
+    }
+    unsigned int after = (unsigned int)GsOUT_PACKET_P;
+    if (!strcmp(name, "GsLinkObject4"))
+    {
+        /* GsLinkObject4 rewrites primitive headers on purpose (groups of one type: count + mode). */
+        int i;
+        for (i = 0; i < s_WatchCount; i++)
+        {
+            s_WatchVal[i] = *(volatile unsigned int*)s_WatchAddr[i];
+        }
+    }
+    watch_check("during", name);
+    s_WatchLast = name;
+    if (!strcmp(name, "GsSortObject4J") && a0 >= 0x00100000 && a0 < 0x02000000)
+    {
+        /* GsSortObject4J(GsDOBJ2*): its TMD object entry (tmd field), primitive table (+16). */
+        unsigned int obj = *(unsigned int*)(a0 + 8), prim, hdr;
+        int          i, known = 0;
+        if (in_psx_ram(obj))
+        {
+            prim = *(unsigned int*)(obj + 16);
+            if (in_psx_ram(prim))
+            {
+                hdr = *(unsigned int*)prim;
+                for (i = 0; i < s_WatchCount; i++)
+                {
+                    known |= s_WatchAddr[i] == prim;
+                }
+                if (!known && s_WatchCount < WATCH_MAX && (hdr & 0xFF) <= 32 && ((hdr >> 8) & 0xFF) <= 32)
+                {
+                    s_WatchAddr[s_WatchCount] = prim;
+                    s_WatchVal[s_WatchCount]  = hdr;
+                    s_WatchCount++;
+                    printf("port: watching model primitive header at %08X (%08X)\n", prim, hdr);
+                }
+            }
+        }
+    }
+    if (!strcmp(name, "GsMapModelingData") && a0 >= 0x00100000 && a0 < 0x02000000)
+    {
+        /* a0: the TMD's flags word (id before it); objects from a0 + 8, 7 words each, primitive
+         * table pointer at +16 (relocated by now). Watch every object's first primitive header. */
+        unsigned int nobj = *(unsigned int*)(a0 + 4), k;
+        for (k = 0; k < nobj && k < 64 && s_WatchCount < WATCH_MAX; k++)
+        {
+            unsigned int prim = *(unsigned int*)(a0 + 8 + k * 28 + 16);
+            if (in_psx_ram(prim))
+            {
+                s_WatchAddr[s_WatchCount] = prim;
+                s_WatchVal[s_WatchCount]  = *(unsigned int*)prim;
+                s_WatchCount++;
+            }
+        }
+        printf("port: watching the first primitive headers of a TMD at %08X (%u objects; %d watched)\n", a0 - 4,
+               nobj, s_WatchCount);
+    }
+    if (in_psx_ram(before) && !in_psx_ram(after))
+    {
+        printf("CRASH: WATCH: %s(%08X, %08X, %08X, %08X) moved GsOUT_PACKET_P from %08X to %08X\n", name, a0, a1,
+               a2, a3, before, after);
+        watch_stop();
+    }
+}
+
+static int watch_handler(EE_RegFrame* frame)
+{
+    s_Watch    = 1;
+    s_Frame    = *frame;
+    frame->epc = (u32)crash_report;
+    ee_dbg_clr_bpda();
+    ee_dbg_clr_bpdv();
+    return 1;
+}
+#endif
 
 static int crash_handler(EE_RegFrame* frame)
 {
@@ -149,7 +295,24 @@ void Crash_Install(void)
         extern void Port_AgentInit(void); /* agent_ps2.c: remote control on hardware */
         Port_AgentInit();
     }
+#ifdef SH_PORT_WATCH_PACKET
+    ee_dbg_install(3); /* level 1 (crashes) and level 2 (debug exception: the watch) */
+    ee_dbg_set_level2_handler(EE_EXC2_DBG, watch_handler);
+    ee_dbg_set_bpw((u32)&GsOUT_PACKET_P, 0xFFFFFFFF, EE_BPC_DUE | EE_BPC_DSE | EE_BPC_DKE | EE_BPC_DXE);
+    ee_dbg_set_bpv(0x00580000, 0xFFFF0000, EE_BPC_DUE | EE_BPC_DSE | EE_BPC_DKE | EE_BPC_DXE);
+    printf("port: watching stores of 0x0058xxxx to GsOUT_PACKET_P (hardware breakpoint)\n");
+#ifdef SH_PORT_WATCH_TEST
+    {
+        void* saved = GsOUT_PACKET_P;
+        printf("port: watch test: storing 0x00585555\n");
+        *(void* volatile*)&GsOUT_PACKET_P = (void*)0x00585555;
+        GsOUT_PACKET_P = saved;
+        printf("port: watch test: the breakpoint did NOT fire\n");
+    }
+#endif
+#else
     ee_dbg_install(1);
+#endif
     for (cause = 1; cause <= 5; cause++)
     {
         ee_dbg_set_level1_handler(cause, crash_handler);

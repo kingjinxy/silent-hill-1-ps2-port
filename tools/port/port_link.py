@@ -160,6 +160,9 @@ def main():
     dump += ["-DSH_PORT_TEST_CRASH"] if os.environ.get("SH1_TEST_CRASH") else []
     # Crash reporter restarts the game by itself after 6 s (default: keeps the crashed state): SH1_CRASH_RESTART=1.
     dump += ["-DSH_PORT_CRASH_RESTART"] if os.environ.get("SH1_CRASH_RESTART") else []
+    # Debugging: hardware breakpoint on bad stores to GsOUT_PACKET_P (crash_ps2.c): SH1_WATCH_PACKET=1.
+    dump += ["-DSH_PORT_WATCH_PACKET"] if os.environ.get("SH1_WATCH_PACKET") else []
+    dump += ["-DSH_PORT_WATCH_TEST"] if os.environ.get("SH1_WATCH_TEST") else []
     for src in sorted(glob.glob("src/port/*.c")):
         obj = os.path.join(OUT, "port", os.path.basename(src) + ".o")
         os.makedirs(os.path.dirname(obj), exist_ok=True)
@@ -184,7 +187,7 @@ def main():
         run(["tools/port/recomp_all.sh"])
     recomp_objs = []
     for src in sorted(glob.glob(OUT + "/recomp/*.c")):
-        run([CC, "-c", "-O2", "-G0", "-std=gnu89", "-fno-builtin", "-fno-strict-aliasing", "-nostdinc", "-Iinclude", *prof, src,
+        run([CC, "-c", "-O2", "-G0", "-std=gnu89", "-fno-builtin", "-fno-strict-aliasing", "-nostdinc", "-Iinclude", *prof, *dump, src,
              "-o", src[:-2] + ".o"])
         run([CC, "-c", "-G0", src[:-2] + ".data.s", "-o", src[:-2] + ".data.o"])
         recomp_objs += [src[:-2] + ".o", src[:-2] + ".data.o"]

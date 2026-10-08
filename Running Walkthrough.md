@@ -1182,3 +1182,23 @@ launchELF, the game boots from the VM (~1.4 MB/s reads).
 Workflow now: `python3 tools/port/udpfs_serve.py` and `python3 tools/port/ps2_log.py` running on the
 VM; Neutrino started once on the PS2 from launchELF; then build and `python3 tools/port/ps2_ctl.py
 deploy` for each change.
+
+### The item-pickup crash: a void prototype for libgs's GsTMDfast*LFG
+
+On the PS2 (and, it turned out, in PCSX2 once the first attract demo was allowed to run to Harry's
+item pickup) the game crashed in the world-map code with garbage pointers. Memory read over the
+network (`ps2_ctl.py md`) showed `g_WorldMapWork` and the variables before it (g_OtTags1,
+g_Map_GfxPackets) full of mesh packets: GsOUT_PACKET_P had been moved into the game's variables.
+A check of GsOUT_PACKET_P around every wrapped recompiled call (`SH1_WATCH_PACKET=1`:
+RC_WATCH_BEGIN/END in the recompiler's wrappers, Port_WatchBegin/End in crash_ps2.c) caught
+GsSortObject4J setting it to 0 or 1; logging the GsTMDfast* calls it makes through the GsFCALL4
+table showed GsTMDfastTG3LFG returning the packet pointer unchanged. `include/gpu.h` declared the
+four GsTMDfast*LFG functions `void` (Sony's libgs.h: `PACKET*`), so the recompiler generated `void`
+wrappers that dropped the returned packet pointer, and GsSortObject4J read whatever was left in v0.
+Declared `PACKET*` (only their addresses are used in C, so the PS1 build is unchanged); every other
+void wrapper matches Sony's declarations. The earlier chunk-header range check in
+WorldMap_ChunkLoadStateGet treated a symptom of this; it stays as a safety net.
+
+Notes: the EE's hardware data breakpoint (ee_debug's ee_dbg_set_bpw/bpv) never fired under
+Neutrino, even for a deliberate store; the software checks did the job. GsLinkObject4 rewrites a
+model's first primitive header on purpose (group count and type).
