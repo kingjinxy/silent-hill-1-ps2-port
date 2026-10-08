@@ -208,6 +208,17 @@ void Pad_Poll(void)
     }
 }
 
+/** Port 1's buttons from the last poll (PS1 bit order, set = pressed; 0 without a pad): for port code
+ * that runs outside the game, such as the crash reporter. */
+unsigned int Port_PadButtons(void)
+{
+    if (!s_Recv[0] || s_Recv[0][0] != 0)
+    {
+        return 0;
+    }
+    return ~(s_Recv[0][2] | (s_Recv[0][3] << 8)) & 0xFFFF;
+}
+
 int PadChkVsync(void)
 {
     return s_Started; /* the buffers are refreshed once per vertical blank */

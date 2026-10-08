@@ -332,6 +332,10 @@ void Display_PresentGs(int x, int y, int w, int h, int rgb24, int isinter)
 {
     unsigned int k;
     int interlaced = isinter && h > 256;
+    {
+        extern void Port_InputCrashCheck(void); /* input_ps2.c: "crash" test event */
+        Port_InputCrashCheck();
+    }
 
     if (w <= 0 || h <= 0)
     {

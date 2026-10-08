@@ -453,9 +453,18 @@ void Gfx_EffectsUpdate(void) // 0x8003F170
 
     lightIntensity = Q12_MULT(func_8003F4DC(&lightBoneCoord, &rot, currentInGameGfx->effectsInfo.spotLightIntensity, currentInGameGfx->effectsInfo.flags.field_00[2], Vc_LensFlareTypeGet(), &g_SysWork), g_SysWork.lightIntensity);
 
+#ifdef SH_PORT
+    // Port: `mapInfo` is still NULL in the first frames of a new game. The PS1 read address 8 (RAM)
+    // harmlessly and PCSX2 lets it pass, but a real PS2 raises an exception (the crash starting a new
+    // game on hardware). No map: no water zones (Map_WaterZoneGet handles NULL).
+    Gfx_FlashlightPositionUpdate(lightIntensity, currentInGameGfx->flashlightLensFlareIntensity, lightBoneCoord, g_SysWork.lightBoneCoord, &rot,
+                                 g_SysWork.lightPosition.vx, g_SysWork.lightPosition.vy, g_SysWork.lightPosition.vz,
+                                 g_WorldGfxWork.mapInfo != NULL ? g_WorldGfxWork.mapInfo->waterZones : NULL);
+#else
     Gfx_FlashlightPositionUpdate(lightIntensity, currentInGameGfx->flashlightLensFlareIntensity, lightBoneCoord, g_SysWork.lightBoneCoord, &rot,
                                  g_SysWork.lightPosition.vx, g_SysWork.lightPosition.vy, g_SysWork.lightPosition.vz,
                                  g_WorldGfxWork.mapInfo->waterZones);
+#endif
     func_80055814(currentInGameGfx->fogDistance);
 
     if (ptr->field_154.effectsInfo.flags.field_00[0] & SpecialEnvEventFlags_UseLighter)

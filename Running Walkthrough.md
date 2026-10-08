@@ -1129,3 +1129,35 @@ The per-second libgpu line also shows sysState and the file queue.
 
 Performance from the session: the alley end and onward ran 34-55 fps with the EE fully busy for
 long stretches (e.g. 207-297 s at 46-54 fps); the cafe cutscene plays.
+
+### Real hardware over Ethernet (phases 0 and 1)
+
+Setup: VirtualBox adapter switched to bridged (the PS2 finds the UDPFS server by broadcast, which
+NAT doesn't pass); Neutrino v1.8.0 (now github.com/ps2max32/neutrino) unpacked to `~/ps2tools/`, a
+copy for the USB stick in `build/port/usb/neutrino` with `config/system.toml` defaults
+`default_bsd = "udpfs"`, `default_dvd = "udpfs:sh1_ps2.iso"`, the PS2 at 192.168.1.10
+(`config/bsd-udpfs.toml`). On the VM: `python3 -u ~/ps2tools/neutrino_v1.8.0/udpfs_server/udpfs_server.py
+-d build/port` and `python3 tools/port/ps2_log.py` (log in build/port/ps2.log). Started from
+launchELF, the game boots from the VM (~1.4 MB/s reads).
+
+- Neutrino's `ministack.irx` replaces the IOP tty device with UDP broadcasts to port 18194, so the
+  port's console output (printf goes through the IOP tty) arrives on the VM without changes.
+- **New game crashed on hardware** (also from the internal HDD with OPL): `CRASH: TLB load at
+  pc=00114798 badvaddr=00000008`, Gfx_EffectsUpdate reading `g_WorldGfxWork.mapInfo->waterZones`
+  while mapInfo is NULL in the first frames. The PS1 reads RAM there; PCSX2 logs "TLB Miss" and goes
+  on (dismissed earlier as harmless); the PS2 faults. Fixed under SH_PORT (no map: no water zones).
+  A sweep plus the cutscene run then showed only one other TLB miss (strncmp on map2_s01, warped).
+- **Second crash** entering map0_s01: WorldMap_ChunkLoadStateGet with a loaded queue entry but no
+  header (`ipdHdr` NULL): invalid under SH_PORT.
+- **NULL-read safety net**: at startup on hardware, one TLB entry maps addresses 0-0x1FFF read-only
+  to a page of zeros (`map_zero_page`, crash_ps2.c), so remaining NULL+offset reads return 0 as in
+  PCSX2; writes still fault. Skipped when `host:sh1_ps2.iso` opens (PCSX2), where the TLB Miss lines
+  are how such sites are found.
+- **Crash restart**: crash_ps2.c counts down 6 s (over the network log), then `LoadExecPS2`s
+  `cdrom0:\SHPS_000.01;1`; Neutrino's EE core loads it from the emulated disc, i.e. the image on the
+  VM. Triangle held for 3 s keeps the crashed state. Tested with `SH1_TEST_CRASH=1` (reads address 8
+  30 s after boot). First attempts reset the IOP ourselves and loaded USB drivers to restart
+  Neutrino from the stick: with screen colours per step (GS BGCOLOR) the reset itself worked but
+  the module loader never answered afterwards, also with Neutrino's `-gc=3` (unhook syscalls).
+- Rebuilding the ISO while the PS2 ran from it gave garbage crashes (mixed old and new data);
+  `make_iso.sh` now writes a temporary file and renames it over the image.

@@ -269,6 +269,97 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
       zero-stub problem, section 5 is 64-bit only) and apply the fixes that are real game-code
       bugs, under `SH_PORT`
 
+### Hardware test link: run and debug on a real PS2 over Ethernet (planned)
+
+Goal: test on a real PS2 without moving discs or memory cards. A small ELF, started once from
+launchELF, connects to this VM over Ethernet. From the VM we can then (re)start the newest build,
+read its log live, get crash reports and RAM dumps, and reset it, all with the same tools we use in
+PCSX2. Motivation: on hardware (OPL, ISO on the internal HDD) the attract demo plays, but starting a
+new game crashes, and we can't see why.
+
+**Design decisions** (recommendations; to be confirmed):
+- **The game reads its data over the network itself.** The port's libcd (`libcd_ps2.c`) gets a
+  second back end that reads SILENT./HILL. from the network instead of the disc drive. The
+  alternative, booting the ISO through Neutrino's disc emulation, takes the network away from the
+  game: Neutrino owns the IOP and the Ethernet driver, so there'd be no live log or remote reset. The
+  disc path stays as it is for DVD/OPL builds.
+- **Protocol: UDPFS rather than UDPBD.** Both are rickgaiser's (Neutrino). UDPBD serves a raw
+  block device (port 48573), so the ISO and any output files would have to live inside a disk image
+  (exFAT) that the VM can't safely touch while the PS2 has it mounted. UDPFS serves a folder file by
+  file (reference server in Python, read/write), so the VM can serve `build/port/` directly: the
+  ISO, the ELF, and the files the port already uses through `host:` (warp.txt, input.txt,
+  capture.txt, ramdump.bin, frame dumps). Fallback if UDPFS doesn't work out: UDPBD with an exFAT
+  image, results read back after each run.
+- **`host:` keeps working on hardware.** In the network build `host:` paths map to the UDPFS share,
+  so warp sweeps, scripted input, frame capture and the load watchdog work on the PS2 unchanged.
+
+**Pieces**:
+1. *VM side: `tools/port/ps2_link.py`* (one program, several channels):
+   - file server: the UDPFS server for `build/port/`;
+   - log receiver: the port's console output (udptty, UDP), written to a log file and the terminal
+     in the same format as `pcsx2_run.py` output, so the existing parsers (heartbeat, `--until`,
+     `--gameplay`, stall detection, the sweep) work on hardware;
+   - control: commands to the PS2 (`run` [args], `reset`, `ping`, `dump`), sent over UDP;
+   - CLI: `ps2_link.py run --until ... --gameplay 30`, as close to `pcsx2_run.py` as possible
+     (ideally `pcsx2_run.py --hardware`).
+   - The VM needs a bridged network adapter (the PS2 must reach it on the LAN); a fixed IP for both.
+2. *PS2 side: launcher ELF `sh1link.elf`* (started from launchELF; small, rarely changes):
+   - loads the IOP modules: DEV9, Ethernet (SMAP), the UDP transport, UDPFS client, udptty;
+   - network settings from a config file next to the ELF (IP, VM address), or DHCP;
+   - waits for `run`, then loads `sh1.elf` from the share and starts it (LoadExecPS2 with arguments:
+     `net`, the VM address), so every run is the newest build without touching the PS2;
+   - shows a status screen (IP, "waiting for VM", last error) so problems are visible on the TV.
+3. *Game side: network mode in the port* (`SH1_NET=1` build, or the `net` argument):
+   - after its own IOP reset the game loads the same network modules again (embedded IRX);
+   - libcd back end reading `sh1_ps2.iso` from the share (sector reads at file offsets; the same
+     async request/chunking as the DVD path);
+   - console output through udptty (printf already goes to the console);
+   - a debug agent: a high-priority EE thread woken by a SIF command from a small IOP module that
+     listens for control packets. So `reset` (LoadExecPS2 back into `sh1link.elf`) and `dump` work
+     even while the main loop is stuck, though not after a hard EE lockup;
+   - the crash handler (`crash_ps2.c`) logs registers and a stack dump over the network, writes
+     `ramdump.bin` to the share, then waits for `reset`.
+4. *Recovery:* if the EE is hard-locked (interrupts off, kernel crash), only a physical reset or
+   power cycle helps; launchELF can be set to autostart `sh1link.elf` to make that one button
+   press.
+
+**Progress**:
+- [x] Phase 0: Neutrino v1.8.0 boots `sh1_ps2.iso` over UDPFS from the VM on the user's Fat PS2 (VM on
+  a bridged adapter: 192.168.1.222; PS2 192.168.1.10). One launchELF version failed to start it.
+- [x] Phase 1: console output over the network: Neutrino's ministack already broadcasts IOP tty
+  writes (which carry the port's printf) to UDP 18194; `tools/port/ps2_log.py` receives them.
+  First hardware crash found and fixed (NULL read in Gfx_EffectsUpdate starting a new game), then
+  a second (WorldMap_ChunkLoadStateGet entering map0_s01).
+- [x] Crash restart: after the report, a 6 s countdown, then `LoadExecPS2` of the disc's boot ELF,
+  which Neutrino turns into a reload from the VM; Triangle held 3 s keeps the crashed state. An IOP
+  reset of our own (to restart Neutrino from USB) hangs under Neutrino (the module loader never
+  answers afterwards, with or without `-gc=3`).
+- [x] NULL-read safety net on hardware: addresses 0-0x1FFF mapped read-only to zeros (as PCSX2
+  behaves); skipped in PCSX2 (host file system present), where "TLB Miss" lines show sites to fix.
+- [ ] Phase 3: remote restart, new build served to a running PS2.
+
+**Phases** (each ends with a test on the real PS2):
+- *0. Verify the building blocks.* Which modules exist (ps2sdk here has `smap.irx`, `udptty.irx`,
+  `bdm.irx`, `bdmfs_fatfs.irx`, `netman.irx`, `ps2ip*`; `smap_udpbd` and the UDPFS client come from
+  Neutrino's sources); the UDPFS protocol and server; whether udptty and the UDPFS/UDPBD transport
+  can share the Ethernet driver; PS2 model (Fat with network adapter or Slim). Test: Neutrino boots
+  the ISO over UDPFS on the user's PS2 (rules out network/VM setup problems early).
+- *1. Log only.* `sh1.elf` started from launchELF/USB as today, with udptty: its console appears
+  on the VM. Test: the new-game crash is captured with the crash handler's registers. This alone
+  may explain the hardware crash.
+- *2. Game data over the network.* UDPFS client and the libcd back end; `host:` mapped to the share.
+  Test: boot to the title and the attract demo with the ISO on the VM; scripted input reaches
+  gameplay.
+- *3. Launcher and remote control.* `sh1link.elf`, `run`/`reset`, debug agent. Test: from the VM:
+  build, run, reset, run again, without touching the PS2.
+- *4. Tool integration.* `pcsx2_run.py --hardware`, crash/hang dumps to the share, the warp sweep
+  and the cutscene benchmark on hardware. Test: one sweep on the real PS2.
+
+**Risks / unknowns**: Ethernet throughput with the game's streaming (UDPFS should manage MB/s; the
+game needs a few hundred KB/s); the network modules' IOP memory next to the sound driver later;
+timing differences from network reads (the async libcd path already copes with slow reads); a
+hard lockup can't be reset remotely.
+
 ### Optional — PC host build
 
 - [ ] Bring the HAL up on PC first (cf. PsyCross) for easier debugging, then swap in PS2 backend

@@ -13,6 +13,10 @@ rm -rf "$STAGE"; mkdir -p "$STAGE"
 printf 'BOOT2 = cdrom0:\\%s;1\r\nVER = 1.00\r\nVMODE = NTSC\r\n' "$TITLE" > "$STAGE/SYSTEM.CNF"
 cp build/port/sh1.elf "$STAGE/$TITLE"
 # Small files first; the big data files after (tools/port/mkiso.py keeps this order).
-python3 tools/port/mkiso.py "$ISO" SH1PS2 \
+# Written to a temporary file, then renamed over the image: a PS2 booted from it over the network
+# (tools/port/ps2_log.py, the UDPFS server) keeps reading the old file until it starts again,
+# instead of a mix of old and new data.
+python3 tools/port/mkiso.py "$ISO.tmp" SH1PS2 \
     "SYSTEM.CNF;1=$STAGE/SYSTEM.CNF" "$TITLE;1=$STAGE/$TITLE" \
     "SILENT.;1=rom/USA/SILENT." "HILL.;1=rom/USA/HILL."
+mv -f "$ISO.tmp" "$ISO"

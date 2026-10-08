@@ -5,6 +5,7 @@
  *     12.5 start 6      hold Start for 6 frames (vertical blanks) at 12.5 s
  *     14   cross down   press Cross and Down together (default 6 frames)
  *     15   dump         write the next displayed frame to host:frame_<n>.ppm (display_ps2.c)
+ *     20   crash        read address 8 in the main loop (tests the crash reporter on hardware)
  *     # comment
  *
  * Buttons: select l3 r3 start up right down left l2 r2 l1 r1 triangle circle cross square. Each event
@@ -26,6 +27,7 @@ typedef struct
     unsigned int buttons; /* PS1 bit order, set = pressed; 0 with dump */
     int          frames;
     int          dump;
+    int          crash; /* test: raise an address error (crash reporter, crash_ps2.c) */
 } Event;
 
 static Event s_Events[MAX_EVENTS];
@@ -34,6 +36,7 @@ static int   s_Loaded = -1;
 static int   s_Next;      /* next event to start */
 static int   s_ActiveEnd; /* vertical blank where the current press ends */
 static unsigned int s_Active;
+static int          s_Crash; /* raised from the main thread (Port_InputCrashCheck), not the pad poll */
 
 static const char* const NAMES[16] = { "select", "l3", "r3", "start", "up", "right", "down", "left",
                                         "l2", "r2", "l1", "r1", "triangle", "circle", "cross", "square" };
@@ -75,6 +78,11 @@ static void load(void)
             if (!strcmp(tok, "dump"))
             {
                 e.dump = 1;
+                continue;
+            }
+            if (!strcmp(tok, "crash"))
+            {
+                e.crash = 1;
                 continue;
             }
             if (tok[0] >= '0' && tok[0] <= '9')
@@ -125,6 +133,11 @@ unsigned int Port_InputButtons(void)
             Display_RequestDump();
             printf("input: %.2f s dump\n", now / 60.0);
         }
+        if (e->crash)
+        {
+            printf("input: %.2f s crash (test)\n", now / 60.0);
+            s_Crash = 1;
+        }
         if (e->buttons)
         {
             s_Active    = e->buttons;
@@ -133,4 +146,27 @@ unsigned int Port_InputButtons(void)
         }
     }
     return s_Active;
+}
+
+/** Test crash requested by host:input.txt ("crash"): a read of address 8 in the caller's thread (the
+ * main loop calls this once per frame): a TLB fault on a real PS2. PCSX2 lets it pass, so there the
+ * crash reporter can't be tested this way. */
+void Port_InputCrashCheck(void)
+{
+#ifdef SH_PORT_TEST_CRASH
+    /* Test build (SH1_TEST_CRASH=1): the same fault as a real crash, 30 s after boot, for testing the
+     * crash reporter and its restart on hardware (where host:input.txt isn't available). */
+    unsigned int cycles;
+    static int   done;
+    if (!done && Port_VBlanks(&cycles) >= 30 * 60)
+    {
+        done    = 1;
+        s_Crash = 1;
+    }
+#endif
+    if (s_Crash)
+    {
+        s_Crash = 0;
+        (void)*(volatile unsigned int*)8; /* TLB load fault (a real PS2; PCSX2 lets it pass) */
+    }
 }
