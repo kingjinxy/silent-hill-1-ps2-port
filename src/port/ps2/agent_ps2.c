@@ -7,7 +7,9 @@
  * a loop (not after a hard lockup, or with interrupts off).
  *
  * Commands: "RS" restart the game (Port_Restart: under Neutrino, a reload from the image on the
- * VM), "OS" exit to the PS2 browser (rom0:OSDSYS), "PI" ping (answered by the IOP module itself).
+ * VM), "OS" exit to the PS2 browser (rom0:OSDSYS), "MD" print memory (address, length) to the log as
+ * hex ("md ..." lines: tools/port/ps2_ctl.py md collects them), "PI" ping (answered by the IOP
+ * module itself). Commands run in the agent thread, so they also work in a kept crashed state.
  * In PCSX2 there's no ministack, so the module doesn't load; the agent thread runs anyway, for the
  * in-game reset combo (libpad_ps2.c: Port_AgentRequest).
  */
@@ -24,7 +26,7 @@ extern void          Port_Restart(void); /* crash_ps2.c */
 
 typedef struct
 {
-    unsigned int magic, seq, cmd, arg;
+    unsigned int magic, seq, cmd, arg, arg2, pad[3];
 } Mailbox;
 
 static Mailbox      s_Mailbox __attribute__((aligned(64)));
@@ -52,6 +54,31 @@ static void exit_to_osd(void)
     LoadExecPS2("rom0:OSDSYS", 0, NULL);
 }
 
+/** Prints memory as hex lines ("md <address>: <32 bytes>"), then "md end". */
+static void memory_dump(unsigned int addr, unsigned int len)
+{
+    unsigned int a, i;
+    int ram = addr >= 0x00100000 && addr + len <= 0x02000000;
+    int spr = addr >= 0x70000000 && addr + len <= 0x70004000;
+    if (len > 0x10000 || (!ram && !spr))
+    {
+        printf("md error: %08x+%x is outside RAM (0x100000-0x2000000) or the scratchpad, or over 64 KB\n", addr, len);
+        printf("md end\n");
+        return;
+    }
+    for (a = addr; a < addr + len; a += 32)
+    {
+        char line[96];
+        int  n = sprintf(line, "md %08x:", a);
+        for (i = 0; i < 32 && a + i < addr + len; i++)
+        {
+            n += sprintf(line + n, "%02x", *(volatile unsigned char*)(a + i));
+        }
+        printf("%s\n", line);
+    }
+    printf("md end\n");
+}
+
 static void agent(void* arg)
 {
     (void)arg;
@@ -76,6 +103,10 @@ static void agent(void* arg)
         else if (cmd == CMD('O', 'S'))
         {
             exit_to_osd();
+        }
+        else if (cmd == CMD('M', 'D'))
+        {
+            memory_dump(mailbox()->arg, mailbox()->arg2);
         }
     }
 }

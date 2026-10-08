@@ -26,6 +26,13 @@ udp_socket_t* udp_bind(u16 port_src, udp_port_handler handler, void* handler_arg
 void          udp_packet_init(udp_packet_t* pkt, u32 ip_dst, u16 port_dst);
 int           udp_packet_send_ll(udp_socket_t* socket, udp_packet_t* pkt, u16 pktdatasize, const void* data, u16 datasize);
 
+/* Neutrino's SMAP driver: reads more of the received frame (offset from the frame start), from the
+ * receive callback. */
+void smap_fifo_read(u16 offset, void* dst, u32 bytes);
+#define smap_IMPORTS_start DECLARE_IMPORT_TABLE(smap, 1, 0)
+#define smap_IMPORTS_end   END_IMPORT_TABLE
+#define I_smap_fifo_read   DECLARE_IMPORT(7, smap_fifo_read)
+
 #define mstack_IMPORTS_start DECLARE_IMPORT_TABLE(mstack, 1, 0)
 #define mstack_IMPORTS_end   END_IMPORT_TABLE
 #define I_udp_bind           DECLARE_IMPORT(4, udp_bind)

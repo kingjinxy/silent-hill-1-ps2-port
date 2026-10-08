@@ -4,7 +4,8 @@
  * UDPFS; this module only loads if ministack is present). The first two payload bytes are a
  * command: "RS" (restart the game), "PI" (ping). Each command is copied into a 16-byte mailbox in EE
  * memory by SIF DMA (address from the "mb=0x..." argument; src/port/ps2/agent_ps2.c polls it every
- * vertical blank), and answered with a short text to the sender (tools/port/ps2_ctl.py).
+ * vertical blank), with two 32-bit arguments from the next 8 payload bytes ("MD": address,
+ * length), and answered with a short text to the sender (tools/port/ps2_ctl.py).
  */
 
 #include <irx.h>
@@ -25,6 +26,8 @@ typedef struct
     u32 seq;   /* incremented per command */
     u32 cmd;   /* two command bytes */
     u32 arg;
+    u32 arg2;
+    u32 pad[3];
 } mailbox_t;
 
 static mailbox_t     s_Box __attribute__((aligned(16)));
@@ -54,12 +57,16 @@ static int on_packet(udp_socket_t* socket, void* arg, const u8* hdr, u16 hdr_len
     u32 src_ip  = ((u32)hdr[26] << 24) | ((u32)hdr[27] << 16) | ((u32)hdr[28] << 8) | hdr[29];
     u16 src_port = (u16)((hdr[34] << 8) | hdr[35]);
     u32 cmd      = (u32)hdr[42] | ((u32)hdr[43] << 8);
+    u32 args[2]  = { 0, 0 };
     int len;
     (void)arg;
     (void)hdr_len;
 
+    smap_fifo_read(0x2C, args, sizeof(args)); /* the payload after the command bytes */
     s_Box.seq++;
-    s_Box.cmd = cmd;
+    s_Box.cmd  = cmd;
+    s_Box.arg  = args[0];
+    s_Box.arg2 = args[1];
     to_ee();
 
     len = sprintf(s_ReplyText, "SH1 agent: command %c%c, seq %u\n", hdr[42], hdr[43], (unsigned)s_Box.seq);

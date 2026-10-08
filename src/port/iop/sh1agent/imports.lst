@@ -26,3 +26,7 @@ I_udp_bind
 I_udp_packet_init
 I_udp_packet_send_ll
 mstack_IMPORTS_end
+
+smap_IMPORTS_start
+I_smap_fifo_read
+smap_IMPORTS_end
