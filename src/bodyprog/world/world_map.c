@@ -52,10 +52,13 @@ static u32 WorldMap_ChunkLoadStateGet(s_MapChunk* chunk) // 0x80041B1C
         return MapModelLoadState_Invalid;
     }
 #ifdef SH_PORT
-    // Port: a slot can have a loaded queue entry but no header yet (seen on a real PS2 entering
-    // map0_s01). The PS1 read address 1 (RAM) harmlessly; a real PS2 faults. No header: invalid
-    // (skipped by the load checks, nothing to draw).
-    else if (chunk->ipdHdr == NULL)
+    // Port: on a real PS2 a slot can have a loaded queue entry but a header pointer that isn't one
+    // yet: NULL entering map0_s01, garbage (0x027C004B) in the attract demo on map2_s00 (never in
+    // PCSX2: timing). The PS1 reads such addresses harmlessly (address 1, or wrapped into its 2 MB);
+    // a real PS2 faults. Chunk headers live in the chunk buffer: anything else is invalid (skipped
+    // by the load checks, nothing to draw).
+    else if ((u8*)chunk->ipdHdr < (u8*)g_WorldMapWork.chunkBuffer ||
+             (u8*)chunk->ipdHdr >= (u8*)g_WorldMapWork.chunkBuffer + g_WorldMapWork.chunkBufferSize)
     {
         return MapModelLoadState_Invalid;
     }
