@@ -1172,6 +1172,8 @@ void GpuGs_MoveImage(s32 sx, s32 sy, s32 dx, s32 dy, s32 w, s32 h)
 #define GS_BUSDIR  ((volatile u64x*)0x12001040)
 #define GS_CSR     ((volatile u64x*)0x12001000)
 #define D1_CHCR    ((volatile u32*)0x10009000)
+#define VIF1_FBRST ((volatile u32*)0x10003C10)
+#define READBACK_SPINS 20000000 /* far beyond a 256-row transfer: the GS or VIF1 is wedged */
 #define D1_MADR    ((volatile u32*)0x10009010)
 #define D1_QWC     ((volatile u32*)0x10009020)
 
@@ -1181,7 +1183,9 @@ static u16 s_Readback[256 * VRAM_W] __attribute__((aligned(64)));
 static void download_rows(u16 (*dst)[VRAM_W], s32 y, s32 h)
 {
     u32 qwc = (u32)(VRAM_W * 2 * h / 16);
+    s32 spins;
     GpuGs_Flush();
+    *GS_CSR = 2; /* clear FINISH, then wait for this transfer's FINISH before turning the bus around */
     ad(R_BITBLTBUF, (u64x)VRAM_TBP | ((u64x)VRAM_BW << 16) | ((u64x)PSM_CT16 << 24));
     ad(R_TRXPOS, (u64x)0 | ((u64x)y << 16));
     ad(R_TRXREG, (u64x)VRAM_W | ((u64x)h << 32));
@@ -1189,14 +1193,27 @@ static void download_rows(u16 (*dst)[VRAM_W], s32 y, s32 h)
     ad(R_TRXDIR, 1);
     GpuGs_Flush();
 
+    /* Real hardware: the bus may only be turned around once the GS has finished drawing (PCSX2
+     * doesn't care); doing it earlier sometimes wedged the download forever (attract demo water). */
+    for (spins = 0; !(*GS_CSR & 2) && spins < READBACK_SPINS; spins++)
+    {
+    }
     FlushCache(0);
     *VIF1_STAT = 0x00800000; /* FDR: VIF1 FIFO direction GS -> EE */
     *GS_BUSDIR = 1;
     *D1_MADR   = (u32)s_Readback & 0x0FFFFFFF;
     *D1_QWC    = qwc;
     *D1_CHCR   = 0x100; /* start, to memory, normal mode */
-    while (*D1_CHCR & 0x100)
+    for (spins = 0; (*D1_CHCR & 0x100) && spins < READBACK_SPINS; spins++)
     {
+    }
+    if (*D1_CHCR & 0x100)
+    {
+        /* Wedged: stop the channel and reset VIF1 rather than freezing (this frame's copy is stale). */
+        printf("gpu_gs: VRAM download stuck (rows %d-%d, qwc left %u), recovered\n", y, y + h - 1,
+               (unsigned)*D1_QWC);
+        *D1_CHCR   = 0;
+        *VIF1_FBRST = 1;
     }
     *GS_BUSDIR = 0;
     *VIF1_STAT = 0;

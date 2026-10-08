@@ -9,7 +9,8 @@
  * Commands: "RS" restart the game (Port_Restart: under Neutrino, a reload from the image on the
  * VM), "OS" exit to the PS2 browser (rom0:OSDSYS), "MD" print memory (address, length) to the log as
  * hex ("md ..." lines: tools/port/ps2_ctl.py md collects them), "PI" ping (answered by the IOP
- * module itself). Commands run in the agent thread, so they also work in a kept crashed state.
+ * module itself), "WH" print where the interrupted code was at the last 16 vertical blanks (a hung
+ * main loop). Commands run in the agent thread, so they also work in a kept crashed state.
  * In PCSX2 there's no ministack, so the module doesn't load; the agent thread runs anyway, for the
  * in-game reset combo (libpad_ps2.c: Port_AgentRequest).
  */
@@ -107,6 +108,16 @@ static void agent(void* arg)
         else if (cmd == CMD('M', 'D'))
         {
             memory_dump(mailbox()->arg, mailbox()->arg2);
+        }
+        else if (cmd == CMD('W', 'H'))
+        {
+            extern unsigned int Port_PcSamples[16], Port_PcSampleCount; /* libetc_ps2.c */
+            unsigned int        n = Port_PcSampleCount, i;
+            for (i = 0; i < 16; i++)
+            {
+                printf("where %08x\n", Port_PcSamples[(n + i) & 15]);
+            }
+            printf("where end\n");
         }
     }
 }

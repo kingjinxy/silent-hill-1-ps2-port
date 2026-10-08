@@ -48,10 +48,17 @@ int Port_VBlanks(unsigned int* cycles)
     return n;
 }
 
+/* Where the interrupted code was at the last vertical blanks (EPC): a hung main loop shows up here
+ * (agent_ps2.c "WH", tools/port/ps2_ctl.py where). */
+unsigned int Port_PcSamples[16];
+unsigned int Port_PcSampleCount;
+
 static int vblank_handler(int cause)
 {
-    unsigned int now;
+    unsigned int now, epc;
     (void)cause;
+    __asm__ volatile("mfc0 %0, $14" : "=r"(epc));
+    Port_PcSamples[Port_PcSampleCount++ & 15] = epc;
     __asm__ volatile("mfc0 %0, $9" : "=r"(now));
     s_VBlankCycles = now;
     s_VBlanks++;

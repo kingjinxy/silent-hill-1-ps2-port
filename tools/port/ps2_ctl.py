@@ -7,6 +7,7 @@ sh1agent.irx (src/port/iop/sh1agent, UDP port 62968) and prints its answer.
     python3 tools/port/ps2_ctl.py deploy       # restart into the newest build (needs udpfs_serve.py)
     python3 tools/port/ps2_ctl.py osd          # exit to the PS2 browser (as RESET does for retail games)
     python3 tools/port/ps2_ctl.py md g_SysWork 0x400 [--out sys.bin]   # read memory (hex in the log)
+    python3 tools/port/ps2_ctl.py where        # where the game was at the last 16 vertical blanks
 
 md takes an address (hex) or a symbol of the running build (build/port/sh1.elf, e.g. g_WorldMapWork or
 g_WorldMapWork+0x138) and a length (at most 64 KB per command); it waits for the game's "md" lines in
@@ -31,7 +32,7 @@ ELF = os.path.join(HERE, "..", "..", "build", "port", "sh1.elf")
 NM = os.path.join(os.environ.get("PS2DEV", os.path.expanduser("~/ps2dev")), "ee", "bin", "mips64r5900el-ps2-elf-nm")
 
 PORT = 62968
-COMMANDS = {"ping": b"PI", "restart": b"RS", "deploy": b"RS", "osd": b"OS", "md": b"MD"}
+COMMANDS = {"ping": b"PI", "restart": b"RS", "deploy": b"RS", "osd": b"OS", "md": b"MD", "where": b"WH"}
 
 
 def address(text):
@@ -94,6 +95,26 @@ def main():
     ap.add_argument("length", nargs="?", default="0x100", help="md: bytes (at most 0x10000)")
     ap.add_argument("--out", help="md: write the bytes to this file")
     args = ap.parse_args()
+    if args.command == "where":
+        start = os.path.getsize(LOG) if os.path.exists(LOG) else 0
+        if send(args.ip, "where", tries=1, timeout=2.0) is None:
+            sys.exit("ps2_ctl: no answer from %s" % args.ip)
+        end = time.time() + 10
+        text = ""
+        while time.time() < end and "where end" not in text:
+            time.sleep(0.1)
+            with open(LOG, errors="replace") as f:
+                f.seek(start)
+                text = f.read()
+        out = subprocess.run([NM, "-n", ELF], capture_output=True, text=True).stdout
+        syms = sorted((int(p[0], 16), p[2]) for p in (l.split() for l in out.splitlines()) if len(p) == 3 and p[1] in "tTwW")
+        import bisect
+        addrs = [a for a, _ in syms]
+        for m in re.finditer(r"where ([0-9a-f]{8})", text):
+            pc = int(m.group(1), 16)
+            i = bisect.bisect_right(addrs, pc) - 1
+            print("%08x  %s+0x%x" % (pc, syms[i][1], pc - syms[i][0]) if i >= 0 else "%08x" % pc)
+        return 0
     if args.command == "md":
         a = address(args.addr)
         data = memory(args.ip, a, int(args.length, 0))
