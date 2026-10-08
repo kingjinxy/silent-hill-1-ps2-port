@@ -140,6 +140,11 @@ static int chunk_start(void)
 static void chunk_finish(void)
 {
     int i;
+    /* The IOP DMAed the sectors into RAM behind the EE's data cache: drop any cached copy of the
+     * buffer from an earlier read (sceCdRead only writes dirty lines back before the transfer), or
+     * the copy below reads stale data. PCSX2 doesn't model the data cache; a real PS2 then got
+     * files with stale pieces (garbage pointers in map chunks). */
+    InvalidDCache(s_Bounce, s_Bounce + sizeof(s_Bounce) - 1);
     if (s_Req.hill)
     {
         for (i = 0; i < s_Req.chunkSectors; i++)

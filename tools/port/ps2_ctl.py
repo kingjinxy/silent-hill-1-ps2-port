@@ -5,6 +5,7 @@ sh1agent.irx (src/port/iop/sh1agent, UDP port 62968) and prints its answer.
     python3 tools/port/ps2_ctl.py ping
     python3 tools/port/ps2_ctl.py restart      # restart the game (same build: the image it booted)
     python3 tools/port/ps2_ctl.py deploy       # restart into the newest build (needs udpfs_serve.py)
+    python3 tools/port/ps2_ctl.py osd          # exit to the PS2 browser (as RESET does for retail games)
 
 The PS2's address comes from --ip (default 192.168.1.10, Neutrino's config/bsd-udpfs.toml).
 """
@@ -18,7 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FLAG = os.path.join(HERE, "..", "..", "build", "port", ".udpfs_refresh")  # udpfs_serve.py
 
 PORT = 62968
-COMMANDS = {"ping": b"PI", "restart": b"RS", "deploy": b"RS"}
+COMMANDS = {"ping": b"PI", "restart": b"RS", "deploy": b"RS", "osd": b"OS"}
 
 
 def send(ip, command, timeout=1.0, tries=3):

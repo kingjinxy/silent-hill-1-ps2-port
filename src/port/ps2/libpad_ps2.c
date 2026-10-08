@@ -183,6 +183,23 @@ void Pad_Poll(void)
             }
             if (p == 0)
             {
+                /* In-game reset: L1+L2+R1+R2+Select+Start held for a second exits to the PS2
+                 * browser (the RESET button doesn't under Neutrino). PS1 bit order, active low. */
+                static int   resetHeld;
+                unsigned int held = ~(s_Recv[p][2] | (s_Recv[p][3] << 8)) & 0xFFFF;
+                if ((held & 0x0F09) == 0x0F09)
+                {
+                    if (++resetHeld == 60)
+                    {
+                        extern void Port_AgentRequest(const char* cmd); /* agent_ps2.c */
+                        printf("libpad: reset combo held: exiting to the browser\n");
+                        Port_AgentRequest("OS");
+                    }
+                }
+                else
+                {
+                    resetHeld = 0;
+                }
                 /* Test presses from the map warp (warp_ps2.c) and scripted input (input_ps2.c);
                  * buttons are active low. */
                 extern unsigned int Port_WarpButtons(void);
