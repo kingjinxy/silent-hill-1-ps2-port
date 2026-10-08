@@ -1202,3 +1202,5 @@ WorldMap_ChunkLoadStateGet treated a symptom of this; it stays as a safety net.
 Notes: the EE's hardware data breakpoint (ee_debug's ee_dbg_set_bpw/bpv) never fired under
 Neutrino, even for a deliberate store; the software checks did the job. GsLinkObject4 rewrites a
 model's first primitive header on purpose (group count and type).
+
+- 2026-10-08 (hardware): attract-demo freeze found. The main thread was spinning in gpu_gs.c download_rows (water effect StoreImage → GS→EE VRAM readback), waiting on VIF1 DMA (D1_CHCR) forever. It found this by reading the stack over the network: `ps2_ctl.py md 0x1FFC000 0x4000`. Fix: clear FINISH, wait for the GS's FINISH before turning the bus around, add spin timeouts, and on a stuck transfer stop D1 and reset VIF1 with a log line ("VRAM download stuck"). The vblank EPC sampler (`ps2_ctl.py where`) shows only the kernel inside INTC handlers, so use the stack instead. A remote restart from this state hangs, so press RESET.

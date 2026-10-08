@@ -394,3 +394,5 @@ hard lockup can't be reset remotely.
 - XA audio (HILL. and STR movies) is not covered by the notes and needs its own subsystem.
 - PS2 ps2sdk programs run in KUSEG (~0x00100000), so any PS1 code that assumes pointers are
   ≥ 0x80000000 or uses address-mirror masks must be found (see Step 1).
+
+- 2026-10-08 (hardware): attract-demo freeze found. The main thread was spinning in gpu_gs.c download_rows (water effect StoreImage → GS→EE VRAM readback), waiting on VIF1 DMA (D1_CHCR) forever. It found this by reading the stack over the network: `ps2_ctl.py md 0x1FFC000 0x4000`. Fix: clear FINISH, wait for the GS's FINISH before turning the bus around, add spin timeouts, and on a stuck transfer stop D1 and reset VIF1 with a log line ("VRAM download stuck"). The vblank EPC sampler (`ps2_ctl.py where`) shows only the kernel inside INTC handlers, so use the stack instead. A remote restart from this state hangs, so press RESET.
