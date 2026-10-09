@@ -164,7 +164,9 @@ def main():
     # Debugging: hardware breakpoint on bad stores to GsOUT_PACKET_P (crash_ps2.c): SH1_WATCH_PACKET=1.
     dump += ["-DSH_PORT_WATCH_PACKET"] if os.environ.get("SH1_WATCH_PACKET") else []
     dump += ["-DSH_PORT_WATCH_TEST"] if os.environ.get("SH1_WATCH_TEST") else []
-    for src in sorted(glob.glob("src/port/*.c")):
+    # The Demo menu's cutscene list (src/port/demo_menu.c), found in the decomp's map code.
+    run([sys.executable, "tools/port/cutscene_list.py", "--c", os.path.join(OUT, "demo_cutscenes.c")])
+    for src in sorted(glob.glob("src/port/*.c")) + [os.path.join(OUT, "demo_cutscenes.c")]:
         obj = os.path.join(OUT, "port", os.path.basename(src) + ".o")
         os.makedirs(os.path.dirname(obj), exist_ok=True)
         run([CC, "-c", *PORT_CFLAGS, *prof, "-DSH_PORT_GPU=%d" % gpu, src, "-o", obj])

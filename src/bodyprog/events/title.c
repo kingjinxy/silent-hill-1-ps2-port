@@ -15,6 +15,9 @@
 #include "main/fsqueue.h"
 #include "main/rng.h"
 #include "screens/stream/stream.h"
+#ifdef SH_PORT
+#include "port/demo_menu.h"
+#endif
 
 #define MAIN_MENU_FOG_COUNT 21
 
@@ -51,8 +54,13 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
         GameState_LoadSavegameScreen,
         GameState_AutoLoadSavegame,
         GameState_MovieOpening,
+#ifdef SH_PORT
+        GameState_MainLoadScreen, // Demo: straight into the cutscene's map.
+        GameState_OptionScreen
+#else
         GameState_OptionScreen,
         GameState_MovieIntro
+#endif
     };
 
     bool        playInGameDemo;
@@ -92,6 +100,18 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
     switch (g_MainMenuState)
     {
         case MainMenuState_Start:
+#ifdef SH_PORT
+            if (Port_DemoReturnToList())
+            {
+                // Back from a Demo cutscene: open the list again.
+                g_MainMenu_SelectedEntry = MainMenuEntry_Demo;
+                Screen_RectInterlacedClear(0, 32, SCREEN_WIDTH, FRAMEBUFFER_HEIGHT_INTERLACED, 0, 0, 0);
+                Screen_Init(SCREEN_WIDTH, true);
+                g_IntervalVBlanks = 1;
+                g_MainMenuState   = MainMenuState_DemoList;
+                break;
+            }
+#endif
             g_GameWork.background2dColor.r = 0;
             g_GameWork.background2dColor.g = 0;
             g_GameWork.background2dColor.b = 0;
@@ -129,6 +149,10 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
                                                (1 << MainMenuEntry_Start)    |
                                                (1 << MainMenuEntry_Option);
             }
+
+#ifdef SH_PORT
+            g_MainMenu_VisibleEntryFlags |= 1 << MainMenuEntry_Demo;
+#endif
 
             // Memory card present and savegames exist.
             if (g_MemCard_SavegameCount > 0)
@@ -230,8 +254,15 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
                         GameFs_OptionBinLoad();
                         break;
 
+#ifdef SH_PORT
+                    case MainMenuEntry_Demo:
+                        ScreenFade_Reset();
+                        g_MainMenuState = MainMenuState_DemoList;
+                        break;
+#else
                     case MainMenuEntry_Extra: // @unused See `e_MainMenuEntry`.
                         break;
+#endif
                 }
             }
 
@@ -318,6 +349,41 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
             }
             break;
 
+#ifdef SH_PORT
+        case MainMenuState_DemoList:
+        {
+            s32 chosen = Port_DemoMenuUpdate();
+
+            if (chosen == -1)
+            {
+                g_MainMenuState = MainMenuState_Main;
+            }
+            else if (chosen >= 0)
+            {
+                // A new game (normal difficulty) on the cutscene's map; the event starts in
+                // Event_Update (Port_DemoEventStart).
+                s32 mapIdx = g_PortCutscenes[chosen].mapIdx;
+
+                g_GameWork.gameState = GameState_MainMenu;
+                if (g_GameWork.gameStateSteps[0] != 1)
+                {
+                    g_GameWork.gameStateSteps[0] = 1;
+                    Fs_QueueReset();
+                }
+                GameBoot_SavegameInitialize(mapIdx, 0);
+                GameBoot_WorldInit();
+                g_SysWork.processFlags = ProcessFlag_NewGame;
+                g_SavegamePtr->mapIdx  = mapIdx;
+                GameBoot_MapLoad(mapIdx);
+                Port_DemoBegin(chosen);
+                g_MainMenu_SelectedEntry = MainMenuEntry_Demo;
+                ScreenFade_Start(true, false, false);
+                g_MainMenuState = MainMenuState_NewGameStart;
+            }
+            break;
+        }
+#endif
+
         case MainMenuState_LoadGame:
         case MainMenuState_NewGameStart:
             if (ScreenFade_IsFinished())
@@ -334,6 +400,15 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
                 {
                     Chara_PositionSet(&g_MapOverlayHdr.mapPoints[0]);
                 }
+#ifdef SH_PORT
+                if (g_MainMenu_SelectedEntry == MainMenuEntry_Demo)
+                {
+                    // At the event's trigger point (map point 0 for events that trigger anywhere).
+                    s_EventData* ev = &g_MapOverlayHdr.mapEvents[g_PortCutscenes[Port_DemoChosen()].event];
+
+                    Chara_PositionSet(&g_MapOverlayHdr.mapPoints[ev->triggerType == TriggerType_Tick ? 0 : ev->mapPointIdx]);
+                }
+#endif
 
                 MemCard_SysDisable();
 
@@ -379,6 +454,13 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
         MainMenu_BackgroundDraw();
         func_8003B560();
 
+#ifdef SH_PORT
+        if (g_MainMenuState == MainMenuState_DemoList)
+        {
+            Port_DemoMenuDraw();
+            return;
+        }
+#endif
         if (g_MainMenuState < MainMenuState_DifficultySelector)
         {
             MainMenu_MainTextDraw();
@@ -413,6 +495,16 @@ MATCH_STATIC void MainMenu_MainTextDraw(void) // 0x8003B568
     #define COLUMN_POS_Y 184
     #define STR_OFFSET_Y 20
 
+#ifdef SH_PORT
+    static const char* MAIN_MENU_ENTRY_STRINGS[] = {
+        "LOAD",
+        "CONTINUE",
+        "START",
+        "DEMO",
+        "OPTION"
+    };
+    static const u8 STR_OFFSETS_X[] = { 29, 50, 32, 29, 39 };
+#else
     static const char* MAIN_MENU_ENTRY_STRINGS[] = {
         "LOAD",
         "CONTINUE",
@@ -421,6 +513,7 @@ MATCH_STATIC void MainMenu_MainTextDraw(void) // 0x8003B568
         "EXTRA" /** @unused See `e_MainMenuEntry`. */
     };
     static const u8 STR_OFFSETS_X[] = { 29, 50, 32, 39, 33 }; // @unused Element at index 4. See `g_MainMenu_VisibleEntryFlags`.
+#endif
 
     s32 i;
 

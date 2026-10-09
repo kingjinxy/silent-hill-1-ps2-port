@@ -53,6 +53,18 @@ void Event_Update(bool disableButtonEvents) // 0x800373CC
 
     g_MapEventLastUsedItem = InvItemId_Unequipped;
 
+#ifdef SH_PORT
+    {
+        // Port: the Demo menu's cutscene starts here, without its trigger (src/port/demo_menu.c).
+        extern int Port_DemoEventStart(void);
+
+        if (Port_DemoEventStart())
+        {
+            return;
+        }
+    }
+#endif
+
     mapEvent = &g_MapOverlayHdr.mapEvents[-1];
 
     while (true)

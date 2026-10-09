@@ -10266,3 +10266,169 @@ The fix: the IOP module now leaves at least two SPU2 sample periods (~42 µs) be
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "Planning Doc.md" <<'E' - Fixes from testing on hardware (2026-10-08):   - The IOP module loader aligns d
 
+## Claude
+
+I've put a fix for the stuck note on the PS2 (build 20:22:49). The sound module started; I haven't confirmed that the stuck note is gone. Please play up to the café cutscene again and listen for the instrument.
+
+The likely cause: the PS1 driver turns a note off and then starts the next one with some real time in between. The port sends register writes to the IOP in batches, so the key off and the next key on reached the SPU2 microseconds apart, and it missed the key off. The sound module now leaves a little over two SPU2 sample periods (~42 µs) before every key on or key off.
+
+The spacing is a busy-wait of 400 sound-chip register reads, which I estimate at "several hundred ns" each (so roughly 40–100 µs+); I haven't measured it. If the note still sticks, the wait is too short, and I'll time it properly instead.
+
+Cybil's spoken lines in the café will still be silent until XA streaming is done.
+
+This fix, the two earlier hardware fixes (sample alignment, unmute bit), and the PCSX2 `--audio` option are committed as 3d6e4b8a5. The Planning Doc and conversation archive are updated.
+
+## Claude
+
+The game has loaded map2_s00. If this is the café, listen for the stuck instrument. It could also be the attract demo, since that starts on the same town map.
+
+## User
+
+Ok, I want to do something else to make testing easier: an option to play back cutscenes from the main menu. Under New Game but above Option, there should be a Demo option. When choosing that, there should be a scrolling list of all the cutscenes in the game, sorted by their internal name in alphabetical order. This list should NOT include FMV cutscenes for now, only in-game cutscenes. Prompt me for any questions.
+
+## Claude
+
+Before I ask anything, let me look at how the title menu and in-game cutscenes are structured.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls src/screens; grep -rln "NEW GAME\|New game\|\"OPTION\|LOAD\b" src/screens | head; grep -rn "\"NEW\|NEW GAME\|
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "TitleScreen\|Title_\|g_Title\|title" src/bodyprog --include=*.c | head; grep -rn "TIM_TITLE\|_TITLE" 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; wc -l src/bodyprog/events/title.c; grep -n "^[a-zA-Z].*(.*)\s*//\|^void\|^static\|case\|NEW\|Load\|Option\|selec
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls src/maps | head; ls src/maps/map0_s01 2>/dev/null | head; grep -rn "Cutscene" src/maps/map0_s01/*.c 2>/dev/nu
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rhoE "/\* *[0-9]+ *\*/ *[A-Za-z_0-9]+" src/maps/*/*_header.c | awk '{print $NF}' | sort | uniq | wc -l; gr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for f in src/maps/*/*_header.c; do m=$(basename $(dirname $f)); n=$(grep -cE "/\* *[0-9]+ *\*/ " $f); u=$(grep -
+
+## Claude
+
+I'm still surveying how cutscenes are defined in each map. The questions for you come after that.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls src/maps/map2_s00 src/maps/map4_s02 | head -20; grep -rn "mapEventFuncs\|EventFuncs\|g_MapEvent" src/maps/map
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' import re,glob,os tot=0;named=0;cs=[] for f in sorted(glob.glob('src/maps/*/*_header.c')):     s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' import re,glob,os srcs={} for f in glob.glob('src/maps/**/*.c',recursive=True)+glob.glob('src/ma
+
+- tool `AskUserQuestion`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "typedef struct _MapEventData\|s_MapEventData\b" include | head -3; f=$(grep -rln "} s_MapEventData;" i
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_MapEventData *=" src --include=*.c | head; grep -rn "SysState_EventCallback" src/bodyprog --include=
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 60,215p src/bodyprog/events/events_main.c; sed -n 825,860p src/bodyprog/events/game_sys_states.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 243,400p src/bodyprog/events/title.c; grep -rn "void GameBoot_MapLoad" -A30 src/bodyprog | head -45
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls asm/USA/maps/map4_s01 2>/dev/null | head; ls asm/USA | head; ls configs/USA | grep -i map4_s01; grep -rln "fu
+
+## Claude
+
+I'm writing a script that finds every cutscene event in the map code.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls configs/USA | head -30; ls asm/USA/maps/map4_s01/nonmatchings | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls configs/USA/maps | head; ls asm/USA/maps/map4_s01/nonmatchings/map4_s01_2 | head; grep -c "" configs/USA/maps
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "mapEvent\|MapEvents\|EventData" src/maps/map0_s01/map0_s01_header.c src/maps/map0_s01/map0_s01_events_d
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls src/maps/*/*events_data.c | wc -l; ls -d src/maps/map*_s* | wc -l; grep -L "sysState" src/maps/*/*events_data
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/cutscene_list.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/cutscene_list.py --report 2>&1 | cut -c1-200
+
+## Claude
+
+I'm working out names for the unnamed cutscenes from the dialogue they show.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "Was I dreaming" --include=*.c --include=*.h --include=*.s --include=*.txt --include=*.yaml --include=
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls tools | head -40; grep -rli "mapmsg\|map_msg\|message" tools/*.py tools/*/*.py 2>/dev/null | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "message\|Message" tools/maptool.py | head -20; python3 tools/maptool.py -h 2>&1 | head -20
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "Msg\|Message\|String" src/maps/map4_s01/map4_s01_header.c | head; grep -rn "Where am I" asm/USA/maps/ma
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "MAP_MESSAGES" src/maps/map4_s01/*.c include/maps 2>/dev/null | head -5; grep -rln "MAP_MESSAGES" asm/U
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' 2>&1 | cut -c1-260 import sys,re,os,glob sys.path.insert(0,'tools/port'); import cutscene_list a
+
+## Claude
+
+I'm reading the main menu code to add the Demo entry.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,242p src/bodyprog/events/title.c; sed -n 403,460p src/bodyprog/events/title.c; grep -rn "MainMenuEntry_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "MainMenuEntry_\|MainMenuState_" src include --include=*.[ch] | grep -v "events/title.c" ; sed -n 70,10
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Savegame_EventFlag[A-Za-z]*(" include/bodyprog/*.h include/*.h | head; grep -n "^void Event_Update\|^v
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "g_GameStateUpdateFuncs\[" src/bodyprog/sys/game_main.c; sed -n 13,30p src/bodyprog/events/events_main.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 30,60p src/bodyprog/events/events_main.c; sed -n 190,205p src/bodyprog/sys/game_main.c; grep -n "required
+
+## Claude
+
+Now I'll write the Demo menu module.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Gfx_StringPositionSet\|Gfx_StringColorSet\|StringColorId_" include/bodyprog/text/text_draw.h | head; g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "EventFlag_None *=" include | head -2; grep -n "typedef struct _EventData" -A25 include/bodyprog/*.h in
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "} s_EventData;" include | head -2; f=$(grep -rln "} s_EventData;" include | head -1); n=$(grep -n "} s
+
+- tool `Bash`: mkdir -p /home/alex/Documents/silent-hill-1-ps2-port/include/port; cd /home/alex/Documents/silent-hill-1-ps2-port; cat > include/port/demo_menu.h <<'E' #ifndef 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_MapEventSysState;\|g_MapEventParam;\|Sfx_MenuMove\b.*=\|g_SysWork;" include src/bodyprog/events/even
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "GameState_MainMenu)" src --include=*.c | head; grep -n "include" src/bodyprog/events/events_main.c | h
+
+## Claude
+
+I'm hooking the Demo menu into the game. Next I'm checking how the game's soft reset returns to the title screen, so the Demo menu can come back the same way.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,120p src/bodyprog/sys/warm_boot.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 120,160p src/bodyprog/sys/warm_boot.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' import re def ed(p,a,b,cnt=1):     s=open(p).read()     assert a in s,(p,a[:60]); s=s.replace(a,
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 150,171p tools/port/port_link.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='tools/port/port_link.py'; s=open(p).read() a='''    for src in sorted(glob.glob("src/port/*.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|#include "bodyprog/bodyprog.h"|#include "bodyprog/bodyprog.h"\n#include "bodyprog/events/bodyprog_data
+
+## Claude
+
+It builds. I'm checking that the PS1 build still matches (in the background) while I test the menu in PCSX2.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; (make -j8 build < /dev/null > /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; head -30 src/port/ps2/input_ps2.c; grep -n "host:\|script" src/port/ps2/input_ps2.c | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "Cafe\|Opening" build/port/demo_cutscenes.c; grep -c '{ "' build/port/demo_cutscenes.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/frame_*.ppm; cat > build/port/input.txt <<'E' 20 dump 21 down 22 dump 23 cross 25 dump 26 up 26
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/b2m3ftfqa.output; cd /home/alex/Documents/silent-hil
+
+## Claude
+
+The PS1 build still matches all 50 checksums. I'm converting the frame dumps so I can look at the menu.
+
+## User
+
+[Request interrupted by user]
+
+## User
+
+It seems like that demo menu works just fine in my testing. How about we deploy to real hardware?
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/input.txt build/port/frame_*.ppm; timeout 20 python3 tools/port/ps2_ctl.py deploy
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/archive_conversation.py /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-po
+

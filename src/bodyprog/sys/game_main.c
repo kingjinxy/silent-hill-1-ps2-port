@@ -199,6 +199,12 @@ void MainLoop(void) // 0x80032EE0
         PROF_BEGIN("MainLoop: game state update")
         g_GameStateUpdateFuncs[g_GameWork.gameState]();
         PROF_END("MainLoop: game state update")
+#ifdef SH_PORT
+        {
+            extern void Port_DemoTick(void);
+            Port_DemoTick(); // Demo menu cutscene: back to the list once it's over (src/port/demo_menu.c)
+        }
+#endif
 
         Demo_Update();
         Demo_GameRandSeedSet();

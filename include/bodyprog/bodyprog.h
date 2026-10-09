@@ -77,8 +77,14 @@ typedef enum _MainMenuEntry
     MainMenuEntry_Load     = 0,
     MainMenuEntry_Continue = 1,
     MainMenuEntry_Start    = 2,
+#ifdef SH_PORT
+    // Port: the Demo entry (src/port/demo_menu.c) takes the unused Extra slot, between New Game and Option.
+    MainMenuEntry_Demo     = 3,
+    MainMenuEntry_Option   = 4,
+#else
     MainMenuEntry_Option   = 3,
     MainMenuEntry_Extra    = 4, /** @unused The extra options menu may have been accessible via the main menu. */
+#endif
 
     MainMenuEntry_Count    = 5
 } e_MainMenuEntry;
@@ -89,7 +95,10 @@ typedef enum _MainMenuState
     MainMenuState_Main               = 1,
     MainMenuState_LoadGame           = 2,
     MainMenuState_DifficultySelector = 3,
-    MainMenuState_NewGameStart       = 4
+    MainMenuState_NewGameStart       = 4,
+#ifdef SH_PORT
+    MainMenuState_DemoList           = 5, // Port: src/port/demo_menu.c
+#endif
 } e_MainMenuState;
 
 /** Used by `func_8003F654` to cast a specific field to the desired type. */

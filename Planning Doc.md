@@ -430,3 +430,9 @@ Ideas to try, roughly by expected payoff:
   - The control register (ATTR) needs bit 14 (unmute), as the PS1's SPUCNT does. PCSX2 ignores it. Both cores now use 0xC000.
   - Key on and key off writes are spaced by more than two SPU2 sample periods. Batched writes let the SPU2 miss a key off, which left an instrument note stuck in the café cutscene's music.
 - Test tool: `pcsx2_run.py --audio out.wav` unmutes PCSX2 and records the sound output with pw-record.
+
+## Demo menu (2026-10-08)
+- The main menu has a DEMO entry between START and OPTION (title.c, under SH_PORT). It takes the unused Extra slot.
+- DEMO opens a scrolling list of in-game cutscenes, without FMVs, sorted by function name ([src/port/demo_menu.c](src/port/demo_menu.c)). The list is generated at link time by [tools/port/cutscene_list.py](tools/port/cutscene_list.py): it takes map events with SysState_EventCallback whose function uses cutscene machinery (CutsceneBorder, the cutscene timer or flags, DMS). There are 64 entries.
+- Picking one starts a new game on that map with Harry at the trigger point. It sets the event's required flag, clears its completion flag, and starts the event directly from Event_Update. After one second of player control, a warm boot returns to the list.
+- To do: give the unnamed func_ cutscenes proper names in the decomp.
