@@ -449,3 +449,10 @@ Ideas to try, roughly by expected payoff:
   - The ADMA input's volume register is BVOL (0x76C/0x76E), not AVOL. libspu writes the CD volume to both pairs.
   - The mixer refills the half that IOP DMA channel 4 (D4_MADR) isn't reading, once per pass. The interrupt can fire more often than once per half.
   - While a stream runs, the IOP logs the registers, peak level and refill count about every 1.27 s ("XA diag").
+- XA static fixed (2026-10-09): the SPU2's ADMA input takes blocks of 256 left samples (512 bytes) followed by 256 right samples, not 128 + 128. With the wrong layout, left/right pieces played out of order.
+- XA test tools ([tools/port/xa_test](tools/port/xa_test)):
+  - `run.sh INDEX FILE CHAN` builds sh1spu's xa.c natively, decodes a voice line from HILL., and compares it sample for sample with an independent Python reference decoder (xa_ref.py, from psx-spx). They are currently bit-exact.
+  - `track.py` / `compare_recording.py` line a PCSX2 recording up against the reference.
+  - `SH1_XA_SOLO=1` mutes everything but the XA input.
+  - `pcsx2_run.py --audio` turns PCSX2's time-stretching off; with it on, the recording drops and repeats 10–20 ms pieces.
+  - Recordings still lose 128-frame chunks steadily, probably the host audio output running behind emulation.

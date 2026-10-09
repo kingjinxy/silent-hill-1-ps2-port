@@ -10818,3 +10818,105 @@ I'm re-arming the watch first. Then two things: the diagnostics explain the sile
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/input.txt; timeout 20 python3 tools/port/ps2_ctl.py deploy; S=/tmp/claude-1000/-home-alex-Docum
 
+## Claude
+
+I found why the dialogue was silent: the voices were going in through the wrong volume register. I haven't confirmed the fix on the console yet, because the PS2 isn't answering, so the deploy didn't reach it.
+
+**What the PCSX2 register logging showed:**
+- The voice lines decode to real audio, peaking around 20,000 of 32,767.
+- Core 0's input stream is running (ADMAS = 1), and its mix bits are on.
+- I had set the CD volume in AVOL, but the input stream's volume is BVOL, which was still 0. So the voices were mixed in at zero volume.
+- The CD volume now goes to both register pairs. In PCSX2 the café recording got about twice as loud while the dialogue plays, which says the voices are in the mix now. A 34-second clip is at `build/port/pcsx2_cafe_xa.wav` if you want to hear it.
+
+**Stream speed:** the stream plays at the right speed. The refill rate looked high only because my "once a second" log line actually runs about every 1.27 seconds. Corrected for that, PCSX2 decodes 18.9 sectors a second, which is right for 37.8 kHz stereo. The real PS2 does show about 60 interrupts a second, against 47 expected. So the mixer now refills only the half the DMA isn't reading, which keeps the stream locked to real playback whatever the interrupt rate.
+
+**The deploy didn't reach the console.** The PS2 isn't answering at the moment (switched off, back in Neutrino, or crashed with interrupts off). Once Neutrino boots it again, it will load this build (committed as d2b20e2d1). Then try the café cutscene from the Demo list.
+
+**Crash while you were trying cutscenes:** on map4_s01 the game crashed writing to address 0x1E0, a near-null pointer write. That build symbolises it to `WorldGfx_CybilMeshSwap` calling `func_80045468`, but those addresses came from an older build than the one now on disk, so the names need checking. On a PS1, writes to that low memory land harmlessly in the kernel area; on the PS2 we map that page read-only. Which cutscene were you starting on map4_s01? I'll chase it once the voices are confirmed.
+
+- tool `Monitor`: PS2: crashes, sound errors, restarts
+
+## Claude
+
+The PS2 has been quiet for the last 30 minutes, so it's probably off or back in Neutrino. I've restarted the log watch. When the console boots again it will load the build with the voice fix (d2b20e2d1), and I'll see it start.
+
+## Claude
+
+Another 30 minutes with nothing from the PS2, so I've stopped watching for now. When you're back on the console, tell me and I'll restart the watch. The build waiting on it has the voice fix; try the café cutscene from the Demo list.
+
+## User
+
+<ide_opened_file>The user opened the file /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/sound-port-plan.md in the IDE. This may or may not be related to the current task.</ide_opened_file>
+
+Let's try to get it right in PCSX2 first. The voice track plays, but the audio output is rather glitchy. It sounds somewhat mechanical with lots of static. Can you test against audio files extracted from the disc?
+
+## Claude
+
+First I'll check whether ffmpeg is available to serve as an independent reference decoder.
+
+- tool `Bash`: which ffmpeg sox; ffmpeg -hide_banner -decoders 2>/dev/null | grep -i "xa\b\|adpcm_xa"
+
+## Claude
+
+No ffmpeg here, so I'll write an independent reference decoder in Python, straight from the psx-spx XA-ADPCM description. First, the spec text:
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; sed 's/<[^>]*>//g' $S/spx.htm > $S/spx.txt; grep
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; sed -n 5041,5200p $S/spx.txt
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; n=$(grep -n "^CDROM XA Audio ADPCM Compression" 
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; grep -n "CDROM XA Audio ADPCM Compression" $S/sp
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; sed -n 7950,8150p $S/spx.txt
+
+- tool `Bash`: mkdir -p /home/alex/Documents/silent-hill-1-ps2-port/tools/port/xa_test; cd /home/alex/Documents/silent-hill-1-ps2-port; cat > tools/port/xa_test/xa_ref.py <<'P
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mkdir -p tools/port/xa_test/host; cat > tools/port/xa_test/host/irx_imports.h <<'E' /* Host stand-ins for the IO
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|                    s += int(p / 64)  # psx-spx: "/64"|                    s += p >> 6  # psx-spx writ
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "PORT_CFLAGS *=" -A6 tools/port/port_link.py | head -10
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:40]); s=s.replace(a,b,1); open(p,'w').w
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 -c "import numpy; print(numpy.__version__)" 2>&1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; pip install -q numpy 2>&1 | tail -1; python3 -c "import numpy; print(numpy.__version_
+
+## Claude
+
+I'm installing numpy into the project venv so I can line up the PCSX2 recording against the disc reference and measure the errors.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat > tools/port/xa_test/compare_recording.py <<'E' #!/usr/bin/env python3 """Finds the reference voice line (xa
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "128\|512" src/port/iop/sh1spu/xa.c | grep -v "GAUSS\|0x1FF\|PS1_RAW\|data\[g" ; grep -n "128\|512" tool
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/iop/sh1spu/xa.c'; s=open(p).read() for a,b in [('''#define HALF_FRAMES 1024 /* frame
+
+## Claude
+
+Still not matching. I'll re-run the 20 ms offset tracking on the new recording to see whether the jumps have changed.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+- tool `Bash`: grep -n -i "sync\|stretch\|SPU2" ~/.config/PCSX2/inis/PCSX2.ini | head -20
+
+## Claude
+
+PCSX2 is set to `SyncMode = TimeStretch`, and its 20 ms seek window and 10 ms overlap match the size of the jumps. I'm making `--audio` runs turn time-stretching off, then re-measuring.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "def patch_ini" -A15 tools/port/pcsx2_run.py | head -20
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='tools/port/pcsx2_run.py'; s=open(p).read() a='''        OVERRIDES["OutputMuted"] = "false"'''
+
+- tool `Bash`: sed -n 287,320p ~/.config/PCSX2/inis/PCSX2.ini; ls ~/.config/PCSX2/logs 2>/dev/null | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='tools/port/pcsx2_run.py'; s=open(p).read() s=s.replace('''    ap.add_argument("--audio", meta
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/input.txt; source .venv/bin/activate; unset SH1_XA_SOLO; export SH1_FPS=60 SH1_NO_RECOMP=1; (py
+

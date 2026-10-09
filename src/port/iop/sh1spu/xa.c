@@ -6,7 +6,8 @@
  * - A reader thread reads the original raw sectors from HILL. on the DVD (2336 bytes each: an
  *   8-byte subheader, then 2304 bytes of sound groups) and keeps the sectors of the chosen file and
  *   channel that carry audio. It stops at the end-of-file flag or when the game stops the stream.
- * - SPU2 core 0's sound data input (ADMA) plays a looping buffer of two halves. At the end of each
+ * - SPU2 core 0's sound data input (ADMA) plays a looping buffer of two halves (blocks of 256 left
+ *   samples, then 256 right ones). At the end of each
  *   half, a mixer thread refills it: it decodes XA-ADPCM (4-bit; mono or stereo; 37.8 or 18.9 kHz)
  *   and resamples to 48 kHz with the PS1 SPU's 4-point Gaussian interpolation. With no stream, it
  *   writes silence.
@@ -21,7 +22,8 @@
 #define BATCH       16   /* PS1 sectors per disc read */
 #define READ_SECS   ((BATCH * PS1_RAW + 2047) / 2048 + 1)
 #define FIFO_N      12   /* audio sectors waiting (about 0.6 s of stereo 37.8 kHz) */
-#define HALF_FRAMES 1024 /* frames per ADMA half (8 blocks of 128; about 21 ms) */
+#define HALF_FRAMES 1024 /* frames per ADMA half (4 blocks of 256; about 21 ms) */
+#define BLOCK       256  /* input data blocks: 256 left samples (512 bytes), then 256 right ones */
 #define DEC_MAX     4032 /* frames from one sector (mono) */
 
 typedef struct
@@ -149,7 +151,7 @@ static void reset_decoder(void)
     s_OldL = s_OlderL = s_OldR = s_OlderR = 0;
 }
 
-/** Fills one ADMA half: blocks of 128 left samples, then 128 right ones. */
+/** Fills one ADMA half: blocks of 256 left samples, then 256 right ones. */
 static void fill(u8* half)
 {
     int f;
@@ -160,7 +162,7 @@ static void fill(u8* half)
     }
     for (f = 0; f < HALF_FRAMES; f++)
     {
-        s16* l = (s16*)(half + (f >> 7) * 512) + (f & 127);
+        s16* l = (s16*)(half + (f / BLOCK) * BLOCK * 4) + (f % BLOCK);
         int  n, i, outL, outR;
         /* Frames n-3..n of s_Dec (n = 3 + whole part of the position) are the four taps. */
         while ((n = 3 + (int)(s_Pos >> 16)) >= s_DecCount)
@@ -174,7 +176,7 @@ static void fill(u8* half)
         }
         if (n >= s_DecCount)
         {
-            l[0] = l[128] = 0; /* nothing to play */
+            l[0] = l[BLOCK] = 0; /* nothing to play */
             continue;
         }
         i    = (s_Pos >> 8) & 0xFF;
@@ -191,7 +193,7 @@ static void fill(u8* half)
             s_Peak = -outL;
         }
         l[0]   = (s16)(outL > 32767 ? 32767 : outL < -32768 ? -32768 : outL);
-        l[128] = (s16)(outR > 32767 ? 32767 : outR < -32768 ? -32768 : outR);
+        l[BLOCK] = (s16)(outR > 32767 ? 32767 : outR < -32768 ? -32768 : outR);
         s_Pos += s_Step;
     }
 }

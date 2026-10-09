@@ -524,7 +524,11 @@ void SpuSetCommonAttr(SpuCommonAttr* attr)
     }
     if (m & (SPU_COMMON_CDMIX | SPU_COMMON_CDREV))
     {
+#ifdef SH_PORT_XA_SOLO
+        reg(R_MMIX, 0x0C0); /* test: the XA input only (SH1_XA_SOLO) */
+#else
         reg(R_MMIX, 0xF00 | (s_Common.cd.mix ? 0x0C0 : 0) | (s_Common.cd.mix && s_Common.cd.reverb ? 0x030 : 0));
+#endif
     }
 }
 

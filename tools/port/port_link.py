@@ -169,7 +169,9 @@ def main():
     for src in sorted(glob.glob("src/port/*.c")) + [os.path.join(OUT, "demo_cutscenes.c")]:
         obj = os.path.join(OUT, "port", os.path.basename(src) + ".o")
         os.makedirs(os.path.dirname(obj), exist_ok=True)
-        run([CC, "-c", *PORT_CFLAGS, *prof, "-DSH_PORT_GPU=%d" % gpu, src, "-o", obj])
+        # XA test (src/port/libspu_port.c): only the XA input is heard, the game's voices are muted: SH1_XA_SOLO=1.
+        solo = ["-DSH_PORT_XA_SOLO"] if os.environ.get("SH1_XA_SOLO") else []
+        run([CC, "-c", *PORT_CFLAGS, *prof, *solo, "-DSH_PORT_GPU=%d" % gpu, src, "-o", obj])
         port_objs.append(obj)
     # PS2-side HAL code (src/port/ps2/): compiled against ps2sdk's headers, not the game's.
     for src in sorted(glob.glob("src/port/ps2/*.c")):

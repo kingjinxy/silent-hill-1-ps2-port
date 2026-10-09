@@ -75,6 +75,8 @@ def main():
     ap.add_argument("--progress-seconds", type=float, default=60)
     ap.add_argument("--heartbeat", action="store_true", help="keep the port's heartbeat lines in the output")
     ap.add_argument("--realtime", action="store_true", help="run at normal speed (default: unlimited)")
+    ap.add_argument("--spu2-wav", action="store_true", help="PCSX2's SPU2 debug WAV dump of the emulated output "
+                    "(Log_WAVE_Output; written in PCSX2's logs folder), independent of the host's audio output")
     ap.add_argument("--audio", metavar="WAV", help="unmute PCSX2 and record what the default sound output plays "
                     "(PipeWire, pw-record) to WAV; implies --realtime")
     args = ap.parse_args()
@@ -87,8 +89,12 @@ def main():
     if args.bios:
         OVERRIDES["BIOS"] = args.bios
     recorder = None
+    if args.spu2_wav:
+        OVERRIDES["Global_Enable"] = "true"
+        OVERRIDES["Log_WAVE_Output"] = "true"
     if args.audio:
         OVERRIDES["OutputMuted"] = "false"
+        OVERRIDES["SyncMode"] = "Disabled"  # no time-stretching: it drops/repeats 10-20 ms pieces
         args.realtime = True
         recorder = subprocess.Popen(["pw-record", "-P", "{ stream.capture.sink=true }", args.audio],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
