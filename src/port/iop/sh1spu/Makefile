@@ -1,6 +1,6 @@
 # sh1spu.irx (see main.c). Built by tools/port/port_link.py: make -C src/port/iop/sh1spu
 IOP_BIN  = sh1spu.irx
-IOP_OBJS = main.o imports.o
+IOP_OBJS = main.o xa.o imports.o
 IOP_OBJS_DIR = ../../../../build/port/iop/sh1spu/
 IOP_BIN := $(IOP_OBJS_DIR)$(IOP_BIN)
 

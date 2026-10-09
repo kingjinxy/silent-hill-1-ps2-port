@@ -436,3 +436,12 @@ Ideas to try, roughly by expected payoff:
 - DEMO opens a scrolling list of in-game cutscenes, without FMVs, sorted by function name ([src/port/demo_menu.c](src/port/demo_menu.c)). The list is generated at link time by [tools/port/cutscene_list.py](tools/port/cutscene_list.py): it takes map events with SysState_EventCallback whose function uses cutscene machinery (CutsceneBorder, the cutscene timer or flags, DMS). There are 64 entries.
 - Picking one starts a new game on that map with Harry at the trigger point. It sets the event's required flag, clears its completion flag, and starts the event directly from Event_Update. After one second of player control, a warm boot returns to the list.
 - To do: give the unnamed func_ cutscenes proper names in the decomp.
+
+## Sound, step 2: XA voice lines (2026-10-08)
+- The game's XA command sequence reaches the port's libcd ([libcd_ps2.c](src/port/ps2/libcd_ps2.c)): CdlSetmode with real-time mode, CdlSetfilter, CdlSeekL, then CdlReadN. libcd turns it into an OP_XA command for sh1spu.irx. CdlPause and CdlStop send OP_XASTOP. The XA files sit inside HILL. (g_FileXaLoc starts at its first sector).
+- [src/port/iop/sh1spu/xa.c](src/port/iop/sh1spu/xa.c):
+  - A reader thread reads raw HILL. sectors through the IOP's cdvdman and keeps the audio sectors of the chosen file and channel, in a FIFO of 12 sectors. It stops at the end-of-file flag.
+  - A mixer thread, woken by each ADMA half interrupt, decodes 4-bit XA-ADPCM (mono or stereo, 37.8 or 18.9 kHz). It resamples to 48 kHz with the PS1 SPU's Gaussian table ([gauss_table.h](src/port/iop/sh1spu/gauss_table.h), from psx-spx) into core 0's ADMA loop buffer: two halves of 1024 frames.
+  - Sample uploads now use DMA channel 1, because channel 0 belongs to core 0's ADMA. ATTR writes keep the ADMA mode bits.
+- libspu: the CD volume goes to core 0's AVOL. CD mix and CD reverb go to core 0's MMIX (0x0C0 dry, 0x030 wet).
+- The IOP logs "sh1spu: XA file F channel C" and "XA end of file".

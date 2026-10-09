@@ -10432,3 +10432,211 @@ It seems like that demo menu works just fine in my testing. How about we deploy 
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/archive_conversation.py /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-po
 
+## Claude
+
+The Demo menu build (20:34:34) is now running on the PS2, with sound. DEMO sits between START and OPTION on the main menu.
+
+On the console:
+- **In the list:** up/down scrolls, Cross starts a cutscene, Circle goes back.
+- **Starting a cutscene:** a new game begins on that cutscene's map and the cutscene plays.
+- **Returning:** after you've had control for a second, the game soft-resets to the main menu and reopens the list.
+- **Names:** underscores show as dashes (`MapEvent-CafeCutscene`), because the game's font draws `_` as a space.
+
+**Things to watch for:**
+- **Early return:** this cutscene-player is only tested in your PCSX2 run. Some cutscenes give you control mid-scene, so the "one second of control means it's over" check may return to the list too early.
+- **Missing progress:** each cutscene starts from a fresh game, with only its own trigger flag set. Some may misbehave because they expect items, characters or flags from earlier play.
+- **Unexplained reboot:** in my own scripted PCSX2 run, the game rebooted on its own after about a minute and a half. My scripted button presses also arrived in bursts, so I couldn't tell whether that was the menu or my test setup. I'm watching the console log for crashes and restarts.
+
+**List contents:** 64 cutscenes. For now the unnamed ones show as map plus raw function name, for example `map4_s01 func_800D2408`. Naming them properly in the decomp is the next step, as you chose. A few entries are borderline: an item use, a drawer, a map pickup. Detection by behaviour catches those too.
+
+The PS1 build still matches all 50 checksums. The menu is committed as d6d08e14b, with the Planning Doc and conversation archive updated.
+
+## Claude
+
+The game has loaded map2_s00. If you started a town cutscene from the Demo list, it's loading now. If not, it's probably the attract demo, which starts on the same map.
+
+## Claude
+
+The game has loaded map5_s02, so you're testing a Demo-list entry there. That map has the Kaufmann bar fight and a drawer event. No errors so far.
+
+## Claude
+
+The game has loaded map0_s01, the café map. No crashes or errors so far.
+
+- tool `Monitor`: PS2: sound errors, crashes, map loads
+
+## Claude
+
+The log watch had hit its 30-minute limit, so I restarted it. I'm still watching for crashes, sound errors and map loads while you try cutscenes from the Demo list.
+
+## Claude
+
+The game has loaded map6_s04. That map holds Cybil's death and the scenes around it. No errors so far.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; NM=~/ps2dev/ee/bin/mips64r5900el-ps2-elf-nm; for a in 0041AD44 00176418; do $NM -n build/port/sh1.elf | awk -v A
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ~/ps2dev/ee/bin/mips64r5900el-ps2-elf-addr2line -f -e build/port/sh1.elf 0x0041AD44 0x00176418 0x00176414
+
+## Claude
+
+The crash is in `Dms_CharacterTransformGet`, which looks up a character by name in the cutscene's camera/animation (DMS) data. Its `strncmp` read a garbage pointer (0x3527030F). Looking at the code:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Dms_CharacterTransformGet" src --include=*.c | head -3; f=$(grep -rln "^[a-z].*Dms_CharacterTransformG
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 30 python3 tools/port/ps2_ctl.py md g_MapEventParam 4; timeout 30 python3 tools/port/ps2_ctl.py md g_Map
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n '/g_MapEventFuncs/,/};/p' src/maps/map6_s04/map6_s04_header.c | head -20; grep -n "\[4\]" -A9 src/maps/ma
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -rln "^void MapEvent_CutsceneCybilDeath" src/maps/map6_s04); n=$(grep -n "^void MapEvent_CutsceneCybilD
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='tools/port/cutscene_list.py'; s=open(p).read() s=s.replace('''            if hit:            
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk '/\/\/ \[(8|9|10)\]/,/^    },/' src/maps/map6_s04/map6_s04_events_data.c; f=$(grep -rln "^void func_800E2950
+
+## Claude
+
+I'm widening the check, since the Cybil chain also passes through an FMV and through flags set inside the event code itself.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='tools/port/cutscene_list.py'; s=open(p).read() a='''    done = {(c["map"], c["complete"]) for
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='tools/port/cutscene_list.py'; s=open(p).read() a='''    for mp in MAPS:         done |= {(mp,
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "EventFlag_446\b" src/maps/map6_s04 | head; grep -rn "EventFlag_445\b" src/maps/map6_s04/*events_data.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='tools/port/cutscene_list.py'; s=open(p).read() a='''    found = [c for c in found if (c["map"
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/cutscene_list.py --report | grep "Cafe\|CybilDeath"; f=$(grep -rln "^void MapEvent_CutsceneCy
+
+## Claude
+
+Cybil's death is now reached only through its first part, and the café cutscene stays in the list. Rebuilding and deploying; this restart also gets the PS2 out of the crashed state.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; (python3 tools/port/port_link.py && bash tools/por
+
+## Claude
+
+That crash was a gap in the Demo menu, not a port bug. `MapEvent_CutsceneCybilDeath` is the second half of a longer cutscene: its timer starts at 96 seconds. Started on its own, it read camera and animation (DMS) data that the first half normally loads. On a PS1 that garbage read would just give nonsense, but on the PS2 it faults.
+
+**Fix:** the list now shows only the first part of each chained cutscene. Picking the first part plays the rest automatically, as in the real game. The list is down from 64 to 56 entries. A part counts as a continuation if either:
+- it needs a flag that an earlier part (or an FMV that part triggers) sets when it ends, or
+- its cutscene timer starts past zero, which catches chains whose flags are set by code I can't read yet.
+
+For the Cybil scene, pick `map6_s04 func_800E2950`.
+
+I sent the new build to the PS2 (commit 39807a2cb). The restart was acknowledged but I haven't seen it boot yet; my log watch will show it.
+
+## Claude
+
+The new build (20:44:09) is running on the PS2 and recovered cleanly from the crashed state; sound started too. The Demo list now has 56 entries. For Cybil's death, pick `map6_s04 func_800E2950`.
+
+## Claude
+
+The game has loaded map2_s00, the town map. No errors so far.
+
+## User
+
+Alright, let's move on to playing the voice sounds during cutscenes. What are our options?
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,60p tools/port/make_iso.sh | grep -v "^\s*$" | head -50; ls rom/USA | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "XA\|form2\|2352\|2336\|PREGAP\|g_FileXaLoc" src/port/ps2/libcd_ps2.c src/main/fileinfo.c | head -20; gr
+
+## Claude
+
+The voice lines are already on our disc image. `HILL.` keeps the original raw 2336-byte PS1 sectors, including the XA audio sectors and their subheaders (file/channel numbers and the audio flag). So the original voice data needs no extraction or conversion. What's missing is everything the PS1 hardware did with it:
+- the CD drive filtered the XA sectors by file and channel,
+- decoded the XA-ADPCM (stereo or mono, 37.8 or 18.9 kHz),
+- and fed the result into the SPU's "CD input", with its own volume (the game already sets it through `SpuSetCommonAttr`).
+
+The PS2 in native mode has no hardware path for this.
+
+The game times its cutscenes from frame counts, not from the audio, so playback only has to start promptly; nothing has to stay in lock-step with it. And while a voice line plays, the PS1 drive was busy streaming it, so the game doesn't read other data at the same time.
+
+**Options**
+
+1. **Decode on the IOP (recommended).** The sound module reads the XA sectors from `HILL.` itself through the IOP's disc driver, using the location the game's `CdlSetfilter`/`CdlSeekL`/`CdlReadN` sequence points at. It keeps only that file/channel's audio sectors, decodes them, resamples to 48 kHz and streams the PCM into core 0's sound-data input. That's the SPU2's equivalent of the PS1 CD input: one core, no core-to-core sync. The EE does nothing but forward the game's CD commands. The EE is already our bottleneck in the town and school, while the IOP is mostly idle; XA decoding is light work even for the IOP.
+2. **Decode on the EE.** The EE's libcd reads the sectors and decodes them, then sends PCM to the IOP. It's slightly simpler to debug because the decoder sits next to the existing disc code. But it costs EE time, which the frame-rate problem can't spare, and adds SIF traffic of about 190 KB/s.
+3. **Convert ahead of time.** Decode the XA files to PCM (or SPU ADPCM) when building the ISO, then just stream those files. That's the least runtime code, but the disc no longer holds the original voice data, which goes against keeping the original assets.
+
+Within option 1, one more choice: how to resample 37.8 kHz to 48 kHz.
+- **Linear interpolation:** simple and cheap.
+- **The PS1's own 4-tap Gaussian interpolation:** closest to how the game originally sounded.
+
+The IOP can afford either.
+
+Which option do you want? And if it's option 1, linear or Gaussian resampling?
+
+## User
+
+Let's go with the IOP option, and use gaussian interpolation
+
+- tool `Bash`: grep -rIl --include=*.c --include=*.cpp --include=*.h --include=*.inc -i "gauss" ~ /usr/include 2>/dev/null | grep -iv "node_modules\|python\|\.venv" | head; ls
+
+## Claude
+
+I'll take the PS1 SPU's Gaussian interpolation table from the psx-spx hardware documentation. Using the real values beats guessing at a curve.
+
+- tool `ToolSearch`: 
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; curl -sL https://raw.githubusercontent.com/psx-
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; curl -sL https://problemkaputt.de/psx-spx.htm -
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; sed -n 3790,3900p spx.htm | sed 's/<[^>]*>//g' 
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; python3 - <<P import re t=open('$S/gauss.txt').r
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; awk '/following values/{f=1} f' $S/gauss.txt | h
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; python3 - <<P import re t=open('$S/gauss.txt').r
+
+## Claude
+
+The table checks out: each group of four entries sums to 0x7F7F–0x7F81, as psx-spx documents. Next I'm looking at how the port's libcd handles the game's XA commands.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "case Cdl\|CdControl\|int CdControl\|CdlSetfilter\|CdlReadN\|CdlSeekL\|CdlPause\|CdlSetmode\|s_Loc\|msf\
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,60p src/port/ps2/libcd_ps2.c; sed -n 236,330p src/port/ps2/libcd_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 25,75p src/main/fileinfo.c; grep -n "gSDXATable\[\|s_XaItem\|typedef struct.*Xa" -A8 include/bodyprog/sou
+
+- tool `Bash`: grep -n "BlockTrans\|TransIntrHandler\|SD_BLOCK\|sceSdTransIntrHandler\|SD_TRANS_MODE_WRITE\b\|SD_PARAM_AVOL\|SD_PARAM_BVOL\|SD_MMIX" ~/ps2dev/ps2sdk/common/inc
+
+- tool `Bash`: sed -n 44,60p ~/ps2dev/ps2sdk/common/include/libsd-common.h; grep -n "typedef struct.*\|sceCdRMode\|SCECdSecS2048\|SCECdSpinNom\|int sceCdRead(" ~/ps2dev/ps2sdk
+
+## Claude
+
+I'm writing the IOP side now: the disc reader, the XA-ADPCM decoder, the Gaussian resampler, and the stream into SPU2 core 0.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/src/port/iop/sh1spu; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/iop/sh1spu/xa.c
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/iop/sh1spu/xa.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/iop/sh1spu/main.c'; s=open(p).read() def ed(a,b):     global s; assert a in s,a[:50]
+
+## Claude
+
+The IOP module builds. Now the EE side: libcd forwards the game's XA commands to the module, and libspu sets the CD-input volume and mix.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:50]); s=s.replace(a,b,1); open(p,'w').w
+
+## Claude
+
+Built. Testing in PCSX2 with the audio recorder: I'll pick the café cutscene from the Demo list using scripted button presses.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n '{ "' build/port/demo_cutscenes.c | grep -n "Cafe"; grep -c '{ "' build/port/demo_cutscenes.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; { echo "20 down"; echo "21 cross"; for i in 0 1 2 3 4 5 6 7 8; do echo "$((23+i)).5 up"; done; echo "33 cross"; 
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; python3 - $S/cafe.wav <<'P' import wave,struct,s
+
+## Claude
+
+The recording has sound throughout, but music alone would also look like that. I'm adding log lines for XA start and end to confirm the voices actually play.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/iop/sh1spu/xa.c'; s=open(p).read() s=s.replace('''            if (p[2] & 0x80) /* en
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+

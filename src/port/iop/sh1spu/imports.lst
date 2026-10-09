@@ -14,6 +14,7 @@ sifman_IMPORTS_end
 sysclib_IMPORTS_start
 I_strncmp
 I_strtoul
+I_memset
 I_memcpy
 sysclib_IMPORTS_end
 
@@ -31,4 +32,18 @@ libsd_IMPORTS_start
 I_sceSdInit
 I_sceSdVoiceTrans
 I_sceSdVoiceTransStatus
+I_sceSdBlockTrans
+I_sceSdSetTransIntrHandler
 libsd_IMPORTS_end
+
+thsemap_IMPORTS_start
+I_CreateSema
+I_SignalSema
+I_iSignalSema
+I_WaitSema
+thsemap_IMPORTS_end
+
+cdvdman_IMPORTS_start
+I_sceCdRead
+I_sceCdSync
+cdvdman_IMPORTS_end

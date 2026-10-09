@@ -8,4 +8,6 @@
 #include <stdio.h>
 #include <thbase.h>
 #include <libsd.h>
+#include <thsemap.h>
+#include <cdvdman.h>
 #endif

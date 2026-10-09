@@ -48,6 +48,9 @@ extern unsigned int Port_SpuEnvx(int v);
 #define R_MVOLR       0x762
 #define R_EVOLL       0x764
 #define R_EVOLR       0x766
+#define R_MMIX        0x198
+#define R_AVOLL       0x768 /* sound data input (ADMA, where the XA audio plays) volume */
+#define R_AVOLR       0x76A
 #define R_REVVOL      0x774 /* vIIR, vCOMB1-4, vWALL, vAPF1, vAPF2, vLIN, vRIN */
 
 /* libspu's reverb presets (_spu_rev_param, BODYPROG.BIN 0x800B1478): the PS1's 32 reverb registers
@@ -495,18 +498,29 @@ void SpuSetCommonAttr(SpuCommonAttr* attr)
         }
         reg(R_MVOLR, volume(s_Common.mvol.right, s_Common.mvolmode.right));
     }
-    /* CD input (XA voices) and external input: not played yet. */
+    /* CD input: the XA audio, which plays through core 0's sound data input (sh1spu.irx xa.c). Its
+     * mix bits: 0x0C0 dry, 0x030 into the reverb. The external input isn't used. */
     if (m & SPU_COMMON_CDVOLL)
     {
         s_Common.cd.volume.left = attr->cd.volume.left;
+        reg(R_AVOLL, (u16)attr->cd.volume.left);
     }
     if (m & SPU_COMMON_CDVOLR)
     {
         s_Common.cd.volume.right = attr->cd.volume.right;
+        reg(R_AVOLR, (u16)attr->cd.volume.right);
     }
     if (m & SPU_COMMON_CDMIX)
     {
         s_Common.cd.mix = attr->cd.mix;
+    }
+    if (m & SPU_COMMON_CDREV)
+    {
+        s_Common.cd.reverb = attr->cd.reverb;
+    }
+    if (m & (SPU_COMMON_CDMIX | SPU_COMMON_CDREV))
+    {
+        reg(R_MMIX, 0xF00 | (s_Common.cd.mix ? 0x0C0 : 0) | (s_Common.cd.mix && s_Common.cd.reverb ? 0x030 : 0));
     }
 }
 

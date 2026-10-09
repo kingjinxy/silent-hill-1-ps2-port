@@ -38,6 +38,12 @@ typedef struct
 
 /* PSY-Q libcd constants (include/psyq/libcd.h). */
 #define CdlSetloc    0x02
+#define CdlReadN     0x06
+#define CdlSetfilter 0x0D
+#define CdlSetmode   0x0E
+#define CdlSeekL     0x15
+#define CdlReadS     0x1B
+#define CdlModeRT    0x40 /* real-time (XA audio) reads */
 #define CdlStop      0x08
 #define CdlPause     0x09
 #define CdlInit      0x0A
@@ -55,6 +61,12 @@ static unsigned int s_SilentSectors;
 static unsigned int s_HillPs1Start;
 static int s_Ready;
 static int s_Pos; /* PS1 sector set by CdlSetloc. */
+static int s_Mode; /* CdlSetmode */
+static int s_XaFile, s_XaChan; /* CdlSetfilter */
+static int s_XaPlaying;
+
+extern void Port_XaStart(unsigned int hillLsn, unsigned int index, unsigned int file, unsigned int chan); /* spu_ps2.c */
+extern void Port_XaStop(void);
 
 /* Bounce buffer for DVD reads: the EE side of libcdvd DMAs into it. */
 #define BOUNCE_SECTORS 32
@@ -275,9 +287,35 @@ int CdControl(unsigned char com, unsigned char* param, unsigned char* result)
         s_Req.error    = 1;
         printf("libcd: command %02X stopped a read at PS1 sector %d\n", com, s_Req.pos);
     }
-    if (com == CdlSetloc && param)
+    if ((com == CdlSetloc || com == CdlSeekL) && param)
     {
         s_Pos = CdPosToInt((CdlLOC*)param);
+    }
+    /* XA audio (voice lines): a real-time read with a file/channel filter plays that channel of the
+     * XA data, as the PS1 drive did into the SPU's CD input; sh1spu.irx does it on the IOP (xa.c). */
+    if (com == CdlSetmode && param)
+    {
+        s_Mode = param[0];
+    }
+    if (com == CdlSetfilter && param)
+    {
+        s_XaFile = param[0];
+        s_XaChan = param[1];
+    }
+    if ((com == CdlReadN || com == CdlReadS) && (s_Mode & CdlModeRT))
+    {
+        if ((s_Ready || CdInit()) && s_Pos >= (int)s_HillPs1Start)
+        {
+            Port_XaStart(s_Hill.lsn, (unsigned int)(s_Pos - (int)s_HillPs1Start), (unsigned int)s_XaFile,
+                         (unsigned int)s_XaChan);
+            s_XaPlaying = 1;
+        }
+    }
+    else if ((com == CdlStop || com == CdlPause || com == CdlInit || com == CdlReadN || com == CdlReadS) &&
+             s_XaPlaying)
+    {
+        Port_XaStop();
+        s_XaPlaying = 0;
     }
     return 1; /* Seeks etc. complete immediately. */
 }

@@ -33,6 +33,8 @@ extern void Port_EventDeliver(unsigned long cls, unsigned long spec); /* libapi_
 #define OP_WRITE 2
 #define OP_CLEAR 3
 #define OP_WRAP  4
+#define OP_XA    5
+#define OP_XASTOP 6
 
 #define CHUNK    16384 /* sample upload per command */
 #define MAX_REGS 512
@@ -198,6 +200,38 @@ void Port_SpuClear(unsigned int addr, unsigned int size)
     s_Packet[1] = addr;
     s_Packet[2] = size;
     s_Packet[3] = 0;
+    send(16);
+    EI();
+}
+
+/** Starts XA playback (src/port/iop/sh1spu/xa.c): `file`/`chan` of the raw PS1 sectors from `index`
+ * on in HILL. (at DVD sector `hillLsn`). */
+void Port_XaStart(unsigned int hillLsn, unsigned int index, unsigned int file, unsigned int chan)
+{
+    if (!s_On)
+    {
+        return;
+    }
+    DI();
+    flush_regs();
+    s_Packet[0] = OP_XA;
+    s_Packet[1] = hillLsn;
+    s_Packet[2] = index;
+    s_Packet[3] = file | (chan << 8);
+    send(16);
+    EI();
+}
+
+void Port_XaStop(void)
+{
+    if (!s_On)
+    {
+        return;
+    }
+    DI();
+    flush_regs();
+    s_Packet[0] = OP_XASTOP;
+    s_Packet[1] = s_Packet[2] = s_Packet[3] = 0;
     send(16);
     EI();
 }

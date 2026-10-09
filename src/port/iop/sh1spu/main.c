@@ -25,6 +25,12 @@ IRX_ID("sh1spu", 1, 0);
 #define OP_WRITE 2 /* a: SPU2 byte address, b: size; then the data, padded to 64 bytes */
 #define OP_CLEAR 3 /* a: SPU2 byte address, b: size */
 #define OP_WRAP  4 /* continue at the start of the ring */
+#define OP_XA    5 /* a: DVD sector of HILL., b: PS1 sector in it, c: file | channel << 8 (xa.c) */
+#define OP_XASTOP 6
+
+void xa_init(void);
+void xa_start(u32 hillLsn, u32 index, u32 file, u32 chan);
+void xa_stop(void);
 
 typedef struct
 {
@@ -79,13 +85,14 @@ static void send_status(void)
 
 static void transfer(u8* src, u32 addr, u32 size)
 {
-    int r = sceSdVoiceTrans(0, SD_TRANS_WRITE | SD_TRANS_MODE_DMA, src, (u32*)addr, size);
+    /* Channel 1 (core 1's DMA): channel 0's carries core 0's XA input (xa.c). Sound memory is shared. */
+    int r = sceSdVoiceTrans(1, SD_TRANS_WRITE | SD_TRANS_MODE_DMA, src, (u32*)addr, size);
     if (r < 0)
     {
         printf("sh1spu: upload of %u bytes to 0x%x failed (%d)\n", (unsigned)size, (unsigned)addr, r);
         return;
     }
-    sceSdVoiceTransStatus(0, 1); /* wait */
+    sceSdVoiceTransStatus(1, 1); /* wait */
 }
 
 /** Waits a little over two SPU2 sample periods (2 / 48000 s) before a key on or key off. The PS1
@@ -118,6 +125,11 @@ static u32 run(u32 pos)
                 {
                     key_gap();
                 }
+                if (off == 0x19A) /* ATTR: keep the DMA mode bits of the XA input */
+                {
+                    REG(off) = (u16)((p[4 + i] & ~0x30u) | (REG(off) & 0x30));
+                    continue;
+                }
                 REG(off) = (u16)p[4 + i];
             }
             return 16 + ((n * 4 + 15) & ~15u);
@@ -130,6 +142,12 @@ static u32 run(u32 pos)
             {
                 transfer(s_Zero, p[1] + i, p[2] - i < ZERO_SIZE ? p[2] - i : ZERO_SIZE);
             }
+            return 16;
+        case OP_XA:
+            xa_start(p[1], p[2], p[3] & 0xFF, (p[3] >> 8) & 0xFF);
+            return 16;
+        case OP_XASTOP:
+            xa_stop();
             return 16;
         case OP_WRAP:
             return RING_SIZE - pos;
@@ -179,7 +197,7 @@ static void setup(void)
     REG(0x19A)         = 0xC000;           /* core 0 ATTR */
     REG(0x788 + 0x0)   = 0x3FFF;           /* core 1 MVOLL/R */
     REG(0x788 + 0x2)   = 0x3FFF;
-    REG(0x198)         = 0xF00;            /* core 0 MMIX: voices, dry and wet */
+    REG(0x198)         = 0xF00;            /* core 0 MMIX: voices, dry and wet (the XA input: libspu) */
     REG(0x188)         = 0xFFFF;           /* core 0 VMIXL/R: every voice dry */
     REG(0x18A)         = 0x00FF;
     REG(0x190)         = 0xFFFF;
@@ -210,6 +228,7 @@ int _start(int argc, char* argv[])
         s_Zero[i] = 0;
     }
     setup();
+    xa_init();
     s_State.magic = 0x32555053; /* 'SPU2' */
     s_State.ring  = (u32)s_Ring;
     s_State.wpos  = (u32)s_WPos;
