@@ -10640,3 +10640,181 @@ The recording has sound throughout, but music alone would also look like that. I
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
 
+## Claude
+
+XA voice playback is in, done on the IOP with the PS1's Gaussian interpolation as you chose. In PCSX2 it streams correctly; I haven't listened to it myself. The new build is on the PS2 and the restart was acknowledged. Please try the café cutscene (`MapEvent-CafeCutscene` in the Demo list) and tell me whether you hear Cybil and Harry.
+
+**How it works:**
+- When the game sends its XA commands, the port forwards the location, file and channel to the IOP sound module instead of reading data.
+- On the IOP:
+  - A reader thread reads the original raw sectors from `HILL.` on the DVD and keeps only the chosen line's audio sectors.
+  - A mixer thread decodes the XA-ADPCM, resamples it to 48 kHz with the PS1 SPU's own 512-entry Gaussian table, and streams it into SPU2 core 0's sound-data input.
+  - I took the table from the psx-spx hardware docs and checked it: each set of four taps sums to 0x7F7F–0x7F81, as the docs say.
+- The game's CD volume, CD mix and CD reverb settings drive core 0's input volume and mix, as they drove the PS1's CD input. Everything still plays on core 0.
+- The EE does no decoding, so this doesn't add to our frame-rate problem.
+
+**PCSX2 result:** I played the café cutscene from the Demo list. Nine voice lines started and each reached its end-of-file marker, and there was no crash. The recording has sound throughout, but the music plays under the dialogue, so the levels alone don't prove the voices are audible or clean. The clip is at `build/port/pcsx2_cafe_xa.wav` if you want to check it.
+
+**On hardware, listen for:**
+- **Wrong speed or pitch:** would point to the sample rate or resampling.
+- **Crackle or gaps:** would mean the stream is running dry. The buffers are small, about 21 ms per half.
+- **Silence:** would point to the core 0 input volume register. That's the one setting I couldn't confirm from the documentation.
+
+Committed as d555997e6, with the Planning Doc and conversation archive updated.
+
+## Claude
+
+The XA build (20:53:50) is running on the PS2 and the sound module started. Please try the café cutscene from the Demo list. XA start and end lines will show in the log as each voice line plays.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk -F'] ' '$1>"[89307"' build/port/ps2_log.out | grep -av "heartbeat\|spu:\|libpad\|libgpu\|gs stats\|display:\
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk -F'] ' '$1>"[89312" && $1<"[89531"' build/port/ps2_log.out | grep -a "heartbeat" | sed -n '1p;$p'; awk -F'] 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -3 build/port/ps2_log.out
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/iop/sh1spu/xa.c'; s=open(p).read() def ed(a,b):     global s; assert a in s,a[:40]; 
+
+## Claude
+
+I spoke too soon: the PS2 isn't hung. The log only looked stalled when I read it. Your café run is streaming voice lines on hardware right now: three lines so far, each reaching its end-of-file marker. The earlier gap was probably you relaunching Neutrino.
+
+I've built an extra safeguard against an interrupt storm (it logs the stream's interrupt rate and stops the stream if it runs away). I'm not deploying it now, because that would restart the game in the middle of your test.
+
+Can you hear the voices, and do they sound right: speed, pitch, no crackle?
+
+## Claude
+
+The café scene's fourth voice line has started. I'm waiting to hear how it sounds.
+
+## Claude
+
+The fourth voice line has finished reading.
+
+- tool `TaskStop`: 
+
+- tool `Monitor`: PS2: crashes, sound errors, map loads
+
+## Claude
+
+I've stopped reporting each voice line to keep things quiet. The watch now covers only crashes, sound errors, the stream's rate-guard messages and map loads. Let me know how the dialogue sounds.
+
+## User
+
+I tested PCSX2 and real hardware. Neither one played the dialogue. I didn't hear any glitchy audio, but I didn't hear the dialogue either.
+
+## Claude
+
+The voice lines are being read and decoded but you can't hear them, so the sound is being lost on its way into the mix. Two suspects:
+- **the input's volume or mix settings**, or
+- **the input stream itself not playing.**
+
+I'm logging the core 0 input registers (mix, input volumes, control) and the number of decoded frames once a second during a PCSX2 run of the café scene.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/iop/sh1spu/xa.c'; s=open(p).read() s=s.replace('''    if (++seconds <= 3)     {''','
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 9:50pm (America/Chicago)
+
+## Claude
+
+I'm re-arming the watch first. Then two things: the diagnostics explain the silent dialogue, and there was a crash on map4_s01 to look at.
+
+- tool `Monitor`: PS2: crashes, sound errors, map loads
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git stash -q 2>/dev/null; git stash pop -q; A=~/ps2dev/ee/bin/mips64r5900el-ps2-elf-addr2line; git log --oneline
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/iop/sh1spu/xa.c'; s=open(p).read() s=s.replace('''static u32  s_MixGen;''','''static
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/libspu_port.c'; s=open(p).read() s=s.replace('''#define R_AVOLR       0x76A''','''#d
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/iop/sh1spu/xa.c'; s=open(p).read() a='''static void mixer(void* arg) {     int which
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/iop/sh1spu/xa.c'; s=open(p).read() s=s.replace('''static int  s_Peak;''','''static u
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/input.txt; timeout 20 python3 tools/port/ps2_ctl.py deploy; S=/tmp/claude-1000/-home-alex-Docum
+

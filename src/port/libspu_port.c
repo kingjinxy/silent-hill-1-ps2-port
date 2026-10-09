@@ -51,6 +51,8 @@ extern unsigned int Port_SpuEnvx(int v);
 #define R_MMIX        0x198
 #define R_AVOLL       0x768 /* sound data input (ADMA, where the XA audio plays) volume */
 #define R_AVOLR       0x76A
+#define R_BVOLL       0x76C /* the other input volume pair: documents disagree on which is the ADMA input's */
+#define R_BVOLR       0x76E
 #define R_REVVOL      0x774 /* vIIR, vCOMB1-4, vWALL, vAPF1, vAPF2, vLIN, vRIN */
 
 /* libspu's reverb presets (_spu_rev_param, BODYPROG.BIN 0x800B1478): the PS1's 32 reverb registers
@@ -504,11 +506,13 @@ void SpuSetCommonAttr(SpuCommonAttr* attr)
     {
         s_Common.cd.volume.left = attr->cd.volume.left;
         reg(R_AVOLL, (u16)attr->cd.volume.left);
+        reg(R_BVOLL, (u16)attr->cd.volume.left);
     }
     if (m & SPU_COMMON_CDVOLR)
     {
         s_Common.cd.volume.right = attr->cd.volume.right;
         reg(R_AVOLR, (u16)attr->cd.volume.right);
+        reg(R_BVOLR, (u16)attr->cd.volume.right);
     }
     if (m & SPU_COMMON_CDMIX)
     {

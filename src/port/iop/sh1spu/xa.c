@@ -51,6 +51,9 @@ static u32  s_Pos;                                   /* 16.16 position in s_Dec 
 static u32  s_Step;                                  /* 16.16 source frames per output frame */
 static int  s_OldL, s_OlderL, s_OldR, s_OlderR;
 static u32  s_MixGen;
+static u32  s_Fills;
+static u32  s_Madr[4]; /* DMA address at the last interrupts */
+static int  s_Peak; /* loudest output sample since the last diagnostic line */
 
 static const int K0[4] = { 0, 60, 115, 98 };
 static const int K1[4] = { 0, 0, -52, -55 };
@@ -179,29 +182,91 @@ static void fill(u8* half)
                ((GAUSS[0x100 + i] * s_DecL[n - 1]) >> 15) + ((GAUSS[i] * s_DecL[n]) >> 15);
         outR = ((GAUSS[0xFF - i] * s_DecR[n - 3]) >> 15) + ((GAUSS[0x1FF - i] * s_DecR[n - 2]) >> 15) +
                ((GAUSS[0x100 + i] * s_DecR[n - 1]) >> 15) + ((GAUSS[i] * s_DecR[n]) >> 15);
+        if (outL > s_Peak)
+        {
+            s_Peak = outL;
+        }
+        if (-outL > s_Peak)
+        {
+            s_Peak = -outL;
+        }
         l[0]   = (s16)(outL > 32767 ? 32767 : outL < -32768 ? -32768 : outL);
         l[128] = (s16)(outR > 32767 ? 32767 : outR < -32768 ? -32768 : outR);
         s_Pos += s_Step;
     }
 }
 
+static volatile u32 s_Interrupts; /* ADMA half interrupts (about 47 a second) */
+static volatile int s_Stopped;
+
 static int adma_done(int core, void* arg)
 {
     (void)core;
     (void)arg;
-    iSignalSema(s_MixSema);
+    s_Interrupts++;
+    if (!s_Stopped)
+    {
+        iSignalSema(s_MixSema);
+    }
     return 1;
 }
 
+/** Once a second (main.c's loop): checks the interrupt rate. Far more than 47 a second means the
+ * input stream isn't running as set up; it is then stopped so it can't starve the IOP. */
+void xa_check(void)
+{
+    static u32 last;
+    static int seconds;
+    u32        n = s_Interrupts - last;
+    last         = s_Interrupts;
+    if (s_Active || s_FifoOut != s_FifoIn)
+    {
+        printf("sh1spu: XA diag: MMIX %04x AVOL %04x/%04x BVOL %04x/%04x ATTR %04x MVOL %04x, %u sectors decoded, %u interrupts/s\n",
+               *(volatile u16*)0xBF900198, *(volatile u16*)0xBF900768, *(volatile u16*)0xBF90076A,
+               *(volatile u16*)0xBF90076C, *(volatile u16*)0xBF90076E, *(volatile u16*)0xBF90019A,
+               *(volatile u16*)0xBF900760, (unsigned)s_FifoOut, (unsigned)n);
+        printf("sh1spu: XA diag: peak %d; core 0 ADMAS %04x; core 1 MMIX %04x AVOL %04x BVOL %04x MVOL %04x ATTR %04x\n",
+               s_Peak, *(volatile u16*)0xBF9001B0, *(volatile u16*)0xBF900598, *(volatile u16*)0xBF900790,
+               *(volatile u16*)0xBF900794, *(volatile u16*)0xBF900788, *(volatile u16*)0xBF90059A);
+        printf("sh1spu: XA diag: %u fills, coding %02x, buffer %08x, DMA at %08x %08x %08x %08x\n", (unsigned)s_Fills,
+               s_Fifo[(s_FifoOut + FIFO_N - 1) % FIFO_N].coding, (unsigned)s_Adma, (unsigned)s_Madr[0],
+               (unsigned)s_Madr[1], (unsigned)s_Madr[2], (unsigned)s_Madr[3]);
+        s_Peak = 0;
+    }
+    if (++seconds <= 3)
+    {
+        printf("sh1spu: XA input: %u interrupts in the last second\n", (unsigned)n);
+    }
+    if (n > 200 && !s_Stopped)
+    {
+        s_Stopped = 1;
+        sceSdBlockTrans(0, SD_TRANS_STOP, NULL, 0);
+        printf("sh1spu: XA input stopped (%u interrupts a second)\n", (unsigned)n);
+    }
+}
+
+#define D4_MADR (*(volatile u32*)0xBF8010C0) /* IOP DMA channel 4 (core 0's input): address being read */
+
+/** Refills the half the input DMA isn't reading, once per pass. The interrupt doesn't come exactly
+ * once per half (59 a second in PCSX2, 77 on a PS2, for 47 halves a second), so the mixer goes by the
+ * DMA's position: filling on every interrupt played the stream ahead of the SPU2, skipping chunks. */
 static void mixer(void* arg)
 {
-    int which = 0;
+    int filled = 1; /* half 1 starts out silent and is due after half 0 */
     (void)arg;
     for (;;)
     {
+        int playing, other;
         WaitSema(s_MixSema);
-        fill(s_Adma + which * HALF_FRAMES * 4);
-        which ^= 1;
+        s_Madr[s_Fills & 3] = D4_MADR;
+        playing = (int)((D4_MADR & 0x1FFFFF) - ((u32)s_Adma & 0x1FFFFF)) >= HALF_FRAMES * 4;
+        other   = playing ^ 1;
+        if (other != filled)
+        {
+            fill(s_Adma + other * HALF_FRAMES * 4);
+            filled = other;
+            s_Fills++;
+        }
     }
 }
 
@@ -305,11 +370,11 @@ void xa_init(void)
     th.attr      = TH_C;
     th.option    = 0;
     th.thread    = mixer;
-    th.priority  = 30;
+    th.priority  = 50;
     th.stacksize = 0x800;
     StartThread(CreateThread(&th), NULL);
     th.thread    = reader;
-    th.priority  = 45;
+    th.priority  = 55;
     th.stacksize = 0x800;
     StartThread(CreateThread(&th), NULL);
     sceSdSetTransIntrHandler(0, adma_done, NULL);

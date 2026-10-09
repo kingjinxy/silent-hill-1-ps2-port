@@ -31,6 +31,7 @@ IRX_ID("sh1spu", 1, 0);
 void xa_init(void);
 void xa_start(u32 hillLsn, u32 index, u32 file, u32 chan);
 void xa_stop(void);
+void xa_check(void);
 
 typedef struct
 {
@@ -158,7 +159,7 @@ static u32 run(u32 pos)
 
 static void loop(void* arg)
 {
-    u32 pos = 0, idle = 0;
+    u32 pos = 0, idle = 0, ticks = 0;
     (void)arg;
     for (;;)
     {
@@ -179,6 +180,11 @@ static void loop(void* arg)
         {
             send_status();
             idle = 0;
+        }
+        if (++ticks >= 4000) /* about a second */
+        {
+            xa_check();
+            ticks = 0;
         }
         DelayThread(250);
     }

@@ -445,3 +445,7 @@ Ideas to try, roughly by expected payoff:
   - Sample uploads now use DMA channel 1, because channel 0 belongs to core 0's ADMA. ATTR writes keep the ADMA mode bits.
 - libspu: the CD volume goes to core 0's AVOL. CD mix and CD reverb go to core 0's MMIX (0x0C0 dry, 0x030 wet).
 - The IOP logs "sh1spu: XA file F channel C" and "XA end of file".
+- XA fixes (2026-10-09):
+  - The ADMA input's volume register is BVOL (0x76C/0x76E), not AVOL. libspu writes the CD volume to both pairs.
+  - The mixer refills the half that IOP DMA channel 4 (D4_MADR) isn't reading, once per pass. The interrupt can fire more often than once per half.
+  - While a stream runs, the IOP logs the registers, peak level and refill count about every 1.27 s ("XA diag").
