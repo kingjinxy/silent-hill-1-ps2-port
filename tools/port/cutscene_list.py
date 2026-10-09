@@ -6,7 +6,8 @@ A cutscene is a map event (s_EventData in src/maps/<map>/<map>_events_data.c wit
 SysState_EventCallback) whose function, from the map's g_MapEventFuncs table, uses cutscene
 machinery: letterbox borders, the cutscene timer or flag, or camera/animation data (DMS). Functions
 still in assembly are checked by the functions they call. FMVs (SysState_Fmv) are separate events
-and aren't listed.
+and aren't listed, nor are later parts of a cutscene (events started by another cutscene event's
+completion flag).
 
     python3 tools/port/cutscene_list.py --report          # list with each event's first lines of dialogue
     python3 tools/port/cutscene_list.py --c OUT.c         # the table compiled into the port
@@ -65,6 +66,13 @@ def events(mp):
     return out
 
 
+def resumes(body):
+    """A part whose cutscene timer starts past 0 goes on from an earlier part (whose flag may be set by
+    code still in assembly, which the flag check above can't see)."""
+    m = re.search(r"g_Cutscene_Timer\s*=\s*Q12\(([\d.]+)f?\)", body)
+    return bool(m) and float(m.group(1)) > 0
+
+
 def funcs(mp):
     s = read(os.path.join(REPO, "src", "maps", mp, mp + "_header.c"))
     m = re.search(r"g_MapEventFuncs\[\]\)\(\) = \{(.*?)\};", s, re.S)
@@ -92,7 +100,20 @@ def cutscenes():
                 body = asm_body(name, mp) or ""
                 hit = ASM_MARKERS.search(body)
             if hit:
-                found.append({"map": mp, "mapIdx": idx, "event": ev, "func": name, "body": body})
+                found.append({"map": mp, "mapIdx": idx, "event": ev, "func": name, "body": body,
+                              "required": fields.get("requiredEventFlag"), "complete": fields.get("completeEventFlag")})
+    # Continuations: an event that needs the flag another cutscene event on its map sets when it ends is
+    # the next part of that cutscene (MapEvent_CutsceneCybilDeath goes on from func_800E2950 at 96 s,
+    # with the DMS data the first part loaded). Only the first part is listed; the rest follow by itself.
+    # The flags that end a part: its completion flag, flags its code sets, and the completion flags
+    # of FMV events that a part starts (an FMV can sit between two parts).
+    done = {(c["map"], c["complete"]) for c in found if c["complete"] not in (None, "EventFlag_None")}
+    for c in found:
+        done |= {(c["map"], f) for f in re.findall(r"Savegame_EventFlagSet\w*\((EventFlag_\w+)\)", c["body"])}
+    for mp in MAPS:  # an FMV between two parts: one started by a part's flag
+        done |= {(mp, f.get("completeEventFlag")) for _, f in events(mp)
+                 if f.get("sysState") == "SysState_Fmv" and (mp, f.get("requiredEventFlag")) in done}
+    found = [c for c in found if (c["map"], c["required"]) not in done and not resumes(c["body"])]
     # One entry per function and map (several events can start the same cutscene).
     seen, out = set(), []
     for c in found:
