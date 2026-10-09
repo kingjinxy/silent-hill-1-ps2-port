@@ -8,10 +8,12 @@
  * game's frame time comes from it, read right after waiting for a vertical blank, and the EE's cycle
  * counter doesn't track time between vertical blanks reliably under emulation (frames measured only
  * a few lines long, so fades took minutes).
- * Counter interrupts (used by the sound driver's tick, through events) aren't implemented yet.
+ * Counter 2's interrupt (the sound driver's tick, through events) runs from a kernel alarm at the
+ * counter's rate (src/port/ps2/spu_ps2.c Port_SoundTimer).
  */
 
-extern int Port_VBlanks(unsigned int* cycles); /* libetc_ps2.c */
+extern int  Port_VBlanks(unsigned int* cycles); /* libetc_ps2.c */
+extern void Port_SoundTimer(unsigned int rate_hz); /* spu_ps2.c */
 
 #define EE_CLOCK   294912000ULL
 #define PS1_CLOCK  33868800ULL
@@ -110,10 +112,19 @@ long ResetRCnt(unsigned long spec)
 
 long StartRCnt(unsigned long spec)
 {
+    int i = index_of(spec);
+    if (i == 2 && (s_Cnt[i].mode & 0x1000) && s_Cnt[i].target) /* RCntMdINTR */
+    {
+        Port_SoundTimer((unsigned int)(RATE[2] / s_Cnt[i].target));
+    }
     return ResetRCnt(spec);
 }
 
 long StopRCnt(unsigned long spec)
 {
+    if (index_of(spec) == 2)
+    {
+        Port_SoundTimer(0);
+    }
     return index_of(spec) >= 0;
 }

@@ -22,8 +22,11 @@ extern int  Display_FrameCount(void); /* display_ps2.c */
 static int s_HeartbeatSema = -1;
 static u8  s_HeartbeatStack[4096] __attribute__((aligned(16)));
 
+extern void Port_SpuStats(void); /* spu_ps2.c */
+
 static void heartbeat(void* arg)
 {
+    unsigned int beats = 0;
     (void)arg;
     for (;;)
     {
@@ -32,6 +35,10 @@ static void heartbeat(void* arg)
          * 294.912 MHz: 2,949,120 cycles = 1%). */
         printf("heartbeat: vblank %d frame %d idle %u%%\n", s_VBlanks, Display_FrameCount(), s_WaitCycles / 2949120);
         s_WaitCycles = 0;
+        if (++beats % 10 == 0)
+        {
+            Port_SpuStats();
+        }
     }
 }
 

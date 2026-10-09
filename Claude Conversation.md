@@ -9749,3 +9749,315 @@ I'm going to keep playing a bit longer. In the meantime, make sure this conversa
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat > tools/port/archive_conversation.py <<'P' #!/usr/bin/env python3 """Writes a Claude Code session transcript
 
+- tool `Monitor`: PS2 play: crashes, freezes, heavy stretches, map loads
+
+- tool `Write`: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/sound-port-plan.md
+
+- tool `Write`: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/conversation-archive.md
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; M=/home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/MEMORY.md; printf '%s\n' '- [So
+
+## Claude
+
+I'm watching again, so keep playing.
+
+- **Conversation archive:** "Claude Conversation.md" is now in the project folder. It has your messages, my replies, and a one-line entry for each tool action, but not their full output. It's built from this session's history by a new script, [tools/port/archive_conversation.py](tools/port/archive_conversation.py). It's only as old as the last time I regenerate it, so I'll refresh it at milestones and before each commit.
+- **Sound plan:** I've added it to the Planning Doc and to my memory. We'll keep the original sound effects, music and sound code, change the code only where the SPU2 needs it, and use one SPU2 core only. Audio stays muted until we start on it.
+- **Monitoring:** same as before. I'll report crashes, freezes, "VRAM download stuck" lines and slow stretches, and dig into any crash. If one happens, hold Triangle to keep the crashed state.
+
+The archive, the script and the sound-plan entry are committed as 5b0216643.
+
+## Claude
+
+The monitor flagged a 5-second stretch at 48–53 fps with no idle time. It's a mild version of the known slowdown, and nothing has crashed.
+
+## Claude
+
+The monitor flagged a 7-second stretch at 28–48 fps with no idle time. At 28 fps, that's the lowest gameplay rate we've seen outside the attract demos. It's on map2_s00, the café/town map. Nothing has crashed. I'll note this spot for the performance work later. Was anything heavy on screen just now, like the fog, a cutscene or enemies?
+
+## Claude
+
+The monitor flagged an 8-second stretch at 26–52 fps with no idle time, again on the town map. It dipped slightly lower than the last one, but nothing has crashed. I'm logging these dips in the town as a performance target.
+
+## Claude
+
+The monitor flagged another 8-second stretch in the town at 27–49 fps with no idle time. No crashes. From now on, I'll report town slowdowns only if they drop below the ~26 fps floor we've seen so far.
+
+## Claude
+
+The monitor flagged a 14-second stretch in the town at 27–41 fps with no idle time. That's within the range already noted, and nothing has crashed.
+
+## Claude
+
+This one is worse: 15 seconds in the town at 24–30 fps with no idle time. That's the lowest and longest slowdown in gameplay so far. Nothing has crashed. If you can, note where you were and what was on screen; it'll help when we profile the town.
+
+## Claude
+
+The town slowdown has continued: the last 47 seconds stayed at 24–32 fps with no idle time. That looks like a steady cost in this part of the town, not a passing spike. Nothing has crashed, and the game is still responding. This is now the top performance target. Where are you in the town, and is anything chasing you?
+
+## Claude
+
+A shorter 5-second dip at 30–49 fps followed, also in the town. No crashes.
+
+## Claude
+
+You've reached map1_s00, the school entrance. Nothing has crashed since you left the town. I'm still watching.
+
+## Claude
+
+This is a new low for gameplay: 26 seconds at 21–33 fps with no idle time, at the school entrance (map1_s00). Nothing has crashed. Together with the town, it points to the outdoor and fog-heavy areas as the main cost. I'm adding it to the performance targets.
+
+## Claude
+
+The monitor flagged a 9-second stretch at 25–26 fps with no idle time, still at the school entrance. No crashes.
+
+## Claude
+
+The monitor flagged a 6-second stretch at 25–48 fps with no idle time, still in the school area. No crashes.
+
+## Claude
+
+The monitor flagged an 11-second stretch at 25–53 fps with no idle time, still in the school. No crashes.
+
+## Claude
+
+The monitor flagged a 10-second stretch at 31–43 fps with no idle time. No crashes.
+
+## Claude
+
+The monitor flagged an 11-second stretch at 22–39 fps with no idle time, still in the school area. No crashes.
+
+## Claude
+
+The monitor flagged a 23-second stretch at a steady 27–29 fps with no idle time. No crashes.
+
+## Claude
+
+The monitor flagged a 7-second stretch at 23–49 fps with no idle time. No crashes.
+
+## Claude
+
+This is a new low for gameplay: 6 seconds at 20–25 fps with no idle time, still in the school area (map1_s00). Nothing has crashed, but this area is now the heaviest we've seen.
+
+## Claude
+
+The monitor flagged a 6-second stretch at 25–36 fps with no idle time. No crashes.
+
+## Claude
+
+You've moved into map1_s01, the school interior. Nothing has crashed. I'm still watching.
+
+## Claude
+
+The monitor flagged an 8-second stretch at 30–47 fps with no idle time, in the school interior. No crashes.
+
+## Claude
+
+This is the longest slow stretch so far: 55 seconds at 20–42 fps with no idle time, in the school interior (map1_s01). Nothing has crashed, but performance in the school is clearly the main problem now.
+
+## Claude
+
+The monitor flagged a 43-second stretch at 22–38 fps with no idle time, still in the school interior. No crashes.
+
+## Claude
+
+The monitor flagged an 11-second stretch at 24–42 fps with no idle time. No crashes.
+
+## Claude
+
+The monitor flagged a 5-second stretch at 31–44 fps with no idle time. No crashes.
+
+## Claude
+
+The monitor flagged an 8-second stretch at 30–32 fps with no idle time. No crashes.
+
+## Claude
+
+The monitor flagged an 18-second stretch at 28–40 fps with no idle time. No crashes.
+
+## Claude
+
+The monitor flagged a 7-second stretch at 21–51 fps with no idle time. No crashes.
+
+## Claude
+
+The monitor flagged a 5-second stretch at 23–34 fps with no idle time. No crashes.
+
+## Claude
+
+This is a new low: 16 seconds at 19–36 fps with no idle time, in the school interior. No crashes.
+
+## Claude
+
+The monitor flagged an 8-second stretch at 26–35 fps with no idle time. No crashes.
+
+## Claude
+
+The monitor flagged a 20-second stretch at 24–26 fps with no idle time. No crashes.
+
+## Claude
+
+The monitor flagged a 20-second stretch at 26–32 fps with no idle time. No crashes.
+
+## User
+
+<ide_opened_file>The user opened the file /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/sound-port-plan.md in the IDE. This may or may not be related to the current task.</ide_opened_file>
+
+Alright, I've played enough for now. It looks like several areas are much heavier in their frame drops, and the flashlight's lighting seems to contribute to this. Note this and ruminate on some ideas to remedy the frame drops. Next, let's move on to sound.
+
+- tool `TaskStop`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls src/port/ps2/; grep -rln "SpuInit\|SsInit\|libspu\|libsnd" src/port include/port 2>/dev/null | head; grep -rn
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; wc -l src/port/libspu_port.c; sed -n 1,80p src/port/libspu_port.c; grep -n "^[a-zA-Z].*(" src/port/libspu_port.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "CdlModeSF\|CdlSetfilter\|XA\b\|Sd_Xa\|xa_" src/bodyprog src/main --include=*.c | head -15; grep -rn "S
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "Planning Doc.md" <<'E'  ## Hardware performance findings (2026-10-08 play session, real PS2)  The openin
+
+## Claude
+
+I've written up the frame drops in the Planning Doc (commit "Docs: hardware performance findings and ideas"). In short:
+
+- **Where it's slow:** the opening area and alley ran at 35–53 fps. The town and school dropped to 19–32 fps for stretches of up to 55 seconds, with the console fully busy. That fits your observation about the flashlight. Nothing crashed or froze after the VRAM-download fix.
+- **Measure first:** the program-counter sampler I added only ever records the kernel, so it's no help. I'd add per-section timers around world drawing, characters, flashlight lighting, the PS1 graphics-maths code and the water readback, and print them with the heartbeat. One play session would then give a breakdown per map.
+- **Likely biggest win:** the flashlight lighting runs per vertex through plain C translations of the PS1's graphics-maths instructions. Moving that maths onto the PS2's vector unit (VU0), lighting first, is the step we'd already planned.
+- **Easy win:** the water effect copies all 1 MB of video memory back from the GS each time it asks. It only needs the rectangle it asked for, and could skip the copy when nothing changed.
+- **Also:** batching mesh drawing (already planned), keeping hot data in the 16 KB scratchpad, and counting how many primitives lit and unlit areas send to the GS.
+
+**Sound: what I found**
+- The game's own sound driver (the decompiled `libsd`/`smf_*` code) only talks to the PS1 sound library, through about 19 functions. Right now [libspu_port.c](src/port/libspu_port.c) is a stub that plays nothing.
+- So the plan fits what you asked for: keep the driver, sound banks and sequenced music unchanged, and reimplement those ~19 functions on SPU2 core 0. They cover voice settings, key on/off, sample uploads to sound memory, reverb and master volume.
+- On the PS2 the SPU2 is only reachable from the IOP, the console's second processor. The game code would queue sound-register writes and sample uploads, and once per frame send them to a small module on the IOP that writes core 0's registers. The PS1 layout carries over closely.
+- Spoken lines are a separate problem. They're streamed XA-ADPCM audio, which the PS1's CD drive decoded and mixed straight into the SPU. The PS2 in native mode has no hardware path for that, so XA would need decoding in software and streaming into core 0.
+
+Two questions before I start:
+
+- tool `AskUserQuestion`: 
+
+## Claude
+
+Plan set: a custom IRX for core 0, and XA voices later. Looking at the existing IRX setup and the libspu types.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; find . -name "libspu.h" -not -path "./build/*" | head; ls src/port/iop/sh1agent; cat src/port/iop/sh1agent/Makef
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 170,200p tools/port/port_link.py; grep -n "SpuVoiceAttr\|SpuCommonAttr\|SpuReverbAttr\|SpuVolume\|SpuExtA
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 80,194p include/psyq/libspu.h | grep define; grep -n "SpuGetVoiceAttr\|SpuGetKeyStatus\|SpuSetReverbModeP
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "smf_timer_set\|smf_vsync\|VSyncCallback\|SetRCnt\|InterruptCallback\|OpenEvent" src/bodyprog/libsd/*.c 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 80,150p src/bodyprog/libsd/smf_main.c; sed -n 345,385p src/bodyprog/libsd/smf_snd.c; grep -rn "OpenEvent\
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "SdSeqCalledTbyT\|VSyncCallback(" src --include=*.c | grep -v "^src/bodyprog/libsd/smf_snd.c:3" | head;
+
+## Claude
+
+Designing the SPU2 backend. Now pulling the PS1 reverb preset tables out of the game binary.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "_spu_rev_param\|_spu_rev_startaddr" -A2 configs/USA/sym.*.txt; ls configs/USA/*.yaml | head; grep -n "^
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' import struct b=open('assets/USA/1ST/BODYPROG.BIN','rb').read() o=0x800B1478-0x80024B60 for m in
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "SdSeqCalledTbyT\|smf_vsync\b" src include --include=*.[ch] | head; cat src/bodyprog/sys/vsync.c | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "SdSeqCalledTbyT\|midi_smf_main\b" src asm 2>/dev/null | head; grep -rn "sd_tick_mode\|SdSetTickMode" 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 40,86p src/bodyprog/libsd/smf_main.c; sed -n 150,175p src/bodyprog/libsd/smf_main.c; sed -n 50,110p src/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,50p src/port/libapi_port.c; grep -n "SetRCnt\|StartRCnt\|StopRCnt" -A15 src/port/ps2/rcnt_ps2.c | head 
+
+## Claude
+
+I've designed the sound path and am now writing the IOP sound module.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat src/port/iop/sh1agent/imports.lst src/port/iop/sh1agent/irx_imports.h; sed -n 1,60p src/port/iop/sh1agent/ma
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 75,120p src/port/iop/sh1agent/main.c; sed -n 155,200p src/port/ps2/agent_ps2.c; grep -n "SD_TRANS_STATUS\
+
+- tool `Bash`: mkdir -p /home/alex/Documents/silent-hill-1-ps2-port/src/port/iop/sh1spu; cd /home/alex/Documents/silent-hill-1-ps2-port/src/port/iop/sh1spu; sed 's/sh1agent/sh
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/iop/sh1spu/main.c'; s=open(p).read() a=s.index('static void send_status(void)'); b=s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's/^I_strtoul$/I_strtoul\nI_memcpy/' src/port/iop/sh1spu/imports.lst; export PS2SDK=~/ps2dev/ps2sdk PATH=
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "define RCntCNT2\|define EvSpINT\b\|define RCntMdINTR" include/psyq/*.h | head; sed -n 60,70p src/port/
+
+## Claude
+
+The IOP sound module builds. Next is the EE side: the command ring, the sound timer tick and the libspu calls.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/spu_ps2.c
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/libspu_port.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "SPU_OFF_ENV_ON" include/psyq/libspu.h; python3 - <<'P' import re p='src/port/ps2/rcnt_ps2.c'; s=open(p)
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60; (python3 tools/port/port_link.py && bash tools/port/make_iso.sh) 2
+
+## Claude
+
+It builds. Running it in PCSX2 first to check the sound modules start and nothing hangs.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/pcsx2_run.py --help 2>&1 | head -40
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; timeout 900 python3 tools/port/pcsx2_run.py build/port/sh1.elf --seconds 240 --stall 
+
+## Claude
+
+The modules load, but the game hangs at frame 0. Checking where.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls -t build/port/*.log | head -3; tail -25 build/port/pcsx2_run.log 2>/dev/null || true
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; timeout 300 python3 tools/port/pcsx2_run.py build/port/sh1.elf --seconds 60 --stall 1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; timeout 300 python3 tools/port/pcsx2_run.py build/port/sh1.elf --seconds 60 --stall 1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "not found on the disc" -B30 src/port/ps2/libcd_ps2.c | grep -n "read\|Read\|fio\|lseek\|sector" | head 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "static int s_Ready\|s_Ready *=\|host:\|open(\|sceCdRead\|sceCdSync\|sceCdInit\|Directory\|find_file" sr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's/^    s_On = 1;$/    s_On = 0; \/\/ BISECT/' src/port/ps2/spu_ps2.c; grep -n BISECT src/port/ps2/spu_ps
+
+## Claude
+
+The game still hangs even with the sound commands switched off, so the cause is either the module loading or the new timer tick. I'm testing the tick next.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's/^    s_On = 0; \/\/ BISECT$/    s_On = 1;/' src/port/ps2/spu_ps2.c; python3 - <<'P' p='src/port/ps2/sp
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/spu_ps2.c'; s=open(p).read() s=s.replace('''    printf("port: sound timer at %u 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/spu_ps2.c'; s=open(p).read() s=s.replace('''    tried = 1; ''','''    tried = 1;
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls -la build/port/*.iso*; git stash list | head -2; git status --short | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "not found on the disc" src/port | head -3; grep -rn "SILENT\b\|\"\\\\\\\\SILENT\|SILENT\.\|HILL\." src
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 200,235p src/port/ps2/libcd_ps2.c
+
+## Claude
+
+The game can't find its data files on the disc image, even with sound switched off, so I'm checking the ISO itself.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; isoinfo -l -i build/port/sh1_ps2.iso 2>&1 | head -15; grep -n "iso\|disc" tools/port/pcsx2_run.py | head -15
+
+## Claude
+
+My mistake: I booted the bare ELF, which runs with no disc in the drive, so the game couldn't find its files. Removing the test change, rebuilding the ISO, and running from the disc image instead.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i '/if (1) return; \/\/ BISECT/d' src/port/ps2/spu_ps2.c; grep -c BISECT src/port/ps2/spu_ps2.c; source .ve
+
+## Claude
+
+It runs and plays through to gameplay. Now checking whether the driver actually plays notes: I'm adding a statistics line.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/spu_ps2.c'; s=open(p).read() s=s.replace('''static int      s_DmaId = -1; ''',''
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 268,285p src/port/libgpu_port.c; grep -n "heartbeat" src/port/ps2/libetc_ps2.c | head -5
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 25,40p src/port/ps2/libetc_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/libetc_ps2.c'; s=open(p).read() s=s.replace('''static void heartbeat(void* arg) 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "Planning Doc.md" <<'E'  ## Sound, step 1: the SPU on SPU2 core 0 (2026-10-08)  - [src/port/libspu_port.c
+

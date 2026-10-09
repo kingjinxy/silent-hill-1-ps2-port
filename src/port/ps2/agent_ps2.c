@@ -149,6 +149,19 @@ void Port_AgentVBlank(void)
     }
 }
 
+/** Prepares loading IOP modules from EE memory (SifExecModuleBuffer); only the first call does anything
+ * (patching the IOP's module loader twice breaks it). */
+void Port_ModuleLoadInit(void)
+{
+    static int done;
+    if (!done)
+    {
+        done = 1;
+        SifInitRpc(0);
+        sbv_patch_enable_lmb();
+    }
+}
+
 void Port_AgentInit(void)
 {
     char         args[24];
@@ -170,8 +183,7 @@ void Port_AgentInit(void)
     s_Mailbox.seq = 0;
     FlushCache(0); /* no dirty lines of the mailbox left to overwrite what the IOP writes */
     len = sprintf(args, "mb=0x%08x", (unsigned int)&s_Mailbox & 0x1FFFFFFF) + 1;
-    SifInitRpc(0);
-    sbv_patch_enable_lmb();
+    Port_ModuleLoadInit();
     id = SifExecModuleBuffer(sh1agent_irx, size_sh1agent_irx, len, args, &result);
     if (id < 0 || result == 1) /* 1: MODULE_NO_RESIDENT_END */
     {

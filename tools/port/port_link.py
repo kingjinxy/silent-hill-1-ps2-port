@@ -19,6 +19,7 @@ import collections
 import glob
 import os
 import re
+import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -178,11 +179,18 @@ def main():
     # IOP module embedded in the ELF: sh1agent.irx (remote control on hardware, src/port/ps2/agent_ps2.c).
     env = dict(os.environ, PS2SDK=PS2SDK, PATH=os.environ["PATH"] + os.pathsep + os.path.join(os.path.dirname(PS2SDK), "iop", "bin")
                + os.pathsep + os.path.join(PS2SDK, "bin"))
-    subprocess.run(["make", "-s", "-C", "src/port/iop/sh1agent"], env=env, check=True)
-    irx = os.path.join(OUT, "iop", "sh1agent", "sh1agent.irx")
-    run([os.path.join(PS2SDK, "bin", "bin2c"), irx, irx[:-4] + "_irx.c", "sh1agent_irx"])
-    run([CC, "-c", "-O2", "-G0", irx[:-4] + "_irx.c", "-o", irx[:-4] + "_irx.o"])
-    port_objs.append(irx[:-4] + "_irx.o")
+    # sh1spu.irx (sound on SPU2 core 0, src/port/ps2/spu_ps2.c) with ps2sdk's freesd.irx (libsd).
+    for name in ("sh1agent", "sh1spu"):
+        subprocess.run(["make", "-s", "-C", "src/port/iop/" + name], env=env, check=True)
+    irxs = [os.path.join(OUT, "iop", n, n + ".irx") for n in ("sh1agent", "sh1spu")]
+    os.makedirs(os.path.join(OUT, "iop", "freesd"), exist_ok=True)
+    shutil.copy(os.path.join(PS2SDK, "iop", "irx", "freesd.irx"), os.path.join(OUT, "iop", "freesd", "freesd.irx"))
+    irxs.append(os.path.join(OUT, "iop", "freesd", "freesd.irx"))
+    for irx in irxs:
+        name = os.path.basename(irx)[:-4] + "_irx"
+        run([os.path.join(PS2SDK, "bin", "bin2c"), irx, irx[:-4] + "_irx.c", name])
+        run([CC, "-c", "-O2", "-G0", irx[:-4] + "_irx.c", "-o", irx[:-4] + "_irx.o"])
+        port_objs.append(irx[:-4] + "_irx.o")
     if not os.environ.get("SH1_NO_RECOMP"):
         run(["tools/port/recomp_all.sh"])
     recomp_objs = []

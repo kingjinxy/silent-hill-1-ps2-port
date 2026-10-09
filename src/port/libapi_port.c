@@ -6,7 +6,7 @@
  *
  * Memory cards aren't implemented yet: libcard behaves as on a PS1 with both slots empty, where
  * every card operation is accepted and then ends with a time-out (SwCARD and HwCARD EvSpTIMOUT).
- * Root counter events (the sound driver's tick) are accepted but never delivered yet.
+ * Root counter 2's event (the sound driver's tick) is delivered by src/port/ps2/spu_ps2.c.
  */
 
 #define EVENT_COUNT 32
@@ -51,6 +51,12 @@ static void event_deliver(unsigned long cls, unsigned long spec)
             }
         }
     }
+}
+
+/** Delivers an event from the port's platform code (root counter interrupts). */
+void Port_EventDeliver(unsigned long cls, unsigned long spec)
+{
+    event_deliver(cls, spec);
 }
 
 long OpenEvent(unsigned long cls, long spec, long mode, long (*func)(void))

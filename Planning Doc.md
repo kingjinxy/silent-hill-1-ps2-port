@@ -410,3 +410,18 @@ Ideas to try, roughly by expected payoff:
 4. **Batch Gfx_MeshDraw.** Planned already: fewer per-primitive calls and better reuse of GS state (TEX0/CLUT changes).
 5. **Cache use.** Keep the hot GTE register file and lighting matrices in scratchpad RAM (16 KB at 0x70000000). Check that the -O3 recomp code doesn't thrash the 8 KB data cache with large per-vertex buffers.
 6. **Fog/flashlight geometry.** If the flashlight raises the number of primitives (for example by subdividing, or by keeping more chunks in view), check how many primitives each frame sends to the GS in lit areas compared with unlit ones, using the existing gs stats line.
+
+## Sound, step 1: the SPU on SPU2 core 0 (2026-10-08)
+
+- [src/port/libspu_port.c](src/port/libspu_port.c) implements the PS1 libspu calls the driver uses (voice attributes, keys, key status, uploads, reverb, master volume) as SPU2 core 0 register writes. The original driver, sound banks and sequences are unchanged.
+  - Sound memory: PS1 address A maps to SPU2 byte address A + 0x20000. That puts the end of the reverb area on a 128 KB boundary (EEA = 4).
+  - Pitch is scaled by 44100/48000.
+  - Reverb presets are libspu's own table, taken from BODYPROG.BIN.
+- [src/port/ps2/spu_ps2.c](src/port/ps2/spu_ps2.c) (EE side):
+  - Sends commands by SIF DMA into a ring buffer in sh1spu.irx: batched register writes, uploads in 16 KB pieces, and clears.
+  - Reads the IOP's status block, which reports bytes run and each voice's ENVX, through uncached memory.
+  - Runs the sound tick: root counter 2's interrupt becomes a kernel alarm (in horizontal blanks) that wakes a priority-20 thread, which delivers the counter event (libapi_port.c Port_EventDeliver) at about 578 Hz.
+- [src/port/iop/sh1spu](src/port/iop/sh1spu) runs the commands. It uses ps2sdk's freesd.irx (sceSdInit, plus sceSdVoiceTrans for uploads) and writes registers directly. Core 1 only passes core 0 through (its MMIX takes core 0's input, BVOL 0x7FFF, MVOL 0x3FFF).
+- A "spu:" line with statistics appears every 10 heartbeats.
+- Patching the IOP module loader twice breaks it, so agent_ps2.c Port_ModuleLoadInit now runs only once.
+- Not yet done: XA voice lines (CD input), external input, and the echo/delay feedback parameters.
