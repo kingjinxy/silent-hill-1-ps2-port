@@ -398,3 +398,15 @@ hard lockup can't be reset remotely.
 - 2026-10-08 (hardware): attract-demo freeze found. The main thread was spinning in gpu_gs.c download_rows (water effect StoreImage → GS→EE VRAM readback), waiting on VIF1 DMA (D1_CHCR) forever. It found this by reading the stack over the network: `ps2_ctl.py md 0x1FFC000 0x4000`. Fix: clear FINISH, wait for the GS's FINISH before turning the bus around, add spin timeouts, and on a stuck transfer stop D1 and reset VIF1 with a log line ("VRAM download stuck"). The vblank EPC sampler (`ps2_ctl.py where`) shows only the kernel inside INTC handlers, so use the stack instead. A remote restart from this state hangs, so press RESET.
 
 - Sound (next topic): keep the original sound effects, music and sound code, changing the code only where the SPU2 needs it. Use one SPU2 core only, so the two cores never need syncing.
+
+## Hardware performance findings (2026-10-08 play session, real PS2)
+
+The opening area and alley ran at 35–53 fps. The town (map2_s00) and school (map1_s00/s01) dropped much further, with long stretches (up to 55 s) at 19–32 fps and no idle time. The flashlight's lighting looks like a large part of it: the user saw the drops follow the flashlight. Nothing crashed or froze after the VRAM-download fix.
+
+Ideas to try, roughly by expected payoff:
+1. **Measure first.** The vblank EPC sampler only ever records the kernel, so it is useless. Add per-section cycle counters (COP0 Count) around the main loop's parts: world/chunk drawing, characters, the flashlight/lighting path (GsTMDfast*LFG, NormalColor*, LoadAverageCol), the GTE wrappers, GS submission and the water readback. Print them with the heartbeat so a play session gives a breakdown per map.
+2. **Lighting and GTE on VU0.** The flashlight path runs, per vertex, the recompiled GTE lighting ops: NCS/NCT (light matrix × normal, colour matrix, depth cue) and RTPT. On the EE these are scalar C. Do them in VU0 macro mode (vmulq/vmadd with 4-wide FMAC), or batch whole meshes into VU0 micro programs. This is the "GTE work to the vector units" step already planned, with the lighting ops first.
+3. **Water VRAM readback.** StoreImage currently downloads all of VRAM (1 MB, two 256-row DMAs, waiting on the GS) whenever the water effect asks. Download only the requested rectangle, and skip it when the rectangle hasn't changed since the last frame.
+4. **Batch Gfx_MeshDraw.** Planned already: fewer per-primitive calls and better reuse of GS state (TEX0/CLUT changes).
+5. **Cache use.** Keep the hot GTE register file and lighting matrices in scratchpad RAM (16 KB at 0x70000000). Check that the -O3 recomp code doesn't thrash the 8 KB data cache with large per-vertex buffers.
+6. **Fog/flashlight geometry.** If the flashlight raises the number of primitives (for example by subdividing, or by keeping more chunks in view), check how many primitives each frame sends to the GS in lit areas compared with unlit ones, using the existing gs stats line.
