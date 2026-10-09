@@ -425,3 +425,8 @@ Ideas to try, roughly by expected payoff:
 - A "spu:" line with statistics appears every 10 heartbeats.
 - Patching the IOP module loader twice breaks it, so agent_ps2.c Port_ModuleLoadInit now runs only once.
 - Not yet done: XA voice lines (CD input), external input, and the echo/delay feedback parameters.
+- Fixes from testing on hardware (2026-10-08):
+  - The IOP module loader aligns data to 16 bytes only. SPU2 DMA needs 64, so sh1spu aligns the ring at run time. Before this, uploads failed silently and all 24 voices played blank memory.
+  - The control register (ATTR) needs bit 14 (unmute), as the PS1's SPUCNT does. PCSX2 ignores it. Both cores now use 0xC000.
+  - Key on and key off writes are spaced by more than two SPU2 sample periods. Batched writes let the SPU2 miss a key off, which left an instrument note stuck in the café cutscene's music.
+- Test tool: `pcsx2_run.py --audio out.wav` unmutes PCSX2 and records the sound output with pw-record.

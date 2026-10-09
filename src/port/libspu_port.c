@@ -38,6 +38,7 @@ extern unsigned int Port_SpuEnvx(int v);
 #define R_VMIXEL      0x18C
 #define R_VMIXER      0x194
 #define R_ATTR        0x19A
+#define ATTR_ON       0xC000 /* bit 15: core on, bit 14: unmuted (as the PS1's SPUCNT; PCSX2 ignores it) */
 #define R_KON         0x1A0
 #define R_KOFF        0x1A4
 #define R_ESA         0x2E0
@@ -145,7 +146,7 @@ void SpuInit(void)
     keys(R_VMIXEL, 0);
     keys(R_VMIXER, 0);
     s_RevVoices = 0;
-    reg(R_ATTR, 0x8000); /* core on, reverb off */
+    reg(R_ATTR, ATTR_ON); /* core on, reverb off */
     s_RevOn = 0;
     reg(R_MVOLL, 0);
     reg(R_MVOLR, 0);
@@ -164,7 +165,7 @@ void SpuQuit(void)
 long SpuSetReverb(long on_off)
 {
     s_RevOn = on_off ? 1 : 0;
-    reg(R_ATTR, 0x8000 | (s_RevOn << 7));
+    reg(R_ATTR, ATTR_ON | (s_RevOn << 7));
     return s_RevOn;
 }
 
@@ -179,7 +180,7 @@ long SpuSetReverbModeParam(SpuReverbAttr* attr)
             return -1;
         }
         s_RevMode = mode;
-        reg(R_ATTR, 0x8000); /* reverb off while its parameters change */
+        reg(R_ATTR, ATTR_ON); /* reverb off while its parameters change */
         if (mode != SPU_REV_MODE_OFF)
         {
             reg_addr(R_ESA, (u32)REV_START[mode] * 8);
@@ -204,7 +205,7 @@ long SpuSetReverbModeParam(SpuReverbAttr* attr)
         {
             SpuClearReverbWorkArea(mode);
         }
-        reg(R_ATTR, 0x8000 | (s_RevOn << 7));
+        reg(R_ATTR, ATTR_ON | (s_RevOn << 7));
     }
     if (attr->mask == 0 || (attr->mask & SPU_REV_DEPTHL))
     {

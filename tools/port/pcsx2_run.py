@@ -75,6 +75,8 @@ def main():
     ap.add_argument("--progress-seconds", type=float, default=60)
     ap.add_argument("--heartbeat", action="store_true", help="keep the port's heartbeat lines in the output")
     ap.add_argument("--realtime", action="store_true", help="run at normal speed (default: unlimited)")
+    ap.add_argument("--audio", metavar="WAV", help="unmute PCSX2 and record what the default sound output plays "
+                    "(PipeWire, pw-record) to WAV; implies --realtime")
     args = ap.parse_args()
     elf = os.path.abspath(args.elf)
     log = tempfile.NamedTemporaryFile(suffix=".log", delete=False).name
@@ -84,6 +86,12 @@ def main():
         OVERRIDES["CdvdVerboseReads"] = "true"
     if args.bios:
         OVERRIDES["BIOS"] = args.bios
+    recorder = None
+    if args.audio:
+        OVERRIDES["OutputMuted"] = "false"
+        args.realtime = True
+        recorder = subprocess.Popen(["pw-record", "-P", "{ stream.capture.sink=true }", args.audio],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     patch_ini()
     proc = None
     stalled = False
@@ -138,6 +146,9 @@ def main():
                     break
                 except (ProcessLookupError, subprocess.TimeoutExpired):
                     pass
+        if recorder:
+            recorder.send_signal(signal.SIGINT)
+            recorder.wait(5)
         restore_ini()
 
     text = open(log, errors="replace").read().splitlines() if os.path.exists(log) else []

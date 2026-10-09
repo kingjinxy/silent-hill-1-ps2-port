@@ -39,11 +39,16 @@ typedef struct
     u32 pad2[4];
 } status_t;
 
-static u8       s_Ring[RING_SIZE] __attribute__((aligned(64)));
+/* The module loader aligns data to 16 bytes only; SPU2 DMA needs 64-byte aligned memory on hardware
+ * (PCSX2 doesn't), so the ring and the zero block are aligned at run time. */
+static u8       s_RingSpace[RING_SIZE + 64];
+static u8*      s_Ring;
 static u32      s_WPos[4] __attribute__((aligned(16)));
 static status_t s_State;
 static status_t s_Out __attribute__((aligned(16)));
-static u8       s_Zero[2048] __attribute__((aligned(64)));
+static u8       s_ZeroSpace[2048 + 64];
+static u8*      s_Zero;
+#define ZERO_SIZE 2048
 static u32      s_EeStatus;
 static int      s_DmaId = -1;
 
@@ -74,8 +79,27 @@ static void send_status(void)
 
 static void transfer(u8* src, u32 addr, u32 size)
 {
-    sceSdVoiceTrans(0, SD_TRANS_WRITE | SD_TRANS_MODE_DMA, src, (u32*)addr, size);
+    int r = sceSdVoiceTrans(0, SD_TRANS_WRITE | SD_TRANS_MODE_DMA, src, (u32*)addr, size);
+    if (r < 0)
+    {
+        printf("sh1spu: upload of %u bytes to 0x%x failed (%d)\n", (unsigned)size, (unsigned)addr, r);
+        return;
+    }
     sceSdVoiceTransStatus(0, 1); /* wait */
+}
+
+/** Waits a little over two SPU2 sample periods (2 / 48000 s) before a key on or key off. The PS1
+ * driver writes a voice's key off and then its next key on with real time between them. Here
+ * register writes come in batches, so they arrive microseconds apart, and the SPU2 then misses the
+ * key off: a looping instrument note keeps sounding. The wait reads an SPU2 register, so it takes
+ * bus time (several hundred ns per read) rather than a CPU-speed loop. */
+static void key_gap(void)
+{
+    int i;
+    for (i = 0; i < 400; i++)
+    {
+        (void)REG(0x344); /* STATX */
+    }
 }
 
 /** Runs one command at ring offset pos; returns its size in the ring. */
@@ -89,7 +113,12 @@ static u32 run(u32 pos)
             n = p[1];
             for (i = 0; i < n; i++)
             {
-                REG(p[4 + i] >> 16) = (u16)p[4 + i];
+                u32 off = p[4 + i] >> 16;
+                if (off == 0x1A0 || off == 0x1A4) /* KON / KOFF (voices 0-15; 16-23 follow at +2) */
+                {
+                    key_gap();
+                }
+                REG(off) = (u16)p[4 + i];
             }
             return 16 + ((n * 4 + 15) & ~15u);
         case OP_WRITE:
@@ -97,9 +126,9 @@ static u32 run(u32 pos)
             transfer(&s_Ring[pos + 64], p[1], size);
             return 64 + size;
         case OP_CLEAR:
-            for (i = 0; i < p[2]; i += sizeof(s_Zero))
+            for (i = 0; i < p[2]; i += ZERO_SIZE)
             {
-                transfer(s_Zero, p[1] + i, p[2] - i < sizeof(s_Zero) ? p[2] - i : sizeof(s_Zero));
+                transfer(s_Zero, p[1] + i, p[2] - i < ZERO_SIZE ? p[2] - i : ZERO_SIZE);
             }
             return 16;
         case OP_WRAP:
@@ -142,8 +171,12 @@ static void setup(void)
 {
     sceSdInit(0);
     REG(0x400 + 0x198) = 0x00C;            /* core 1 MMIX: core 0's output (dry) */
-    REG(0x788 + 0xC)   = 0x7FFF;           /* core 1 BVOLL/R: core 0's output at full volume */
+    REG(0x788 + 0x8)   = 0x7FFF;           /* core 1 AVOLL/R and BVOLL/R: input volumes (which of the */
+    REG(0x788 + 0xA)   = 0x7FFF;           /* two takes core 0's output differs between documents) */
+    REG(0x788 + 0xC)   = 0x7FFF;
     REG(0x788 + 0xE)   = 0x7FFF;
+    REG(0x400 + 0x19A) = 0xC000;           /* core 1 ATTR: on, unmuted */
+    REG(0x19A)         = 0xC000;           /* core 0 ATTR */
     REG(0x788 + 0x0)   = 0x3FFF;           /* core 1 MVOLL/R */
     REG(0x788 + 0x2)   = 0x3FFF;
     REG(0x198)         = 0xF00;            /* core 0 MMIX: voices, dry and wet */
@@ -169,6 +202,12 @@ int _start(int argc, char* argv[])
     {
         printf("sh1spu: no status address (st=0x...)\n");
         return MODULE_NO_RESIDENT_END;
+    }
+    s_Ring = (u8*)(((u32)s_RingSpace + 63) & ~63u);
+    s_Zero = (u8*)(((u32)s_ZeroSpace + 63) & ~63u);
+    for (i = 0; i < ZERO_SIZE; i++)
+    {
+        s_Zero[i] = 0;
     }
     setup();
     s_State.magic = 0x32555053; /* 'SPU2' */

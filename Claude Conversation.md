@@ -10061,3 +10061,208 @@ It runs and plays through to gameplay. Now checking whether the driver actually 
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "Planning Doc.md" <<'E'  ## Sound, step 1: the SPU on SPU2 core 0 (2026-10-08)  - [src/port/libspu_port.c
 
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 20 python3 tools/port/ps2_ctl.py deploy; sleep 30; grep -a "SH1 port: starting\|sh1spu\|port: sound\|por
+
+## Claude
+
+Sound is now running on the PS2, and the build is on the console. Please listen through the opening and the attract demos, and tell me what you hear.
+
+**What changed:**
+- The game's original sound driver, sound banks and music are untouched. Underneath them, the PS1 sound-chip calls now drive SPU2 core 0, through a new IOP module, [sh1spu.irx](src/port/iop/sh1spu/main.c). Core 1 just passes core 0's output through to the speakers.
+- The driver's ~578 Hz timer, which had never run on the port, now ticks from a kernel alarm. Before this, no music or sound effects could have played, even with a working sound chip.
+
+**Testing so far:**
+- **PCSX2:** I booted the ISO into the demos. Samples load into sound memory, 1–4 voices sound during the demos, and nothing stalled. PCSX2's audio output wasn't audible to me, so this is from the logs only.
+- **PS2:** the deploy worked (build 20:01:32): the sound module started and the first sample banks uploaded. I haven't seen it play a note there yet.
+
+**Likely problems:**
+- **Pitch:** samples should play at the right pitch (I correct for SPU2's 48 kHz rate). If music sounds off-key, that conversion is the first suspect.
+- **Reverb:** it uses the game's own presets, converted to the SPU2's layout. Wrong-sounding echo, or reverb in quiet scenes, would point to that conversion.
+- **Spoken lines will be silent.** XA voice streaming is the deferred follow-up step.
+- **Clicks and crackles:** worth reporting too.
+
+While you listen, I'll keep watching the log for crashes, freezes and the sound statistics.
+
+Committed as fd7a3adf9, with the Planning Doc section and an updated conversation archive.
+
+## User
+
+I'm not hearing anything on console. I believe the gameplay demos have no sound, so the opening cutscene should be tested for audio instead. If you unmute PCSX2, can you get a sample of its audio? ALso, explain how correcting for the 48 Khz sample rate works.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -a "spu:\|map load" build/port/ps2_log.out | tail -8; grep -n -i "volume\|mute\|Audio\|SPU2" tools/port/pcs
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -on "SH1_[A-Z_0-9]*" tools/port/port_link.py | sort -u -t: -k3 | head -40; head -30 src/port/ps2/warp_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat build/port/warp.txt 2>/dev/null; ls build/port | head -40; sed -n 80,110p tools/port/pcsx2_run.py
+
+- tool `Bash`: wpctl status 2>&1 | sed -n '/Audio/,/Video/p' | head -25
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "add_argument(\"--realtime\"\|finally:\|proc.terminate\|os.killpg" tools/port/pcsx2_run.py | head; sed -
+
+## Claude
+
+Adding an audio-recording option to the PCSX2 test runner, so I can capture the opening cutscene's sound.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 128,145p tools/port/pcsx2_run.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='tools/port/pcsx2_run.py'; s=open(p).read() s=s.replace('''    ap.add_argument("--realtime", a
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; python3 - $S/pcsx2.wav <<'P' import wave,struct,
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -a "heartbeat" build/port/ps2_log.out | tail -3; awk '/build Oct  8 2026 20:01:32/{f=1} f' build/port/ps2_l
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ~/ps2dev/ee/bin/mips64r5900el-ps2-elf-nm build/port/sh1.elf | grep -w "s_Status\|s_Voices\|s_KeyOn"; 
+
+## Claude
+
+PCSX2 does produce sound for the opening. On the PS2, though, every voice reports as sounding all the time, yet nothing comes out. I'm reading the sound status from the console's memory.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 30 python3 tools/port/ps2_ctl.py md 0x00c245c0 0x60; timeout 30 python3 tools/port/ps2_ctl.py md s_KeyOn
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/iop/sh1spu/main.c'; s=open(p).read() s=s.replace('''static u8       s_Ring[RING_SIZE
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; (python3 tools/port/port_link.py && bash tools/por
+
+- tool `Bash`: sleep 45; cd /home/alex/Documents/silent-hill-1-ps2-port; grep -a "sh1spu: upload\|spu:\|map load" build/port/ps2_log.out | tail -5
+
+- tool `Monitor`: PS2 sound: spu stats, upload errors, crashes, map loads
+
+## Claude
+
+**PCSX2 recording:** yes, I can record it. I added an `--audio file.wav` option to [pcsx2_run.py](tools/port/pcsx2_run.py). It unmutes PCSX2, runs at normal speed, and records the system's sound output (this may play through your speakers). The opening cutscene has sound in PCSX2: silence through the title, then music and effects once map0_s00 loads, at healthy levels (RMS about 0.05–0.09, peaks up to 0.59). I saved a 75-second clip of the opening at `build/port/pcsx2_opening_audio.wav` for you to listen to. If it sounds right, the libspu conversion is correct and only the hardware path is wrong.
+
+**Why the console was silent:** I read the sound status out of the PS2's memory. All 24 voices were keyed on and holding at full envelope (0x7FF7), yet you heard nothing. The voices were almost certainly playing empty sample memory: real samples end with an end marker, and blank data never reaches one, so the voices sustain forever. The cause is probably this: the IOP's module loader aligned my upload buffer to only 16 bytes, but SPU2 DMA on real hardware needs 64. PCSX2 doesn't enforce that, which is why it worked there. The buffers are now aligned at run time, and a failed upload is logged.
+
+**Next:** the fixed build (20:10:20) is on the console now. Please start a new game and watch the opening cutscene; tell me whether you hear music and effects. I'm watching the sound statistics while you do. Spoken dialogue will still be silent until XA streaming is done.
+
+**How the 48 kHz correction works:**
+- On both chips, a voice's pitch register says how fast to step through its sample data. 0x1000 means one sample per output sample, and 0x2000 means two, an octave up.
+- The PS1's SPU outputs at 44,100 Hz, so pitch 0x1000 plays a sample at 44.1 kHz. The SPU2 outputs at 48,000 Hz, so the same value would play everything about 8.8% faster: roughly 1.5 semitones sharp and shorter.
+- To keep the same speed, the port scales every pitch the game sets by 44100/48000 (about 0.919) before writing it. For example, 0x1000 becomes 0xEB3. The SPU2 then steps through a sample at 0.919 × 48,000 = 44,100 samples per second, exactly the PS1 rate.
+- The scaled value is capped at the register's maximum, 0x3FFF.
+- The result rounds down, so pitch can come out up to one step low (about 0.02% at 0x1000), which is far too small to hear.
+- The SPU2 then resamples to its 48 kHz output by interpolating between samples, as the PS1 did at its own rate.
+
+## Claude
+
+The new build looks healthier on the console: 239 KB of samples uploaded with no errors. Only 3 voices are sounding now, where before all 24 were stuck on, so voices are reaching the ends of their samples. That suggests the sample data is arriving correctly this time. Can you hear anything?
+
+## Claude
+
+The driver is busier now: 11,689 register writes in 10 seconds, with 5 voices sounding and voices starting and ending normally. That looks like music or effects playing.
+
+## Claude
+
+The sound driver is still active and looks normal: about 11,600 register writes in 10 seconds, with 2 voices sounding.
+
+## Claude
+
+The sound driver is still active, with steady activity and 5 voices sounding. Let me know what you hear.
+
+## Claude
+
+The sound driver is still active, now with 8 voices sounding at once. No errors or crashes.
+
+## Claude
+
+The sound driver is still active, with 9 voices sounding. No errors or crashes.
+
+## Claude
+
+The sound driver is still active. Can you hear sound on the console now?
+
+## Claude
+
+The sound driver is still active with 3 voices sounding. No errors.
+
+## Claude
+
+The sound driver is still active (5 voices). I'll stay quiet now unless something changes: an error, a crash, a map load, or a message from you.
+
+- tool `TaskStop`: 
+
+- tool `Monitor`: PS2: sound errors, crashes, map loads
+
+## Claude
+
+I've narrowed the watch so the routine sound statistics no longer come through. Now I'll only hear about sound errors, crashes, map loads and restarts. I'm waiting to hear whether the console has sound.
+
+## User
+
+I still can't hear anything on console
+
+- tool `Bash`: find / -path /proc -prune -o \( -name "freesd*.c" -o -name "spu2*.c" -o -name "audsrv*.c" -o -name "spu2regs.h" \) -print 2>/dev/null | head; find ~ -maxdepth 4
+
+- tool `Bash`: cd ~/ps2tools/ps2sdk-src; ls iop/sound/ 2>/dev/null; f=$(grep -rl "sceSdInit\|int sceSdInit" iop/sound/libsd/src 2>/dev/null | head -3); echo $f; grep -rn "MMIX
+
+- tool `Bash`: cd ~/ps2tools/ps2sdk-src && ls && grep -rl "sceSdInit" --include=*.c . | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/libspu_port.c'; s=open(p).read() s=s.replace('0x8000 | (s_RevOn << 7)','ATTR_ON | (s
+
+## Claude
+
+A build with the unmute bit set (and both core-1 input volumes at full) is now on the PS2; the restart was acknowledged. Please play the opening cutscene again and tell me whether you hear anything.
+
+One caveat: I said PCSX2 ignores that bit, but I haven't checked. If PCSX2 treats it as "mute" instead, this build would go silent there. I'll check PCSX2 next with the recording option, whatever you hear on the console.
+
+## Claude
+
+The new build (20:14:21) has started on the PS2, and the sound module came up. Please try the opening cutscene. I'll hold off on the PCSX2 recording until you've listened, so it doesn't play over your speakers while you're checking the console.
+
+## Claude
+
+The opening area (map0_s00) has loaded on the console, so the cutscene's sound should start now. Do you hear anything?
+
+## Claude
+
+You've moved on to the alley (map0_s01). Did the opening cutscene have sound this time?
+
+## User
+
+Yes. The cutscene in the cafe which is playing now started fine, but seemed to break as it kept going. One of the sounds is repeating.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk '/build Oct  8 2026 20:14:21/{f=1} f' build/port/ps2_log.out | grep -av "heartbeat\|spu:\|libpad\|libgpu\|gs
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^void Sd_Xa\|^.*Sd_Xa.*(void)\|CdControl\|CdRead\|CdlReadS\|CdlSetfilter\|CdlSetmode\|CdSync\|CdReady" 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 862,990p src/bodyprog/sound/sd_call.c
+
+## Claude
+
+Good: sound works on the console. Bit 14 was the mute switch, as on the PS1.
+
+The café cutscene has Cybil's spoken lines. Those are streamed XA audio, which we haven't implemented, so silence there is expected for now. I checked how the game schedules those lines: it times them from frame counts, so the cutscene carries on without them. Missing dialogue on its own shouldn't break anything.
+
+For the repeating sound, my main suspect is key timing. The PS1 driver turns a voice off and then straight back on (key off, then key on). The port collects those register writes and sends them to the IOP in one batch, so both can reach the SPU2 within the same 1/48000 s step. The SPU2 can then drop the key off, and a looping sample keeps playing forever. That fits "started fine, then broke as it kept going".
+
+To confirm it, a few details would help:
+1. What does the repeating sound resemble: a short sound effect (footstep, door, impact), a musical phrase, or a drone or ambience?
+2. Does it keep going after the cutscene ends, or after you change areas?
+3. Do other sounds (music, Harry's footsteps) still play normally around it?
+
+## User
+
+It sounded like one of the instruments in the cutscene music. It ended after the cutscene. I didn't hear anything obviously wrong.
+
+## User
+
+[Request interrupted by user]
+
+## User
+
+Didn't hear any sound effects as obviously wrong, that is
+
+## Claude
+
+A stuck instrument note that stops when the cutscene's music ends points to a lost key off. That fits the timing theory: both key writes landed in the same 1/48000 s step.
+
+The fix: the IOP module now leaves at least two SPU2 sample periods (~42 µs) between successive key-on and key-off register writes, as the PS1 driver's own call timing did. I'll wait on the SPU2 itself rather than a CPU loop calibrated by guesswork.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "IOP_RCNT\|GetSystemTime\|SysClock\|define.*TIMER" ~/ps2dev/ps2sdk/iop/include/timrman.h ~/ps2dev/ps2sdk
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/iop/sh1spu/main.c'; s=open(p).read() s=s.replace('''/** Runs one command''','''/** W
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "Planning Doc.md" <<'E' - Fixes from testing on hardware (2026-10-08):   - The IOP module loader aligns d
+
