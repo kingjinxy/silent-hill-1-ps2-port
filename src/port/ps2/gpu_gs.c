@@ -78,7 +78,12 @@ extern void Display_EnsureInit(void); /* display_ps2.c */
 /* Two packet buffers, used in turn (for asynchronous sends; see dma_send_impl). */
 #define PKT_WORDS 8192 /* 64-bit words per buffer */
 static u64x s_PktBuf[2][PKT_WORDS] __attribute__((aligned(64)));
-static u64x* s_Pkt = s_PktBuf[0];
+/* Written through the uncached-accelerated mirror of RAM (0x30000000 + address): the packets (~128 KB a
+ * frame) only go to the GS by DMA, so building them through the data cache only evicted the game's data
+ * and loaded lines about to be overwritten. Writes are combined in the EE's UCAB; `sync.l` drains it
+ * before a send. The DMA gets the plain address (s_PktBuf). */
+#define UCAB(p) ((u64x*)(((u32)(p) & 0x0FFFFFFF) | 0x30000000))
+static u64x* s_Pkt; /* UCAB(s_PktBuf[s_PktCur]), set by init() */
 static int   s_PktCur;
 static int  s_Pos;            /* words used */
 static int  s_TagAt = -1;     /* open tag (word index), -1 = none */
@@ -159,10 +164,11 @@ void GpuGs_Flush(void)
         return;
     }
     s_Pkt[s_LastTag] |= 1 << 15; /* EOP */
-    dma_send(s_Pkt, (u32)(s_Pos / 2));
+    __asm__ volatile("sync.l" ::: "memory"); /* the UCAB's last writes reach RAM before the DMA reads */
+    dma_send(s_PktBuf[s_PktCur], (u32)(s_Pos / 2));
     /* Build the next packet in the other buffer (whose own send finished before this one started). */
     s_PktCur ^= 1;
-    s_Pkt     = s_PktBuf[s_PktCur];
+    s_Pkt     = UCAB(s_PktBuf[s_PktCur]);
     s_Pos     = 0;
     s_LastTag = -1;
 }
@@ -470,6 +476,10 @@ static int s_Ready;
 static void init(void)
 {
     s32 i;
+    if (!s_Pkt)
+    {
+        s_Pkt = UCAB(s_PktBuf[s_PktCur]);
+    }
     if (s_Ready)
     {
         return;

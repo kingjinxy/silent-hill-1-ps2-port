@@ -499,3 +499,7 @@ Ideas to try, roughly by expected payoff:
   - On the PS2: game update 3,494 → 3,248k-cycles, and the cutscene's common rate went from 40–43 to 44–46 fps.
 - GTE pass 2: func_80057A3C's per-normal light dot product (gte_ll = MVMVA sf 1 LLM V0 lm 1) and func_8005AC50's NCLIPs (triangle, and the quad's corner-4 retest) are now in C. Checked against the GTE in SH_PORT_CHECK_BATCH builds: 0 mismatches over 5.9M NCLIPs.
 - Benchmark mode (SH1_BENCH=1, ee_compile_check) is now deterministic. While a demo plays, the main loop doesn't wait for vertical blanks, and it runs the vertical blank callback (demo frame counter, state timers) itself, once per simulated blank. The demo keeps its own time step. The demo then plays the same path as at normal speed, as fast as the PS2 manages, so the frames per second it reaches show the headroom. "demo trace:" lines (Harry's position every 60 demo frames; -DSH_PORT_DEMO_TRACE in normal builds) showed the same positions; the frame numbering is shifted by load-time polling frames.
+- EE cache changes (2026-10-09), correct in PCSX2 but not yet measured on the console (PCSX2 doesn't model the caches):
+  - GS packets are written through the uncached-accelerated mirror (0x30000000 + address), with `sync.l` before each send.
+  - DrawOTag prefetches (`pref`) the next primitive of the ordering table while converting the current one.
+  - Asynchronous SPU sends, bounded to one queued send (the next send waits for the previous one), are also in this build, waiting for the console test.

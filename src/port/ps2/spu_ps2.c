@@ -113,6 +113,9 @@ static void send(u32 n)
     while (size - (s_Sent - st->done) <= tail + n) /* wait for room (never fill the ring completely) */
     {
     }
+    /* The previous send must be finished first: at most one send (3 transfers) is ever queued, so the
+     * kernel's SIF DMA queue never fills, even with interrupts off. */
+    dma_wait_id(&s_BufDma[s_Buf ^ 1]);
     if (tail)
     {
         dma(wrap, st->ring + s_Pos, 16);
@@ -124,12 +127,13 @@ static void send(u32 n)
     s_Sent += n;
     s_WPosBuf[s_Buf][0] = s_Pos;
     dma(s_WPosBuf[s_Buf], st->wpos, 16);
-    s_BufDma[s_Buf] = s_DmaId;
-    /* Wait for this send to finish. Not waiting (and alternating the two buffers) hung a real PS2 at
-     * the first sound bank upload (2026-10-09): sends run with interrupts off, and the kernel seems to
-     * start queued SIF transfers only from its interrupt handler, so SifSetDma spun forever once the
-     * queue was full. Non-blocking sends need a design that never waits with interrupts off. */
-    dma_wait_id(&s_BufDma[s_Buf]);
+    s_BufDma[s_Buf] = s_DmaId; /* the last of this send's transfers */
+    /* Not waited for here: the next command goes into the other buffer (whose send was waited for at
+     * the start of this one), and the next send waits for this one. (2026-10-09: a version that never
+     * waited hung a PS2 at boot; that freeze turned out to be ResetCallback, but this bound keeps the
+     * SIF queue from filling either way.) */
+    s_Buf ^= 1;
+    s_Packet = s_PacketBuf[s_Buf];
 #ifdef SH_PORT_MSG_DEBUG
     __asm__ volatile("mfc0 %0, $9" : "=r"(t1));
     if (t1 - t0 > 294912)

@@ -245,8 +245,17 @@ static void DrawOTagImpl(u_long* p)
             break;
         }
         prim = (const u32*)ptr24(addr);
-        submit_tagged(prim);
-        addr = prim[0] & 0xFFFFFF;
+        {
+            /* The next primitive's line starts loading while this one is converted: the ordering
+             * table links scattered packets, and each walk step otherwise waited for a cache miss. */
+            u32 next = prim[0] & 0xFFFFFF;
+            if (next != OT_END && next != 0)
+            {
+                __asm__ volatile("pref 0, 0(%0)" : : "r"(ptr24(next)));
+            }
+            submit_tagged(prim);
+            addr = next;
+        }
         steps++;
     }
 
