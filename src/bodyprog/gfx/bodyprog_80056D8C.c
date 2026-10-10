@@ -482,10 +482,42 @@ void func_80057A3C(s_MeshHeader* meshHdr, s32 offset, s_GteScratchData* scratchD
         scratchData->field_3AC.vy = scratchData->field_3A0.ny << 5;
         scratchData->field_3AC.vz = scratchData->field_3A0.nz << 5;
 
+#ifdef SH_PORT
+        {
+            /* gte_ll (MVMVA sf 1, light matrix, V0, no translation, lm 1) in C: IR1 = (row 0 of the
+             * light matrix, the light vector set above, . V0) >> 12, clamped to 0..7FFFh. Saves a GTE
+             * command per normal (~590 a frame in map3_s00); the GTE's IR/MAC registers aren't read
+             * afterwards. -DSH_PORT_CHECK_BATCH compares it with the GTE. */
+            s32 mac = (s32)(((s64)(lightVec->vx * scratchData->field_3AC.vx) + (s64)(lightVec->vy * scratchData->field_3AC.vy) +
+                             (s64)(lightVec->vz * scratchData->field_3AC.vz)) >> 12);
+            var_v1  = mac < 0 ? 0 : mac > 0x7FFF ? 0x7FFF : mac;
+#ifdef SH_PORT_CHECK_BATCH
+            {
+                static s32 checks, mismatches;
+                s32        gte;
+                gte_ldv0(&scratchData->field_3AC);
+                gte_ll();
+                gte = gte_stIR1();
+                checks++;
+                if (gte != var_v1 && mismatches++ < 20)
+                {
+                    printf("light check: mismatch: C %d, GTE %d (light %d %d %d, normal %d %d %d)\n", var_v1, gte,
+                           lightVec->vx, lightVec->vy, lightVec->vz, scratchData->field_3AC.vx, scratchData->field_3AC.vy,
+                           scratchData->field_3AC.vz);
+                }
+                if ((checks & 0xFFFF) == 0)
+                {
+                    printf("light check: %d normals, %d mismatches\n", checks, mismatches);
+                }
+            }
+#endif
+        }
+#else
         gte_ldv0(&scratchData->field_3AC);
         gte_ll();
 
         var_v1   = gte_stIR1();
+#endif
         var_v1  += temp_t2;
         var_v1 >>= 5;
 
@@ -792,6 +824,22 @@ static inline s32 Port_Nclip(s32 xy0, s32 xy1, s32 xy2)
     return (s32)((s64)(x0 * y1) + (s64)(x1 * y2) + (s64)(x2 * y0) - (s64)(x0 * y2) - (s64)(x1 * y0) -
                  (s64)(x2 * y1));
 }
+
+#ifdef SH_PORT_CHECK_BATCH
+static void Port_NclipCheck(s32 c, s32 gte)
+{
+    static s32 checks, mismatches;
+    checks++;
+    if (c != gte && mismatches++ < 20)
+    {
+        printf("nclip check: mismatch: C %d, GTE %d\n", c, gte);
+    }
+    if ((checks & 0xFFFF) == 0)
+    {
+        printf("nclip check: %d tests, %d mismatches\n", checks, mismatches);
+    }
+}
+#endif
 
 // NCLIP of SXY0-2 into `out`; NCLIP0 replaces SXY0 (the PS1 code's gte_ldsxy0) and tests again.
 #define PORT_NCLIP3(a, b, c, out) \
@@ -3770,10 +3818,26 @@ void func_8005AC50(s_MeshHeader* meshHdr, s_GteScratchData2* scratchData, GsOT_T
                 continue;
             }
 
+#ifdef SH_PORT
+            /* NCLIP in C (exact, as Gfx_MeshDrawPort): ~1,000 GTE commands a frame fewer in map3_s00. */
+            r4 = Port_Nclip(*(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_0],
+                            *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_1],
+                            *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_2]);
+#ifdef SH_PORT_CHECK_BATCH
+            {
+                s32 gte;
+                gte_NormalClip(*(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_0],
+                               *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_1],
+                               *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_2], &gte);
+                Port_NclipCheck(r4, gte);
+            }
+#endif
+#else
             gte_NormalClip(*(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_0],
                            *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_1],
                            *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_2],
                            &r4);
+#endif
 
             if (r4 <= 0)
             {
@@ -3816,17 +3880,53 @@ void func_8005AC50(s_MeshHeader* meshHdr, s_GteScratchData2* scratchData, GsOT_T
                 continue;
             }
 
+#ifdef SH_PORT
+            sp4 = Port_Nclip(*(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_0],
+                             *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_1],
+                             *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_2]);
+#ifdef SH_PORT_CHECK_BATCH
+            {
+                s32 gte;
+                gte_ldsxy3(*(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_0],
+                           *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_1],
+                           *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_2]);
+                gte_nclip();
+                gte_stopz(&gte);
+                Port_NclipCheck(sp4, gte);
+            }
+#endif
+#else
             gte_ldsxy3(*(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_0],
                        *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_1],
                        *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_2]);
             gte_nclip();
             gte_stopz(&sp4);
+#endif
 
             if (sp4 <= 0)
             {
+#ifdef SH_PORT
+                /* NCLIP of corners 4, 2, 3 (the PS1 code replaces SXY0). */
+                sp4 = Port_Nclip(*(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_3],
+                                 *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_1],
+                                 *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_2]);
+#ifdef SH_PORT_CHECK_BATCH
+                {
+                    s32 gte;
+                    gte_ldsxy3(*(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_0],
+                               *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_1],
+                               *(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_2]);
+                    gte_ldsxy0(*(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_3]);
+                    gte_nclip();
+                    gte_stopz(&gte);
+                    Port_NclipCheck(sp4, gte);
+                }
+#endif
+#else
                 gte_ldsxy0(*(s32*)&scratchData->screenXy_0[scratchData->u.s_1.field_3]);
                 gte_nclip();
                 gte_stopz(&sp4);
+#endif
 
                 if (sp4 >= 0)
                 {

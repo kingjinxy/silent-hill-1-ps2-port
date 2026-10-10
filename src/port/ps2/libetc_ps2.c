@@ -13,6 +13,7 @@ static volatile int s_VBlanks;
 static int          s_Sema = -1;
 static int          s_HandlerId = -1;
 static void (*s_Callback)(void);
+static volatile int s_CallbackManual;
 volatile int g_PortInInterrupt; /* set while the game's vertical blank callback runs (profilers) */
 static unsigned int s_WaitCycles; /* EE cycles spent waiting in VSync (idle), for the heartbeat */
 
@@ -77,7 +78,7 @@ static int vblank_handler(int cause)
         extern void Port_AgentVBlank(void); /* agent_ps2.c: commands from the VM */
         Port_AgentVBlank();
     }
-    if (s_Callback)
+    if (s_Callback && !s_CallbackManual)
     {
         g_PortInInterrupt = 1;
         s_Callback();
@@ -141,6 +142,21 @@ void Port_VBlankReinstall(void)
  * ResetGraph (recompiled) calls it again during boot, on some paths; clearing every time removed the
  * game's vertical blank callback (Screen_VSyncCallback), whose counter the boot logos wait for: the
  * game sometimes stayed on the Konami logo (2026-10-09). */
+/** Benchmark mode (game_main.c, SH1_BENCH): while on, the vertical blank callback isn't called from
+ * the interrupt; the main loop calls it (Port_VSyncCallbackRun) once per simulated vertical blank. */
+void Port_VSyncCallbackManual(int on)
+{
+    s_CallbackManual = on;
+}
+
+void Port_VSyncCallbackRun(void)
+{
+    if (s_Callback)
+    {
+        s_Callback();
+    }
+}
+
 int ResetCallback(void)
 {
     static int done;

@@ -252,9 +252,6 @@ void MainLoop(void) // 0x80032EE0
             Demo_PresentIntervalUpdate();
 
             interval      = g_Demo_VideoPresentInterval;
-#if defined(SH_PORT) && defined(SH_PORT_BENCH)
-            interval = 1; // Port benchmark (`SH1_BENCH=1`): demo at one frame per vertical blank (desyncs).
-#endif
             g_PrevVBlanks = vBlanks;
 
             if (interval < g_IntervalVBlanks)
@@ -262,6 +259,24 @@ void MainLoop(void) // 0x80032EE0
                 interval = g_IntervalVBlanks;
             }
 
+#if defined(SH_PORT) && defined(SH_PORT_BENCH)
+            {
+                // Port benchmark (`SH1_BENCH=1`): the demo runs uncapped, but with its own timing. No
+                // waiting for vertical blanks; the vertical blank callback (demo frame counter, state
+                // timers) runs here once per simulated blank instead of from the interrupt; the frame's
+                // time step is the demo's own (vCount below). The demo plays the same frames as at
+                // normal speed, as fast as the PS2 manages: frames per second = headroom.
+                extern void Port_VSyncCallbackManual(int on);
+                extern void Port_VSyncCallbackRun(void);
+                s32         k;
+                Port_VSyncCallbackManual(1);
+                for (k = 0; k < interval; k++)
+                {
+                    Port_VSyncCallbackRun();
+                }
+                g_VBlanks = interval;
+            }
+#else
             do
             {
                 VSync(SyncMode_Wait);
@@ -269,6 +284,7 @@ void MainLoop(void) // 0x80032EE0
                 g_PrevVBlanks++;
             }
             while (g_VBlanks < interval);
+#endif
 
             g_UncappedVBlanks = g_VBlanks;
             g_VBlanks         = MIN(g_VBlanks, 4);
@@ -276,9 +292,28 @@ void MainLoop(void) // 0x80032EE0
             vCount     = g_Demo_VideoPresentInterval * H_BLANKS_PER_TICK;
             vCountCopy = g_UncappedVBlanks * H_BLANKS_PER_TICK;
             g_VBlanks  = g_Demo_VideoPresentInterval;
+#if defined(SH_PORT) && (defined(SH_PORT_BENCH) || defined(SH_PORT_DEMO_TRACE))
+            {
+                // Demo sync trace: Harry's position every 60 demo frames; identical lines between a
+                // normal and an uncapped (SH1_BENCH=1) run mean the demo plays the same.
+                static s32 demoFrames;
+                if (++demoFrames % 60 == 0)
+                {
+                    printf("demo trace: frame %d, Harry at %d %d %d\n", demoFrames,
+                           g_SysWork.playerWork.player.position.vx, g_SysWork.playerWork.player.position.vy,
+                           g_SysWork.playerWork.player.position.vz);
+                }
+            }
+#endif
         }
         else
         {
+#if defined(SH_PORT) && defined(SH_PORT_BENCH)
+            {
+                extern void Port_VSyncCallbackManual(int on);
+                Port_VSyncCallbackManual(0); /* not a demo: the interrupt calls it again */
+            }
+#endif
 #ifdef SH_PORT
             {
                 // Test runs (pcsx2_run.py --gameplay) time unbroken stretches of gameplay.
