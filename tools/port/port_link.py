@@ -206,6 +206,8 @@ def main():
     gpu = {"soft": 0, "gs": 1, "compare": 2}[os.environ.get("SH1_GPU", "gs")]
     # Profiling counters (include/port/prof.h): SH1_PROF=1.
     prof = ["-DSH_PORT_PROF"] if os.environ.get("SH1_PROF") else []
+    # Benchmark builds (SH1_BENCH=1, as tools/port/ee_compile_check.sh): the Demo menu's frame dumps.
+    bench = ["-DSH_PORT_BENCH"] if os.environ.get("SH1_BENCH") else []
     # Fixed debug frame dumps (src/port/ps2/display_ps2.c): SH1_DUMP=1.
     dump = ["-DSH_PORT_DUMP_FRAMES"] if os.environ.get("SH1_DUMP") else []
     # Disc read trace (src/port/ps2/libcd_ps2.c): SH1_TRACE_CD=1.
@@ -224,6 +226,8 @@ def main():
     dump += ["-DSH_PORT_MSG_DEBUG"] if os.environ.get("SH1_MSG_DEBUG") else []
     # Fog collapse ceiling test (PS2 Optimizations.md): SH1_FOG_TEST=1 drops the world mesh's fog underlay.
     dump += ["-DSH_PORT_FOG_TEST"] if os.environ.get("SH1_FOG_TEST") else []
+    # SH1_NO_FOG_PAIRS=1: fog pairs drawn as two separate polygons (the reference for pair fusion).
+    dump += ["-DSH_PORT_NO_FOG_PAIRS"] if os.environ.get("SH1_NO_FOG_PAIRS") else []
     # The Demo menu's cutscene list (src/port/demo_menu.c), found in the decomp's map code.
     run([sys.executable, "tools/port/cutscene_list.py", "--c", os.path.join(OUT, "demo_cutscenes.c")])
     for src in sorted(glob.glob("src/port/*.c")) + [os.path.join(OUT, "demo_cutscenes.c")]:
@@ -233,7 +237,7 @@ def main():
         solo = ["-DSH_PORT_XA_SOLO"] if os.environ.get("SH1_XA_SOLO") else []
         # Voiced text timer test (src/port/demo_menu.c): SH1_MSG_DEBUG=1.
         solo += ["-DSH_PORT_MSG_DEBUG"] if os.environ.get("SH1_MSG_DEBUG") else []
-        run([CC, "-c", *PORT_CFLAGS, *prof, *solo, "-DSH_PORT_GPU=%d" % gpu, src, "-o", obj])
+        run([CC, "-c", *PORT_CFLAGS, *prof, *solo, *bench, "-DSH_PORT_GPU=%d" % gpu, src, "-o", obj])
         port_objs.append(obj)
     # PS2-side HAL code (src/port/ps2/): compiled against ps2sdk's headers, not the game's.
     for src in sorted(glob.glob("src/port/ps2/*.c")):

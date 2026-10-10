@@ -118,8 +118,11 @@ static void dma_send(void* data, u32 qwc)
  * synchronous again: an asynchronous version (starting the GIF DMA channel directly and waiting only
  * before the next send) worked in PCSX2 but hung a real PS2 at the first frames with interrupts off
  * (2026-10-09; to investigate). */
+static void pend_flush(void); /* fog pairs, below */
+
 void GpuGs_Sync(void)
 {
+    pend_flush();
 }
 
 static void dma_send_impl(void* data, u32 qwc)
@@ -158,6 +161,7 @@ static void tag_close(void)
 void GpuGs_Flush(void) __attribute__((noinline));
 void GpuGs_Flush(void)
 {
+    pend_flush();
     tag_close();
     if (s_Pos == 0)
     {
@@ -234,6 +238,7 @@ static inline void set(u32 reg, u64x val)
 /** The GS was reset (display mode change) or its state changed behind our back. */
 void GpuGs_StateLost(void)
 {
+    pend_flush();
     s_Epoch++;
     memset(s_RegValid, 0, sizeof(s_RegValid));
 }
@@ -798,7 +803,41 @@ static int too_big_xy(const s32* x, const s32* y, int a, int b, int c)
 
 static u32 s_StFogPair[2][4]; /* GpuGs_Stats */
 
-static u32 polygon(const u32* w, s32 n)
+/** A polygon's GS primitives: a quad as one strip, or its halves (or a triangle) when they fit what
+ * the GPU draws (1023x511). */
+static void emit_poly(int textured, u64x prim, const u64x* rgbaq, const u64x* uv, const u64x* xyz, const s32* x,
+                      const s32* y, s32 nv)
+{
+    if (nv == 4)
+    {
+        int big0 = too_big_xy(x, y, 0, 1, 2), big1 = too_big_xy(x, y, 1, 2, 3);
+        if (!big0 && !big1)
+        {
+            emit_packed(textured, prim | 4, rgbaq, uv, xyz, 4); /* both halves as one strip */
+        }
+        else
+        {
+            if (!big0)
+            {
+                emit_packed(textured, prim | 3, rgbaq, uv, xyz, 3);
+            }
+            if (!big1)
+            {
+                emit_packed(textured, prim | 3, rgbaq + 1, uv + 1, xyz + 1, 3);
+            }
+        }
+    }
+    else if (!too_big_xy(x, y, 0, 1, 2))
+    {
+        emit_packed(textured, prim | 3, rgbaq, uv, xyz, 3);
+    }
+}
+
+static void emit_poly(int textured, u64x prim, const u64x* rgbaq, const u64x* uv, const u64x* xyz, const s32* x,
+                      const s32* y, s32 nv);
+
+/** A GP0 polygon; `under`: a fog pair's underlay to draw first (GpuGs_Commands), or NULL. */
+static u32 polygon(const u32* w, s32 n, const u32* under)
 {
     u32  cmd      = w[0] >> 24;
     s32  nv       = (cmd & 0x08) ? 4 : 3;
@@ -842,7 +881,8 @@ static u32 polygon(const u32* w, s32 n)
     }
     p.semiMode = (tpage >> 5) & 3;
     {
-        /* Fog pairs (PS2 Optimizations.md, option 1): a plain gouraud polygon followed by a
+
+/* Fog pairs (PS2 Optimizations.md, option 1): a plain gouraud polygon followed by a
          * semi-transparent textured one on the same corners, counted by the textured one's blend
          * mode and whether the plain one was itself semi-transparent. */
         static s32 px[4], py[4], pnv, pplain, psemi;
@@ -870,29 +910,23 @@ static u32 polygon(const u32* w, s32 n)
     prim = prim_state(&p);
     s_StDate += s_CheckMask * (nv == 4 ? 2 : 1);
     s_StRtTex += (textured && ((tpage >> 7) & 3) >= 2) * (nv == 4 ? 2 : 1);
-    if (nv == 4)
+    if (under)
     {
-        int big0 = too_big_xy(x, y, 0, 1, 2), big1 = too_big_xy(x, y, 1, 2, 3);
-        if (!big0 && !big1)
+        /* The fog pair's underlay (GpuGs_Commands): an opaque gouraud quad on the same corners, drawn
+         * first under this one's state. Only the PRIM bits differ (no TME, no ABE), so nothing is
+         * switched between the two. Its alpha is 0x40 rather than 0: it passes the textured state's
+         * alpha test (alpha != 0), and the frame buffer still stores bit 15 = 0 (alpha's top bit), as
+         * an untextured polygon does (with set-mask, FBA sets it either way). Same picture as two
+         * separate polygons. */
+        u64x urgbaq[4];
+        for (i = 0; i < 4; i++)
         {
-            emit_packed((int)textured, prim | 4, rgbaq, uv, xyz, 4); /* both halves as one strip */
+            urgbaq[i] = (u64x)(under[i * 2] & 0xFFFFFF) | (0x40ULL << 24) | (0x3F800000ULL << 32);
         }
-        else
-        {
-            if (!big0)
-            {
-                emit_packed((int)textured, prim | 3, rgbaq, uv, xyz, 3);
-            }
-            if (!big1)
-            {
-                emit_packed((int)textured, prim | 3, rgbaq + 1, uv + 1, xyz + 1, 3);
-            }
-        }
+        s_StDate += s_CheckMask * 2;
+        emit_poly(0, prim & ~(u64x)((1 << 4) | (1 << 6)), urgbaq, uv, xyz, x, y, 4);
     }
-    else if (!too_big_xy(x, y, 0, 1, 2))
-    {
-        emit_packed((int)textured, prim | 3, rgbaq, uv, xyz, 3);
-    }
+    emit_poly((int)textured, prim, rgbaq, uv, xyz, x, y, nv);
     return (u32)k;
 }
 
@@ -1134,11 +1168,14 @@ static void settings(u32 w)
     }
 }
 
-#ifdef SH_PORT_FOG_TEST
-/* Fog collapse, ceiling test (PS2 Optimizations.md, option 1): an opaque gouraud quad (GP0 0x38) is
- * held back; if the next primitive is a semi-transparent textured gouraud quad in additive mode (the
- * world mesh's fog pair) on the same corners, the held one is dropped (wrong picture: this measures
- * the most the collapse can save), otherwise drawn first. */
+/* Fog pairs (PS2 Optimizations.md, option 1, "pair fusion"): the world mesh draws each fogged face
+ * as an opaque gouraud quad (GP0 0x38) and, over it, a semi-transparent textured gouraud quad (0x3E)
+ * in additive mode on the same corners, ~460-560 pairs a frame. An opaque gouraud quad is held back
+ * until the next command: if that is its textured partner, both are drawn together under one state
+ * (polygon()'s `under`), otherwise the held quad is drawn first, as it was. Anything else that draws
+ * or reads the GS (pend_flush in the other entry points) draws a held quad first. SH_PORT_FOG_TEST
+ * (SH1_FOG_TEST=1) instead drops the underlay: a wrong picture, measuring the most a fog collapse
+ * could save. */
 static u32 s_FogPend[8];
 static s32 s_FogPending;
 
@@ -1147,7 +1184,16 @@ static int fog_pair(const u32* w, s32 n)
     return n >= 12 && (w[0] >> 24) == 0x3E && ((w[5] >> 21) & 3) == 1 && w[1] == s_FogPend[1] && w[4] == s_FogPend[3] &&
            w[7] == s_FogPend[5] && w[10] == s_FogPend[7];
 }
-#endif
+
+/** Draws a held quad (before anything else reaches the GS). */
+static void pend_flush(void)
+{
+    if (s_FogPending)
+    {
+        s_FogPending = 0;
+        polygon(s_FogPend, 8, NULL);
+    }
+}
 
 /** @brief Executes a stream of GP0 words (one OT packet or DrawPrim). */
 void GpuGs_Commands(const u32* w, s32 n)
@@ -1158,20 +1204,30 @@ void GpuGs_Commands(const u32* w, s32 n)
         u32 cmd  = w[0] >> 24;
         u32 used = 1;
 
-#ifdef SH_PORT_FOG_TEST
         if (s_FogPending)
         {
             s_FogPending = 0;
             if (fog_pair(w, n))
             {
-                s_StFogPair[1][1]++; /* dropped */
+#ifdef SH_PORT_FOG_TEST
+                s_StFogPair[1][1]++; /* the underlay dropped */
+                used = polygon(w, n, NULL);
+#else
+                PROF_BEGIN("gs: fog pair (both polygons)")
+                used = polygon(w, n, s_FogPend);
+                PROF_END("gs: fog pair (both polygons)")
+#endif
+                w += used;
+                n -= (s32)used;
+                continue;
             }
-            else
-            {
-                polygon(s_FogPend, 8);
-            }
+            polygon(s_FogPend, 8, NULL);
         }
+#ifndef SH_PORT_NO_FOG_PAIRS
         if (cmd == 0x38 && n >= 8)
+#else
+        if (0)
+#endif
         {
             memcpy(s_FogPend, w, 32);
             s_FogPending = 1;
@@ -1179,11 +1235,10 @@ void GpuGs_Commands(const u32* w, s32 n)
             n -= 8;
             continue;
         }
-#endif
         if (cmd >= 0x20 && cmd < 0x40)
         {
             PROF_BEGIN("gs: polygon (incl. state)")
-            used = polygon(w, n);
+            used = polygon(w, n, NULL);
             PROF_END("gs: polygon (incl. state)")
         }
         else if (cmd >= 0x40 && cmd < 0x60)
@@ -1224,6 +1279,7 @@ void GpuGs_Commands(const u32* w, s32 n)
 /** g_PortVram's rectangle was written by the CPU: copy it to the GS. */
 void GpuGs_LoadImage(s32 x, s32 y, s32 w, s32 h)
 {
+    pend_flush();
     s32 row, col;
     init();
     if (w <= 0 || h <= 0)
@@ -1270,12 +1326,14 @@ void GpuGs_LoadImage(s32 x, s32 y, s32 w, s32 h)
 
 void GpuGs_ClearImage(s32 x, s32 y, s32 w, s32 h, u32 rgb)
 {
+    pend_flush();
     init();
     fill_rect(x, y, w, h, rgb);
 }
 
 void GpuGs_MoveImage(s32 sx, s32 sy, s32 dx, s32 dy, s32 w, s32 h)
 {
+    pend_flush();
     init();
     move(sx, sy, dx, dy, w, h);
 }
@@ -1339,6 +1397,7 @@ static void download_rows(u16 (*dst)[VRAM_W], s32 y, s32 h)
 /** Copies the GS's VRAM into dst (a 1024x512 array). */
 void GpuGs_Download(u16 (*dst)[VRAM_W])
 {
+    pend_flush();
     init();
     download_rows(dst, 0, 256);
     download_rows(dst, 256, 256);
@@ -1358,6 +1417,7 @@ void GpuGs_StoreAll(void)
  * psm: its format). */
 void GpuGs_DisplayCopy(u32 fbp, u32 fbw, u32 psm, s32 x, s32 y, s32 w, s32 h)
 {
+    pend_flush();
     s_Epoch++;
     init();
     set(R_FRAME, (u64x)fbp | ((u64x)fbw << 16) | ((u64x)psm << 24));

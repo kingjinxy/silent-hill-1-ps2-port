@@ -133,3 +133,31 @@ Ceiling test (`SH1_FOG_TEST=1`, `SH_PORT_FOG_TEST` in gpu_gs.c: the underlay of 
 The collapse can save at most ~685k cycles a frame (23% of DrawOTag, 12% fps here), and only by giving up exactness.
 
 Exact alternative to try first, **pair fusion**: keep both GS primitives but convert the pair as one unit. Parse once, compute the four XYZ once and share them, and emit the two GS primitives back to back with their two fixed states prebuilt (no prim_state recomputation as the state alternates). Expected: a good part of the 685k, with identical output (checkable with bench_frames.sh/compare_dumps.py).
+
+### 2026-10-10: pair fusion (option 1, exact): kept
+
+gpu_gs.c GpuGs_Commands:
+- An opaque gouraud quad (GP0 0x38) is held until the next command. If that is its partner (0x3E, semi-transparent textured gouraud quad, additive, same four corners), polygon() draws both under the textured one's state (`under`). Otherwise the held quad is drawn first, as before.
+- Only the PRIM bits differ (no TME, no ABE), so nothing is switched between the two.
+- The underlay's alpha is 0x40 instead of 0: it passes the textured state's alpha test (alpha != 0), and the frame buffer stores alpha's top bit (0) as before, so the mask bit is unchanged; FBA sets it with set-mask either way.
+- Every other entry point (LoadImage, MoveImage, ClearImage, Download, DisplayCopy, Flush, Sync, StateLost) draws a held quad first (pend_flush).
+- SH1_NO_FOG_PAIRS=1 builds draw the pairs separately (the reference).
+
+Exactness, checked with a new deterministic cutscene benchmark (tools/port/bench_cutscene.sh N OUTDIR):
+- SH1_BENCH builds step Demo cutscenes by one simulated vertical blank a frame (game_main.c), with the VSync callback run by the main loop.
+- The sound driver's voice line timing reads the simulated clock (sd_call.c SD_XA_VSYNC_COUNT, libetc_ps2.c Port_SimVBlanks). Only there: making VSync(-1) itself simulated froze the game (the disc's seek-timing loop waits within a frame for it to move).
+- The Demo menu dumps a frame every 200 frames after the event starts.
+- Two runs of one build: 10 of 10 identical.
+- Fused against separate, Kaufmann cutscene: walls, floor and every fogged surface identical. Differences only in subtitle rollout (pages start when a voice line has loaded from disc, in real time) and character poses tied to it. Inspected visually (dumps 1 and 6).
+
+Performance, PCSX2, Kaufmann cutscene, profiling build, averaged over the scene:
+
+| | DrawOTag k-cycles | gs: polygon | gs: fog pair | fps |
+|---|---|---|---|---|
+| separate (SH1_NO_FOG_PAIRS) | 2,928 | 1,927 | — | 50.2 |
+| fused | 2,366 | 612 | 739 | 55.3 |
+| ceiling (underlays dropped) | 2,233 | 1,217 | — | 56.6 |
+
+−562k cycles a frame (−19% of DrawOTag), +10% fps: 82% of what dropping the underlays saved, with the picture unchanged.
+
+Next: the remaining ~2.4M in DrawOTag (per-primitive parsing and packing, ~540 TEX0/CLUT changes), and option 2 (native libgs renderer) for the 2.8M game update.

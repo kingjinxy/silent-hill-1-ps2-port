@@ -1,0 +1,74 @@
+#!/bin/bash
+# Builds the port's ISO (build/port/sh1_ps2.iso) and serves it to the PS2 (Neutrino over UDPFS).
+#
+#   ./build-and-deploy              build; if the server is running, switch it to the new ISO and
+#                                   restart the game on the PS2; if not, start the server (and the
+#                                   console log receiver), then boot the PS2 yourself
+#   ./build-and-deploy --restart    also stop and start the server and log receiver fresh first
+#   ./build-and-deploy --no-build   skip the build (serve / deploy the ISO as it is)
+#   ./build-and-deploy --prof       profiling build (SH1_PROF=1: counters printed to the log)
+#
+# The console log goes to build/port/ps2_log.out, the server's output to build/port/udpfs_server.log.
+# Build options can also come from the environment (SH1_FPS, SH1_PROF, SH1_BENCH, ...; see
+# tools/port/port_link.py and tools/port/ee_compile_check.sh).
+set -e
+cd "$(dirname "$0")"
+
+RESTART=0
+BUILD=1
+for arg in "$@"; do
+    case "$arg" in
+        --restart) RESTART=1 ;;
+        --no-build) BUILD=0 ;;
+        --prof) export SH1_PROF=1 ;;
+        -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+        *) echo "unknown option: $arg (see --help)"; exit 1 ;;
+    esac
+done
+
+source .venv/bin/activate
+export SH1_FPS=${SH1_FPS:-60} SH1_NO_RECOMP=${SH1_NO_RECOMP:-1}
+
+if [ "$BUILD" = 1 ]; then
+    echo "== building (SH1_FPS=$SH1_FPS${SH1_PROF:+, profiling})"
+    bash tools/port/ee_compile_check.sh > build/port/build_compile.log 2>&1 || {
+        echo "compile failures (build/port/build_compile.log):"; tail -n 20 build/port/build_compile.log; exit 1; }
+    python3 tools/port/port_link.py > build/port/build_link.log 2>&1 || {
+        echo "link failed (build/port/build_link.log):"; tail -n 20 build/port/build_link.log; exit 1; }
+    bash tools/port/make_iso.sh > build/port/build_iso.log 2>&1 || {
+        echo "ISO failed (build/port/build_iso.log):"; tail -n 20 build/port/build_iso.log; exit 1; }
+    echo "   $(strings build/port/sh1.elf | grep -o 'build [A-Z][a-z][a-z] [ 0-9]* [0-9]* [0-9:]*' | head -1)"
+fi
+
+running() { pgrep -f "tools/port/$1" > /dev/null; }
+
+if [ "$RESTART" = 1 ]; then
+    echo "== stopping the server and log receiver"
+    for p in udpfs_serve.py ps2_log.py; do
+        for pid in $(pgrep -f "tools/port/$p"); do kill "$pid" 2>/dev/null || true; done
+    done
+    sleep 1
+fi
+
+STARTED=0
+if ! running udpfs_serve.py; then
+    echo "== starting the UDPFS server (build/port/udpfs_server.log)"
+    nohup python3 -u tools/port/udpfs_serve.py > build/port/udpfs_server.log 2>&1 &
+    STARTED=1
+fi
+if ! running ps2_log.py; then
+    echo "== starting the console log receiver (build/port/ps2_log.out)"
+    nohup python3 -u tools/port/ps2_log.py >> build/port/ps2_log.out 2>&1 &
+fi
+
+if [ "$STARTED" = 1 ]; then
+    echo "== server started: boot the game on the PS2 (Neutrino) now"
+    exit 0
+fi
+
+echo "== switching the server to the new ISO and restarting the game"
+if timeout 40 python3 tools/port/ps2_ctl.py deploy; then
+    echo "   done; if the PS2 doesn't come back within ~30 s, press RESET (it will load the new ISO)"
+else
+    echo "   the PS2 didn't answer (frozen or off): press RESET; it will load the new ISO"
+fi

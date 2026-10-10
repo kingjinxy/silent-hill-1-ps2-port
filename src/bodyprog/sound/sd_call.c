@@ -13,6 +13,16 @@
 #define BSS_HACK_SD_CALL_C
 #include "bodyprog/sound/sound_system.h"
 
+#if defined(SH_PORT) && defined(SH_PORT_BENCH)
+// Port benchmark (`SH1_BENCH=1`, tools/port/bench_cutscene.sh): a Demo cutscene runs with a fixed
+// step of one simulated vertical blank a frame; voice line timing follows that clock too, so the
+// cutscene plays the same frames in every build (src/port/ps2/libetc_ps2.c Port_SimVBlanks).
+extern int Port_SimVBlanks(void);
+#define SD_XA_VSYNC_COUNT() Port_SimVBlanks()
+#else
+#define SD_XA_VSYNC_COUNT() VSync(SyncMode_Count)
+#endif
+
 #ifndef PAD_HACK_IGNORE
     const  s32  __pad_rodata_80025BF4 = 0;
     MATCH_STATIC s32  __pad_bss_800C15EC;
@@ -177,7 +187,7 @@ u8 Sd_AudioStreamingCheck(void) // 0x80045B28
     {
         if (g_Sd_AudioStreamingStates.xaPreLoadState != 0)
         {
-            g_Sd_XaAudioPlayTracking.vSyncTimeSinceBoot     = VSync(SyncMode_Count);
+            g_Sd_XaAudioPlayTracking.vSyncTimeSinceBoot     = SD_XA_VSYNC_COUNT();
             g_Sd_XaAudioPlayTracking.xaAudioPlayCurrentTime = 0;
             return AudioStreamingState_XaLoading;
         }
@@ -842,7 +852,7 @@ void Sd_XaAudioPlayTaskAdd(u16 sfx) // 0x80046D3C
     if (gSDXATable[g_Sd_AudioWork.xaAudioIdxCheck].xaFileIdx != 0)
     {
         g_Sd_XaTaskPending                              = true;
-        g_Sd_XaAudioPlayTracking.vSyncTimeSinceBoot     = VSync(SyncMode_Count);
+        g_Sd_XaAudioPlayTracking.vSyncTimeSinceBoot     = SD_XA_VSYNC_COUNT();
         g_Sd_XaAudioPlayTracking.xaAudioPlayCurrentTime = 0;
 
         Sd_TaskPoolAdd(2);
@@ -994,7 +1004,7 @@ static void Sd_XaAudioPlay(void) // 0x80046E00
             PROF_BEGIN("xa: SdSetSerialAttr")
             SdSetSerialAttr(0, 0, 1);
             PROF_END("xa: SdSetSerialAttr")
-            g_Sd_XaAudioPlayTracking.vSyncTimeSinceBoot     = VSync(SyncMode_Count);
+            g_Sd_XaAudioPlayTracking.vSyncTimeSinceBoot     = SD_XA_VSYNC_COUNT();
             g_Sd_XaAudioPlayTracking.xaAudioPlayCurrentTime = 0;
             g_Sd_AudioStreamingStates.xaLoadState           = XaLoadState_Initialize;
 
@@ -1771,7 +1781,7 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
     PROF_BEGIN("sd: after the task (volumes, XA timing)")
     if (g_Sd_AudioWork.xaAudioIdx != 0)
     {
-        g_Sd_XaAudioPlayTracking.xaAudioPlayCurrentTime = VSync(SyncMode_Count) -
+        g_Sd_XaAudioPlayTracking.xaAudioPlayCurrentTime = SD_XA_VSYNC_COUNT() -
                                                           g_Sd_XaAudioPlayTracking.vSyncTimeSinceBoot;
     }
 
@@ -1833,7 +1843,7 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
                 Sd_TaskPoolAdd(2);
             }
 
-            g_Sd_XaAudioPlayTracking.vSyncTimeSinceBoot     = VSync(SyncMode_Count);
+            g_Sd_XaAudioPlayTracking.vSyncTimeSinceBoot     = SD_XA_VSYNC_COUNT();
             g_Sd_XaAudioPlayTracking.xaAudioPlayCurrentTime = 0;
         }
     }

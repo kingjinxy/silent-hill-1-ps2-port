@@ -323,7 +323,11 @@ void MainLoop(void) // 0x80032EE0
 #if defined(SH_PORT) && defined(SH_PORT_BENCH)
             {
                 extern void Port_VSyncCallbackManual(int on);
-                Port_VSyncCallbackManual(0); /* not a demo: the interrupt calls it again */
+                extern int  Port_DemoChosen(void);
+                if (!(Port_DemoChosen() >= 0 && g_GameWork.gameState == GameState_InGame))
+                {
+                    Port_VSyncCallbackManual(0); /* not a demo: the interrupt calls it again */
+                }
             }
 #endif
 #ifdef SH_PORT
@@ -385,6 +389,23 @@ void MainLoop(void) // 0x80032EE0
             vCountCopy = vCount;
         }
 
+#if defined(SH_PORT) && defined(SH_PORT_BENCH)
+        {
+            // Port benchmark (`SH1_BENCH=1`): a Demo cutscene runs uncapped with a fixed step of one
+            // vertical blank a frame, its callback run here, so it plays the same frames on every run
+            // and build (frame dumps by frames since its start, src/port/demo_menu.c).
+            extern int  Port_DemoChosen(void);
+            extern void Port_VSyncCallbackManual(int on);
+            extern void Port_VSyncCallbackRun(void);
+            if (Port_DemoChosen() >= 0 && g_GameWork.gameState == GameState_InGame)
+            {
+                Port_VSyncCallbackManual(1);
+                Port_VSyncCallbackRun();
+                g_VBlanks = g_UncappedVBlanks = 1;
+                vCount = vCountCopy = H_BLANKS_PER_TICK;
+            }
+        }
+#endif
         // Update delta time.
         g_DeltaTime    = Q12_MULT(vCount, H_BLANKS_Q12_TO_SEC_SCALE);
         g_DeltaTimeRaw = Q12_MULT(vCountCopy, H_BLANKS_Q12_TO_SEC_SCALE);

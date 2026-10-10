@@ -14983,3 +14983,417 @@ Both sweeps are done. Committing the tools and code, with a results summary in t
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; make -j8 build < /dev/null 2>&1 | grep -c ": OK"; cat >> "Planning Doc.md" <<'EOF'  ## Demo cutscene sweeps: por
 
+## Claude
+
+Both sweeps are done, with automatic X presses on both sides. **Neither the port nor the PS1 game crashed or hung.** In cutscenes measured on both, the port draws a **median of 2× the PS1's frame rate**. It's committed as `9e09539dc`, and the PS1 build still passes all 50 checksums.
+
+**Automatic X in Demo mode:** after 2 s at a wait, the game presses X for you:
+- a fully shown text page with no voice line;
+- a Yes/No prompt;
+- a static image, with or without text over it.
+
+Voiced lines advance on their own, so they're never cut short. On the PS1, gdb does the same through breakpoints that fire only at those waits, so there are no per-frame pauses.
+
+**Outcomes (52 cutscenes):**
+- 44 reach gameplay in the port and 43 on the PS1.
+- **8 fail identically on both** (map3_s05 D6D1C, map7_s01 D9C9C, map7_s02 DFDDC, map7_s03 E3D18, map6_s04 E3EF4, map5_s01 EBF70, Cheryl spotted, map item). So they aren't port bugs: these scenes need state from earlier play that a Demo start doesn't provide. In map3_s05, for example, Harry walks waypoints and never arrives.
+- **One difference:** map7_s02 func_800DD2D4 finishes in the port but not on the PS1. I haven't looked into it yet.
+
+**Frame rate** is frames drawn per second, from the cutscene's start until the player has control:
+
+| | PS1 (DuckStation) | Port (PCSX2) | Gain |
+|---|---|---|---|
+| Median of 43 cutscenes | | | **2.00×** |
+| Café cutscene | 15.5 | 47.6 | 3.07× |
+| Monster Cybil (map6_s04 E1D50) | 9.8 | 28.1 | 2.86× |
+| Kaufmann (map3_s00 D0CF8) | 19.8 | 52.8 | 2.66× |
+| Opening | 29.9 | 59.9 | 2.00× |
+| Already 60 on the PS1 (static shots) | ~59.6 | ~59.9 | 1.00× |
+
+PCSX2 doesn't model the PS2's caches, so hardware numbers can differ. The one hardware data point I have, the Kaufmann scene at 50–55 fps, matches PCSX2's 52.8. A hardware sweep would give the definitive figures, and its scripts are already in place.
+
+**Movie mode:** these results support the approach I described. Eight cutscenes can't be reached from a cold Demo start even on the original game, so playing them in sequence needs real game state at each scene's start. Snapshots from a playthrough would provide that, and the spare RAM can preload the next scene.
+
+**Possible next steps:**
+- look into map7_s02 func_800DD2D4, the one port/PS1 difference;
+- run the hardware sweep for the real frame rates;
+- return to the deploy freeze.
+
+## User
+
+Let's table all of this for now. I want to return to possible optimization options. First, let's take a step back and look at the PS1 and PS2 hardware as a whole:
+https://www.copetti.org/writings/consoles/playstation/
+https://www.copetti.org/writings/consoles/playstation-2/
+Note signficant architectural differences. Where is the PS1 Silent Hill optimized for its architecture, and where can we optimize our port to the PS2 architecture?
+Furthermore, I'm interested in this framework: https://github.com/Xeeynamo/psyz
+It says that it's not meant for accuracy, while our project does aim for as much accuracy as possible, but I'm curious what ideas we can take from it.
+
+- tool `ToolSearch`: 
+
+- tool `WebFetch`: 
+
+- tool `WebFetch`: 
+
+- tool `WebFetch`: 
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad && (test -d psyz || git clone -q --depth 1 https
+
+## Claude
+
+PsyZ has a PSP backend, which is the closest analogue to us: a fixed-function GPU like the GS. Looking at how it renders PS1 primitives there, and how it handles GTE and libgs:
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/psyz/psyz; wc -l src/psp/psp_gpu.c src/psyz/libg
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/psyz/psyz; sed -n 282,330p src/psp/psp_gpu.c; gr
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/psyz/psyz; sed -n 1,40p src/psyz/libgte.c; grep 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "define PSX_SCRATCH" include | head -3; grep -rn "PSX_SCRATCH\b" include/port/*.h src/port/*.c 2>/dev/n
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_PsxScratch" src/port include --include=*.c --include=*.h --include=*.ld | grep -v "extern" | head -3
+
+## Claude
+
+Here's the overall picture.
+
+## The two machines side by side
+
+| | PS1 | PS2 (EE side) | What it means for the port |
+|---|---|---|---|
+| CPU | R3000A, 33.9 MHz, scalar | R5900, 295 MHz, 2-way superscalar, 128-bit registers, MMI SIMD | ~9× the clock, but memory is far slower relative to it |
+| Caches | 4 KB I-cache, **no D-cache**, 1 KB scratchpad | 16 KB I-cache, **8 KB D-cache**, 16 KB scratchpad (SPR) | PS1 code was written for uniform memory speed; on the EE a cache miss costs dozens of cycles |
+| 3D math | GTE coprocessor: fixed-point, one instruction per RTPT/NCLIP/DPCS | VU0 (float, COP2 or standalone), VU1 (float, feeds the GS) | No GTE: we emulate it in C/MMI. The VUs are float, so they aren't bit-exact |
+| Graphics | 2D rasterizer, 1 MB VRAM shared by textures and framebuffer, no Z, affine textures, CLUT textures | GS: 4 MB eDRAM, 8–16 pixels/cycle, Z-buffer, CLUT buffer, three GIF paths | Fill rate is effectively free. The cost is the CPU turning PS1 packets into GS packets |
+| Memory | 2 MB RAM | 32 MB RDRAM | 16× room for caching data |
+| Storage | 2× CD | DVD, over the network for now | Faster reads; files can stay in RAM |
+| Sound / video | SPU, MDEC | SPU2 (two cores), IPU | Already handled |
+
+The key asymmetry: the PS1 did its expensive work in fixed-function hardware (GTE, GPU) and kept the CPU light. On the PS2 the GTE and GPU don't exist, so the CPU does that work, and the R5900 is fast but sensitive to cache misses.
+
+## Where Silent Hill 1 is tuned for the PS1
+
+- **GTE everywhere:** batched RTPT, NCLIP and DPCS/DCPL for depth cueing (fog) and lighting per vertex. On the PS1 these are a few cycles each; for us each is a function or inline sequence.
+- **Scratchpad as a free register file:** matrices, temporary vectors and packet scratch live in the 1 KB scratchpad (`PSX_SCRATCH`; we saw it in `func_800CB25C`).
+- **Ordering tables instead of Z:** primitives are linked into depth buckets, and the GPU walks the chain. We walk the same chain in `DrawOTag`, one primitive at a time.
+- **Fog as a second polygon:** each fogged world face is drawn twice, a textured polygon plus a semi-transparent untextured one. That's why our per-primitive GS state alternates almost every polygon (1,047 of 1,448 recomputed per frame).
+- **CLUT-heavy 4/8-bit textures:** roughly 500 texture-page/CLUT changes per frame, each a GS register change, and a CLUT load in our renderer.
+- **2 MB budget:** small, reused file buffers and per-map overlays (the DMS buffer reuse that broke Demo starts), with constant reloads.
+- **Frame rate:** cutscenes run at 15–30 fps on the PS1 (median ~22 in our sweep).
+
+## Where the port can use the PS2's strengths
+
+Current cost per 60 fps frame in the Kaufmann cutscene (budget 4,915k cycles): game update ~2,800k, `DrawOTag`/conversion ~2,600k, of which polygon setup is ~1,600k and per-primitive state the rest.
+
+Ranked by expected gain relative to risk:
+
+1. **Collapse the fog double polygons.** The GS has per-vertex fog (the FOG field in vertex data plus FOGCOL), which does the same blend toward a far colour that DPCS does. Emitting one fogged, textured polygon instead of two would roughly halve world primitives and remove the state alternation. It needs an accuracy check: the GS fogs per pixel, the PS1 per vertex, and colour rounding differs. A frame comparison against DuckStation would settle whether it's visually identical.
+2. **Native C for libgs's model renderer.** `GsSortObject4J` and the `GsTMDfast*` family (the per-vertex transform, light and fog loop that draws every character) still run as *recompiled MIPS*, through wrappers, with no access to our inline GTE paths. Rewriting them in C from the decomp lets GCC optimise them and lets them use the exact inline GTE helpers we already have. PsyZ does exactly this: native C libgs/libgpu/libgte instead of recompiled code.
+3. **Scratchpad on the real SPR.** `g_PsxScratch` is ordinary cached RAM right now (0x8a2f40). Mapping it to the EE's scratchpad (0x70000000) makes every access single-cycle and never evicts anything. That's a small change, but every call to `PSX_SCRATCH` benefits. One catch: DMA from SPR needs its own channel, so any code that DMAs directly from scratchpad must be checked.
+4. **Texture page and CLUT cache.** Keep each PS1 texture page and CLUT resident in GS memory, keyed by VRAM region and invalidated when the game writes to that region (LoadImage, MoveImage, rendering to it). Then a texture switch is just a TEX0 write, with no CLUT reload unless the CLUT changed. PsyZ's PSP backend uses this design: page and CLUT caches with invalidation on VRAM writes.
+5. **Overlap CPU and GS with a double display list.** Build frame N+1's GIF packets while frame N's DMA runs, and wait only for the *previous* frame. This is PsyZ's PSP model. We tried async GIF sends before and reverted them. Those freezes were probably the ResetCallback bug, so this is worth retrying, carefully, on hardware.
+6. **Packet building with MMI and the SPR.** Write 128-bit GIF qwords straight from registers (`sq`), build packets in the scratchpad and DMA them from there (`fromSPR` to GIF). This complements item 5.
+7. **Use the RAM.** Keep a map's files, and its neighbours', resident and stop re-reading them. That speeds loads and also helps the movie-mode idea.
+8. **VU1 for primitive conversion.** Feed PS1 packets to VU1 and have it emit GIF packets on PATH1. This is the biggest potential gain, but also the biggest job, and float precision means it must be validated pixel by pixel. I'd only consider it after items 1–5.
+
+I'd steer away from moving the GTE onto VU0. It's float, so results wouldn't be bit-exact, and the accuracy goal makes that a poor trade. The exact MMI fixed-point path we already have is the right one.
+
+## What to take from PsyZ
+
+PsyZ trades accuracy for compatibility, but several ideas fit an accuracy-first port:
+- **Native libraries instead of recompiled ones:** the biggest structural idea (item 2 above). Their numbers on Castlevania SotN: 1% CPU native, 10% recompiled, 16% emulated.
+- **A GTE validated against real hardware:** their GTE is integer-exact and tested with unit tests that pass on a real PS1. We could run those test vectors against our MMI GTE paths: a free accuracy check, and a safety net for further GTE optimisation.
+- **PSP GPU backend design:** vertex batching into one draw call per state run, texture-page and CLUT caches, uncached writes for display lists, and asynchronous display lists with only a previous-frame wait. Most of this maps onto the GS directly.
+- **Platform separation and self-tests:** their library is split cleanly by platform, with sample programs and tests that run on real hardware. Our port has grown many `SH_PORT` branches, and their layout is a good model as it grows.
+
+I'd start with **item 1 (fog collapse)** and **item 3 (scratchpad to SPR)**. The first is likely the largest single win in `DrawOTag`; the second is cheap and broad. Then item 2 (native libgs) for game-update time. All three can be verified with the deterministic benchmark and the DuckStation frame comparisons. Want me to begin with the fog collapse?
+
+## User
+
+Copetti's site says the following regarding the vector units on the PS2: "A Vector Unit: The core of the processor. It contains some memory (called Micro Memory) to store a program (called Microprogram) that instructs the unit on how to operate on the data found in ‘VU Mem’.
+
+    The unit implements a 64-bit ISA, and the execution unit is split into two parallel sub-units. The first one multiplies or adds floats, while the other one divides floats or operates on integers. This enables to process both floats and integers concurrently."
+Does this mean that we can just make it process integers like the GTE, or am I missing something?
+
+## Claude
+
+Not quite. The integer half of a Vector Unit isn't an integer maths engine. It's there to run the program around the float maths.
+
+**What the VU's two halves actually do:**
+- The **upper unit** does the real work: four 32-bit **float** multiply-adds per cycle (FMAC).
+- The **lower unit** handles the divide/sqrt unit, loads and stores, branches, and **16-bit integer** registers (VI00–VI15). Its integer instructions are add, subtract, AND/OR, add-immediate and branch-compare. There is **no integer multiply** and no integer multiply-accumulate. Those registers exist for loop counters, addresses into VU memory and flags, so a microprogram can run its own loops while the float unit computes.
+
+So "processes floats and integers concurrently" means bookkeeping runs alongside the float maths, not that the VU can do the GTE's fixed-point maths.
+
+**Why the GTE's maths doesn't map onto it:**
+- The GTE multiplies 16-bit values into 32-bit products and accumulates them in **44-bit** registers, with exact saturation, overflow flags, a 12-bit shift and a specific division (an unsigned Newton-Raphson table). Silent Hill's results depend on those exact bits; we've matched them with zero mismatches over millions of calls.
+- A VU float has a **24-bit mantissa**, so integers above 2²⁴ (16.7 million) aren't represented exactly. One 16×16-bit product can reach 2³¹, and a matrix row sums three of them. Rounding then changes the low bits, which changes vertex positions, depth buckets and light levels by a unit here and there.
+- The VU *does* have fixed-point conversions with 12 fractional bits (`ITOF12`/`FTOI12`), which looks tailor-made for the GTE's Q12 format. But they only convert at the edges; the arithmetic in between is still 24-bit float.
+
+**Ways around it, and why I don't recommend them:**
+- **Split each value into small pieces** so every partial product fits in 24 bits exactly, then recombine. That's exact, but it multiplies the work by 3–4×, and the flags and saturation still need integer logic the VU doesn't have. It would likely end up slower than our current path.
+- **Prove ranges per call site** (for example, "these inputs never exceed ±2¹¹, so float is exact"). That's possible for a few places, but fragile, and one wrong assumption means silently different output.
+
+**Where exact integer GTE maths belongs on the PS2:** the EE's **MMI** instructions, which is what the port already uses. They have real integer multiplies: `PMULTH` does eight 16×16-bit multiplies at once, `PMADDH` multiply-accumulates halfwords, and `PMULTW` does 32-bit products. That's the closest the PS2 has to a GTE: the same arithmetic, exact, several lanes per instruction.
+
+**Where the VUs do fit, without hurting accuracy:** work that's already float-friendly or where the output isn't GTE-exact maths, for example building GS packets (VU1 on PATH1) from coordinates that are already final. That's item 8 on my earlier list: the GTE results stay exactly computed on the EE, and VU1 only does the format conversion.
+
+## User
+
+Alright, save the last two responses to "PS2 Optimizations.md" in the project folder and update it as we go along, referring to it as necessary. Be more thorough than in the other 2 planning documents. Let's start with the fog collapse idea and measure performance in PCSX2.
+
+## Claude
+
+Writing the document first: both answers, expanded with the current profile and a work log.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/PS2 Optimizations.md
+
+## Claude
+
+The document is saved. Now the fog itself: finding where the world mesh code emits the second, fog polygon.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "setSemiTrans\|POLY_G3\|POLY_G4\|POLY_F3\|POLY_F4\|setPolyG\|setPolyF\|addPrim" src/bodyprog/gfx/bodypro
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1060,1135p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "STP\|stp\|TEXA\|ATEST\|abr\|ABR\|two pass\|second pass\|pass" src/port/ps2/gpu_gs.c | head -40
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,60p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "gs stats\|static void polygon\|case 0x2\|case 0x3\|^static void draw_poly\|^static.*poly" src/port/ps2/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 799,840p src/port/ps2/gpu_gs.c; sed -n 1330,1350p src/port/ps2/gpu_gs.c; grep -n "s_Abr\|abr\b\|tpage.*>>
+
+## Claude
+
+Adding the pair counter to the polygon converter: the previous polygon's corners are remembered and the pairs are counted by blend mode.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## Claude
+
+Building, then running the Kaufmann cutscene (#4) in PCSX2 to read the counts:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1; (python3 tools/port/port_link.py && bas
+
+## Claude
+
+That part of the log is still the boot logos. Looking at the reports from the cutscene itself:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -an "func_800D0CF8 started" build/port/fog_probe.log | cut -d: -f1); tail -n +$n build/port/fog_probe.l
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "Port_Dpcs\|Port_Dcpl" src/bodyprog/gfx/bodyprog_80056D8C.c | head -3; sed -n "/^static inline u32 Port_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 760,830p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "polygon(w\|polygon(\|^u32 GpuGs_Command\|^void GpuGs_Packet\|switch (cmd >> 5)\|case 1:" src/port/ps2/g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1120,1175p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## Claude
+
+Wiring a build switch (`SH1_FOG_TEST=1`), then running the Kaufmann cutscene with it. The baseline profile is already in the log from the counting run:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/port_link.py'; s=open(p).read() a='''    dump += ["-DSH_PORT_MSG_DEBUG"] if os.e
+
+## Claude
+
+One snapshot each, taken at different moments of the scene (565 against 464 pairs), so I'm averaging over the whole cutscene instead:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for f in fog_probe fog_test; do python3 - $f <<'EOF' import re,sys f=sys.argv[1]; L=open('build/port/%s.log'%f,e
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='PS2 Optimizations.md'; s=open(p).read() s=s.replace('''4. **Texture page and CLUT cache.** 
+
+## Claude
+
+Measured in PCSX2: collapsing the fog pairs could save at most **23% of the GS conversion time (2,918k → 2,233k cycles a frame)**, taking the Kaufmann cutscene from **50.3 to 56.6 fps**. But that collapse can't be made exact, so I'd recommend an exact alternative first.
+
+**What the fog actually is:**
+- About 460–565 pairs per frame, all identical in structure: an opaque Gouraud quad in the fog colour, with the textured quad on top in **additive** blend mode, on the same four corners.
+- They make up about 64% of all primitives in this scene.
+
+**How it was measured:** a test build dropped each pair's underlying quad. The picture is wrong, but the profile shows the most the collapse could ever save:
+
+| | GS conversion (k-cycles/frame) | Game update | Frame rate |
+|---|---|---|---|
+| Normal | 2,918 | 2,841 | 50.3 fps |
+| Underlays dropped (test only) | 2,233 | 2,854 | 56.6 fps |
+
+**Why the GS-fog collapse isn't exact:**
+- On the PS1, the fog is added only to texels whose semi-transparency (STP) bit is set. Texels without it show no fog, but the GS would fog every texel.
+- The GS uses one 8-bit fog factor and one fog colour register. The PS1 adds two separately rounded Gouraud colours, and the fog colour can vary per mesh.
+- The two depth factors differ slightly (one includes an offset).
+
+The visual difference is probably small, but it isn't identical, and identical output is the project's bar.
+
+**Exact alternative: pair fusion.** Keep both GS primitives, but convert each pair as one unit:
+- read the pair once;
+- compute the four corner positions once and share them;
+- emit the two GS primitives back to back with their two fixed states prebuilt, so nothing is recomputed as the state alternates.
+
+The output stays bit-identical, and the deterministic benchmark with frame comparison can prove it. It should recover a good part of the 685k cycles.
+
+Everything is recorded in **PS2 Optimizations.md** (architecture comparison, ranked options, why the VUs can't do GTE maths, PsyZ ideas, and this log entry), committed as `228f9e304`. The pair counter and the test switch are compiled out by default.
+
+Shall I implement pair fusion next? If you'd rather see the GS-fog version anyway, I can build it as an option and do a side-by-side frame comparison against DuckStation, so you can judge the difference yourself.
+
+## User
+
+Ok, let's try pair fusion, and make sure that it looks identical to PS1, as the GS-fog collapse looked totally wrong. It seemed like the fog was "inverted"  for lack of a better word. Everything except the characters in the scene looked semi transparent.
+
+## Claude
+
+To clarify what you saw: that wasn't the GS-fog version, which I never built. It was the measurement-only test, which simply *drops* the underlying quad of each pair. Without the opaque backing, the additive textured layer blends straight onto whatever was behind it, so everything except the characters looked see-through. The broken picture was expected for that test.
+
+Pair fusion must give identical output. Reading the rest of the polygon converter to see where the shared work is:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 855,925p src/port/ps2/gpu_gs.c; grep -n "^static.*prim_state\|^static.*state_other\|^static.*tex_state\|^
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 560,800p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^void GpuGs_\|^int GpuGs_\|^u32 GpuGs_" src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## Claude
+
+A stray copy of the forward declaration landed inside `polygon()` (line 884), because my anchor text also matched the probe's comment. Removing it, then building:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 882,886p src/port/ps2/gpu_gs.c; sed -i '884{/static void pend_flush(void);/d}' src/port/ps2/gpu_gs.c; gre
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat tools/port/bench_frames.sh | head -40
+
+## Claude
+
+The script passes environment variables through to the build, so the switch can go in directly. Adding `SH1_NO_FOG_PAIRS` and running the benchmark both ways:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1; touch src/port/ps2/gpu_gs.c; (SH1_NO_FO
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "SH_PORT_BENCH" src/bodyprog/sys/game_main.c | head; n=$(grep -n "SH_PORT_BENCH" src/bodyprog/sys/game_m
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 320,420p src/bodyprog/sys/game_main.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^void Port_VSyncCallbackRun" -A8 src/port/ps2/libetc_ps2.c; grep -n "if (mode < 0)" -A4 src/port/ps2/li
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## User
+
+[Request interrupted by user for tool use]
+
+## User
+
+<ide_opened_file>The user opened the file /home/alex/Documents/silent-hill-1-ps2-port/PS2 Optimizations.md in the IDE. This may or may not be related to the current task.</ide_opened_file>
+
+The game crashed. Before you proceed, can you put a script called "build-and-deploy" in the project folder that I can run myself? It should build the project ISO and serve it like we've been doing. If the server is already running, it should just change the ISO being served and reset the game. There should also be a --restart override just in case.
+
+## Claude
+
+Writing `build-and-deploy` now.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/build-and-deploy
+
+## Claude
+
+Making it executable and checking it parses:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; chmod +x build-and-deploy; bash -n build-and-deploy && ./build-and-deploy --help; sed -n '/def main/,$p' tools/p
+
+## Claude
+
+`build-and-deploy` is in the project folder and executable. I checked that it parses and that `--help` works, but haven't run a full build-and-deploy with it, since the game had crashed and I stopped there.
+
+```
+./build-and-deploy              # build, then switch the server to the new ISO and restart the game
+./build-and-deploy --restart    # stop the server and log receiver and start them fresh first
+./build-and-deploy --no-build   # deploy the current ISO without rebuilding
+./build-and-deploy --prof       # profiling build (counters in the log)
+```
+
+- **Building:** runs the same steps I've been using, with 60 fps and no recompiler rebuild, writing each step's output to `build/port/build_*.log`. It stops with the error if a step fails, and prints the new build's timestamp.
+- **Server already running:** switches it to the new ISO and restarts the game remotely. If the PS2 doesn't answer, it tells you to press RESET, which loads the new ISO.
+- **Server not running:** starts it and the console log receiver, then tells you to boot the game on the PS2.
+
+**Before you use it:** the source currently includes pair fusion, which is on by default. I've confirmed it builds, and that it's identical in the attract demo, but that scene has no fog pairs. It hasn't been verified identical in a scene that has them. If you'd rather deploy without it for now, run `SH1_NO_FOG_PAIRS=1 ./build-and-deploy`.
+
+**About the crash:** was that on the PS2, or in PCSX2? If it was the PS2, tell me roughly what was on screen, or what you were doing when it crashed, and I'll check the log before continuing with the pair-fusion verification.
+
+## User
+
+The crash was on PCSX2. The game was simply on a black screen when I forced the stop.
+
+## Claude
+
+Thanks. That was the cutscene benchmark run I'd just started in PCSX2. Checking how far it got and what the log shows:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls tools/port/bench_cutscene.sh build/port/bc_pair_a 2>&1 | head; grep -c "Port_DemoChosen() >= 0 && g_GameWork.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/libetc_ps2.c'; s=open(p).read() a='''        /* Benchmark builds: while the ma
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -rf build/port/bc_pair_a build/port/bc_pair_b; bash tools/port/bench_cutscene.sh 4 build/port/bc_pair_a && ba
+
+## Claude
+
+The PCSX2 black screen was caused by my benchmark change, not by the fusion itself. I've reverted it and started a determinism check in the background.
+
+**What went wrong:** to keep voice timing deterministic, I made the game's vertical-blank counter advance only once per frame during the benchmark. Some code waits *within* a frame for that counter to move, such as the disc seek timing. Those loops never finished, so the game stopped drawing.
+
+**What's running now:** the pair-fusion build plays the Kaufmann cutscene twice in PCSX2 with a fixed time step, dumping a frame every 200 frames. If both runs produce identical frames, the method is sound and I'll compare against the build without fusion. Any difference there would be a real rendering change. PCSX2 windows will open and close by themselves while it runs.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/b2kuf1z72.output; cd /home/alex/Documents/silent-hil
+
+## Claude
+
+No frames were dumped at all, so the comparison is empty. Checking that run's PCSX2 log:
+
+- tool `Bash`: L=$(ls -t /tmp/tmp*.log | head -1); grep -a "demo\|CRASH\|SH1 port\|watchdog\|display: wrote\|dump" $L | tail -15 | cut -c1-150
+
+## Claude
+
+That's the old log from the earlier black-screen run (same build time, 16:51:00), so this run's PCSX2 may not have started properly. Running the script's steps by hand to see where it fails:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_BENCH=1 SH1_NO_RECOMP=1; unset SH1_PROF; bash tools/port/ee_com
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "SH_PORT_BENCH\|SH1_BENCH" tools/port/port_link.py | head
+
+## Claude
+
+Right: `port_link.py` never passes `SH_PORT_BENCH` to the port's files; only the game code gets it. Adding it:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/port_link.py'; s=open(p).read() a='''        run([CC, "-c", *PORT_CFLAGS, *prof,
+
+## Claude
+
+Two runs of the same build give identical frames, so the cutscene benchmark is deterministic. Now the real test, the same cutscene without fusion:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -rf build/port/bc_nopair; SH1_NO_FOG_PAIRS=1 bash tools/port/bench_cutscene.sh 4 build/port/bc_nopair && sour
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ppm(p):     d=open(p,'rb').read(); parts=d.split(b'\n',3); w,h=map(int,parts[1].split()); 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "VSync(SyncMode_Count)\|VSync(-1)" src/bodyprog/sound/*.c src/bodyprog/text/*.c src/bodyprog/events/*.c 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/sound/sd_call.c'; s=open(p).read() n=s.count('VSync(SyncMode_Count)') s=s.repl
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^void Port_VSyncCallbackManual" -A4 src/port/ps2/libetc_ps2.c; python3 - <<'EOF' p='src/port/ps2/libetc
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 - <<'EOF' from PIL import Image, ImageChops a=Image.open('build/port/bc_nopai
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; pip install -q pillow 2>&1 | tail -1; python3 - <<'EOF' from PIL import Image, ImageC
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/diff06.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 - <<'EOF' from PIL import Image, ImageChops a=Image.open('build/port/bc_nopai
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/diff01.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1; unset SH1_BENCH; for v in nopair pair; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "PS2 Optimizations.md" <<'EOF'  ### 2026-10-10: pair fusion (option 1, exact): kept  gpu_gs.c GpuGs_Comma
+

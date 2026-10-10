@@ -220,15 +220,31 @@ void Port_VBlankReinstall(void)
  * ResetGraph (recompiled) calls it again during boot, on some paths; clearing every time removed the
  * game's vertical blank callback (Screen_VSyncCallback), whose counter the boot logos wait for: the
  * game sometimes stayed on the Konami logo (2026-10-09). */
+static int s_SimVBlanks; /* vertical blanks the main loop simulated (benchmark builds) */
+
 /** Benchmark mode (game_main.c, SH1_BENCH): while on, the vertical blank callback isn't called from
  * the interrupt; the main loop calls it (Port_VSyncCallbackRun) once per simulated vertical blank. */
 void Port_VSyncCallbackManual(int on)
 {
+    if (on && !s_CallbackManual)
+    {
+        s_SimVBlanks = s_VBlanks; /* the simulated clock goes on from the real one */
+    }
     s_CallbackManual = on;
+}
+
+
+/** Benchmark builds: the vertical blank count, simulated while the main loop runs the callback
+ * (Demo cutscenes, attract demo), real otherwise. Only for timing that doesn't wait within a frame
+ * (the sound driver's voice line timing): a loop waiting for it to move would never end. */
+int Port_SimVBlanks(void)
+{
+    return s_CallbackManual ? s_SimVBlanks : s_VBlanks;
 }
 
 void Port_VSyncCallbackRun(void)
 {
+    s_SimVBlanks++;
     if (s_Callback)
     {
         s_Callback();

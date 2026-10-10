@@ -274,6 +274,18 @@ int Port_DemoAutoPress(int site, int waiting)
 
 void Port_DemoTick(void)
 {
+#ifdef SH_PORT_BENCH
+    {
+        /* Benchmark builds (fixed step in Demo cutscenes, game_main.c): a frame dump every 200 frames
+         * after the event started, the same frames in every run (tools/port/bench_cutscene.sh). */
+        extern void Display_RequestDump(void);
+        if (s_Started && s_Chosen >= 0 && g_TickCount != s_StartTick && (g_TickCount - s_StartTick) % 200 == 0 &&
+            g_TickCount - s_StartTick <= 2000)
+        {
+            Display_RequestDump();
+        }
+    }
+#endif
 #ifdef SH_PORT_MSG_DEBUG
     msg_debug();
 #endif
