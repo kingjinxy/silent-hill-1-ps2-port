@@ -22,7 +22,7 @@ import warp_sweep  # noqa: E402 (settings file, wait_port)
 
 # Only what the watch needs; speed, renderer etc. stay as the user set them.
 OVERRIDES = {"EnableGDBServer": "true", "ConfirmPowerOff": "false", "SaveStateOnExit": "false",
-             "PauseOnFocusLoss": "false"}
+             "PauseOnFocusLoss": "false", "OutputMuted": "true"}
 
 
 def main():

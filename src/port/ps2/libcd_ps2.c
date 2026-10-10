@@ -47,6 +47,7 @@ typedef struct
 #define CdlStop      0x08
 #define CdlPause     0x09
 #define CdlInit      0x0A
+#define CdlNoIntr    0x00
 #define CdlComplete  0x02
 #define CdlDiskError 0x05
 
@@ -64,6 +65,66 @@ static int s_Pos; /* PS1 sector set by CdlSetloc. */
 static int s_Mode; /* CdlSetmode */
 static int s_XaFile, s_XaChan; /* CdlSetfilter */
 static int s_XaPlaying;
+
+/* PS1 drive timing, in real time. The game's sound code waits for each CD command to finish (CdSync)
+ * before sending the next: on the PS1 a seek takes real time (about 70 ms nearby, ~430 ms from the map
+ * data to the voice area), and cutscenes are timed around that: a voice line's text page only starts
+ * once the line is reading. With every command finished at once, pages started (and ended) early and
+ * raced the cutscene's steps (map3_s00 func_800D0CF8 restarted a message: every later voice line
+ * played a page early). Measured on the PS1 (DuckStation, tools/port/duckstation_cutscene.py), the
+ * same at 20 and 60 fps. */
+#define SEEK_MIN_VBLANKS 4                   /* a seek near the head */
+#define SEEK_FAR_VBLANKS 44                  /* extra for the farthest seek (fits 26 for 50505 sectors) */
+#define SEEK_FAR_SECTORS 200000              /* PS1 sectors counted as "farthest" */
+extern int Port_VBlanks(unsigned int* cycles); /* libetc_ps2.c */
+static int s_Head;                           /* PS1 sector under the head (after the last read/seek) */
+static int s_BusyUntil;                      /* vertical blank when the last seek is done */
+
+static int vblanks(void)
+{
+    unsigned int c;
+    return Port_VBlanks(&c);
+}
+
+static unsigned int isqrt(unsigned int v)
+{
+    unsigned int r = 0, b = 1u << 30;
+    while (b > v)
+    {
+        b >>= 2;
+    }
+    while (b)
+    {
+        if (v >= r + b)
+        {
+            v -= r + b;
+            r = (r >> 1) + b;
+        }
+        else
+        {
+            r >>= 1;
+        }
+        b >>= 2;
+    }
+    return r;
+}
+
+/** Starts a seek to PS1 sector `to`: the drive is busy for a time growing with the distance. */
+static void seek(int to)
+{
+    unsigned int d = (unsigned int)(to > s_Head ? to - s_Head : s_Head - to);
+    int          t;
+    if (d > SEEK_FAR_SECTORS)
+    {
+        d = SEEK_FAR_SECTORS;
+    }
+    t           = SEEK_MIN_VBLANKS + (int)(SEEK_FAR_VBLANKS * isqrt(d * 1024u / SEEK_FAR_SECTORS * 1024u) / 1024u);
+#ifdef SH_PORT_MSG_DEBUG
+    printf("libcd: seek %d -> %d (%u sectors): %d vblanks\n", s_Head, to, d, t);
+#endif
+    s_BusyUntil = vblanks() + t;
+    s_Head      = to;
+}
 
 extern void Port_XaStart(unsigned int hillLsn, unsigned int index, unsigned int file, unsigned int chan); /* spu_ps2.c */
 extern void Port_XaStop(void);
@@ -193,6 +254,7 @@ static void chunk_finish(void)
     }
     s_Req.pos += s_Req.chunkSectors;
     s_Req.left -= s_Req.chunkSectors;
+    s_Head = s_Req.pos;
     s_Req.inFlight = 0;
 }
 
@@ -312,6 +374,10 @@ int CdControl(unsigned char com, unsigned char* param, unsigned char* result)
     {
         s_Pos = CdPosToInt((CdlLOC*)param);
     }
+    if (com == CdlSeekL)
+    {
+        seek(s_Pos);
+    }
     /* XA audio (voice lines): a real-time read with a file/channel filter plays that channel of the
      * XA data, as the PS1 drive did into the SPU's CD input; sh1spu.irx does it on the IOP (xa.c). */
     if (com == CdlSetmode && param)
@@ -351,8 +417,15 @@ int CdControlB(unsigned char com, unsigned char* param, unsigned char* result)
 
 int CdSync(int mode, unsigned char* result)
 {
-    (void)mode;
     (void)result;
+    /* Busy while a seek is under way (PS1 drive timing, above); mode 1 polls, mode 0 waits. */
+    while (vblanks() < s_BusyUntil)
+    {
+        if (mode)
+        {
+            return CdlNoIntr;
+        }
+    }
     return CdlComplete;
 }
 

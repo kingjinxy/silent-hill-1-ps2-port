@@ -296,9 +296,12 @@ void MainLoop(void) // 0x80032EE0
                 g_VBlanks     = VSync(SyncMode_Count) - g_PrevVBlanks;
                 g_PrevVBlanks = VSync(SyncMode_Count);
 #if defined(SH_PORT) && SH_PORT_FPS == 60
+#ifndef SH_PORT_CUTSCENE_VBLANKS
+#define SH_PORT_CUTSCENE_VBLANKS 1
+#endif
                 // Port option (`SH1_FPS=60`): as in gameplay, wait only when the frame took under a
                 // vertical blank, so a frame running slightly late doesn't drop to 30 fps.
-                while (g_VBlanks < 1)
+                while (g_VBlanks < SH_PORT_CUTSCENE_VBLANKS)
                 {
                     VSync(SyncMode_Wait);
                     g_VBlanks++;

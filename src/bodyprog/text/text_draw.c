@@ -555,6 +555,10 @@ s32 Gfx_MapMsg_StringDraw(char* mapMsg, s32 displayLength) // 0x8004AF18
 
                             g_SysWork.mapMsgTimer = digit;
                             mapMsg                = mapMsg + 1;
+#ifdef SH_PORT_MSG_DEBUG
+                            printf("msgdbg: page %d ms at vblank %d (step %d)\n", (s32)((digit * 1000) >> 12), VSync(-1),
+                                   g_SysWork.sysStateSteps[0]);
+#endif
                         }
                         else
                         {

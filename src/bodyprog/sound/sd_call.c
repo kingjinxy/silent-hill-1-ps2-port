@@ -871,7 +871,7 @@ static void Sd_XaAudioPlay(void) // 0x80046E00
     g_Sd_AudioWork.cdErrorCount++;
 
 #ifdef SH_PORT_MSG_DEBUG
-    printf("msgdbg: XA load state %d\n", g_Sd_AudioStreamingStates.xaLoadState);
+    printf("msgdbg: XA load state %d at vblank %d\n", g_Sd_AudioStreamingStates.xaLoadState, VSync(-1));
 #endif
     switch (g_Sd_AudioStreamingStates.xaLoadState)
     {

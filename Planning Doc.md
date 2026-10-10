@@ -463,3 +463,11 @@ Ideas to try, roughly by expected payoff:
 - At 60 fps (SH1_FPS=60), message text now rolls out by elapsed time, as at 30 fps on the PS1 (map_msg_display.c).
 - Still open: in map3_s00 func_800D0CF8, message 15 is shown twice (steps 5/7, then step 9 restarts it), so every later voice clip plays one page early and is cut when its page ends. Clip and page lengths match exactly when shifted by one. This looks like a race between the message's 1 s page and the cutscene timer reaching 25.
 - Debug build switch: SH1_MSG_DEBUG=1 (with SH1_EXTRA_CFLAGS=-DSH_PORT_MSG_DEBUG for the game files). It logs per-second frames, frame time and text timer; XA line starts; libcd/SPU calls over 2 ms; and spikes, which are PROF sections over 30 ms.
+- PS1 drive timing (2026-10-09). The PS1 reference ([tools/port/duckstation_cutscene.py](tools/port/duckstation_cutscene.py) with [gdb/cutscene_ps1.py](tools/port/gdb/cutscene_ps1.py)) plays a Demo-list cutscene on the unmodified game in DuckStation and logs steps, pages, XA load states and starts/stops:
+  - It starts a real New Game through the menu, then warps to the map.
+  - Options: `--steps`, `--fps60` (DuckStation's 60 FPS patch), `--overclock`. DuckStation runs muted.
+  - Findings: the PS1 pairs every voice line with its page at 20 fps, and also at 60 fps with a 300% overclock. So frame rate wasn't the cause.
+  - The difference was the drive. A voice line's page starts once its read starts, which on the PS1 waits for the seek: about 26 blanks from the map data to the voice area, 4–7 blanks after the game's preload.
+  - libcd now models seek time in real time: after CdlSeekL, CdSync(1) reports busy for 4 + 44·√(distance/200000) vertical blanks (SEEK_* in libcd_ps2.c).
+  - Result: map3_s00 func_800D0CF8 pairs every line like the PS1. 29 of 32 lines play to the end; the PS1 cuts the same three at the same points (their clips end in silence).
+- SH_PORT_CUTSCENE_VBLANKS (default 1) is the minimum vertical blanks per cutscene frame in 60 fps mode. Test only.

@@ -45,6 +45,7 @@ OVERRIDES = {
     "SaveStateOnExit": "false",
     "PauseOnFocusLoss": "false",
     "EnableGDBServer": "true",
+    "OutputMuted": "true",  # the user's preference: DuckStation runs muted
 }
 
 

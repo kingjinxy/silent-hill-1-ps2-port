@@ -11219,3 +11219,257 @@ The time is inside `Sd_TaskPoolExecute`, the game's sound task runner. It's spen
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/input.txt; source .venv/bin/activate; unset SH1_MSG_DEBUG SH1_EXTRA_CFLAGS; export SH1_FPS=60; 
 
+## Claude
+
+You were right: the frame drops at voice lines are fixed. In PCSX2, the seconds where a line starts now draw 47–52 frames, like the rest of the scene, where they were dipping to 36–41. But the voices still play one page early, so they're cut short. That's a separate problem.
+
+**Why each line cost a frame.** Every voice line caused one long frame of 100–230 ms:
+- When a line starts, the IOP's voice reader fetches its first sectors from disc, which takes 50–120 ms.
+- It waited for that read with a blocking call (`sceCdSync(0)`). While it waited, the IOP's sound command thread didn't run, so voice status stopped updating.
+- The game's sound driver runs on the EE above the game's own priority. It loops waiting on voice status, and with that status stale it spun the whole time and starved the game.
+
+The reader now checks the drive every 1 ms instead of blocking, so the command thread keeps running. The spikes are gone from the PCSX2 runs. No disc or sound call blocks the game for more than 2 ms.
+
+**A second timing bug I fixed on the way:** frame time was being undercounted. The time the port spends converting each frame to the GS was never counted, so slow stretches ran in slow motion while the voices played in real time. That's part of the desync you saw.
+
+**Still wrong: lines playing a page early.** In this cutscene the first message, "Hold it…", is shown twice. From then on every clip plays one page ahead and is cut off when that page ends. The lengths prove it: each clip matches the next page's timing exactly ("Stop! Don't shoot!" 1.62 s clip against the 1.7 s page, "I was taking a nap" 4.55 s against 4.5 s). It's a race between the message's 1-second page and a cutscene timer that hit their limits on the same frame.
+- I made message text in 60 fps mode roll out at the PS1's 30 fps speed, expecting that to fix it. It didn't change the race, but I kept it because it matches the original text speed.
+- My best guess is that this cutscene depends on 30 fps frame timing somewhere else. The quickest check would be a 30 fps build of the port.
+
+The build without the debug output is ready (`build/port/sh1_ps2.iso`), and the PS1 build still matches all 50 checksums. Committed as 7cc27c96a, with the Planning Doc and conversation archive updated.
+
+Should I chase the early-page race next, starting with the 30 fps comparison? Or do you want to test the frame-rate fix on the console first?
+
+## User
+
+Yes, let's go with the early-page race. Let's test with 30 fps and then go from there.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; { echo "20 down"; echo "21 cross"; for i in 0 1 2 3; do echo "$((23+i)).5 down"; done; echo "28 cross"; } > buil
+
+## Claude
+
+The 30 fps build behaves exactly the same: clip 255 still starts on a second showing of message 15, and the later clips are still a page early and cut. So it isn't caused by 60 fps.
+
+That leaves two possibilities:
+1. **A port bug in message or step timing** that happens at any frame rate.
+2. **The original game does this too**, and my reading of the clip order is off. For example, a clip may be meant to start when the previous page finishes and run over the next one.
+
+The trouble with (2) is that a shipped game wouldn't cut most of its dialogue in half. I can't tell these apart from the port alone. I need the same cutscene running on the original PS1 game as ground truth. DuckStation can do that, and [tools/port/duckstation_world_watch.py](tools/port/duckstation_world_watch.py) can already read PS1 memory while the game runs. With the same values logged there — page timer, cutscene step, current XA clip — I can compare frame by frame and see exactly where the port diverges.
+
+DuckStation has no Demo menu, so I'd need to start right before this cutscene (Kaufmann at the hospital, map3_s00). Could you make a DuckStation save state just before it starts and tell me the slot? Or point me to a save file.
+
+## User
+
+Let's make a debug version of the PS1 game that has a demo menu.
+
+## Claude
+
+A PS1 build with the Demo menu would give us ground truth in DuckStation, using the same menu and the same cutscene. First I'll check what the decomp's build can already do: build changed code (non-matching) and rebuild a disc image from it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^[a-zA-Z_-]*:" Makefile | head -40; grep -n "NON_MATCHING\|iso\|rebuild\|mkpsxiso\|BUILD_ISO\|SKIP_ASM"
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 150,175p Makefile; sed -n 540,600p Makefile; sed -n 640,660p Makefile; grep -n "insert-ovl\|INSERT\|new_S
+
+- tool `AskUserQuestion`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls tools/port/gdb/; wc -l tools/port/gdb/*.py; sed -n 1,60p tools/port/gdb/sh1.py; grep -n "def \|class \|gdb.Co
+
+## Claude
+
+There's already a sweep script that drives DuckStation through gdb on its own. I'll read it and the launcher, then build the cutscene runner on the same pattern.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,60p tools/port/gdb/warp_sweep.py; sed -n 1,50p tools/port/duckstation_world_watch.py; sed -n 60,90p too
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for s in g_MapEventData g_MapEventSysState g_MapEventParam g_MapOverlayHdr CdControl g_Sd_AudioWork g_SysWork g_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,30p tools/port/struct_layout.py | head -30; python3 tools/port/struct_layout.py s_SysWork 2>&1 | grep -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "} s_MapOverlayHeader;\|} MapOverlayHeader;" include | head -2; python3 tools/port/struct_layout.py s_M
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 170,193p include/bodyprog/sound/sound_system.h; grep -rn "mapEvents;" include | head -2; grep -rn "typede
+
+## Claude
+
+I have the addresses and offsets. Next, the rest of `warp_sweep.py`, to reuse how it starts DuckStation and runs gdb.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 60,158p tools/port/gdb/warp_sweep.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/struct_layout.py s_SysWork 2>&1 | grep -E "gameStateCounter|sysStateCounter" | head -3; pytho
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/gdb/cutscene_ps1.py
+
+## Claude
+
+Now the launcher. It looks up the cutscene by its Demo menu name, starts DuckStation with the GDB server, and runs the gdb side.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls build/*.cue rom/image/*.cue 2>/dev/null; ls ~/Downloads/DuckStation-x64.AppImage; which gdb-multiarch
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat > tools/port/duckstation_cutscene.py <<'E' #!/usr/bin/env python3 """Plays one in-game cutscene on the unmod
+
+## User
+
+[Request interrupted by user for tool use]
+
+## User
+
+The game has crashed.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -a "CRASH\|SH1 port: starting\|map load" build/port/ps2_log.out | tail -8; tail -3 build/port/ps2_log.out
+
+## Claude
+
+Which machine crashed? It wasn't anything I started: my DuckStation command was cancelled before it ran, so DuckStation never launched (and that launcher script wasn't saved).
+
+The PS2's log hasn't changed in hours. Its last entries are a frozen frame on map6_s04 (frame 16431, 0% idle), so this new crash isn't on the console. That leaves PCSX2, and I can't see your PCSX2 session's log: your GUI run doesn't write it to a file.
+
+To dig in, it would help to know:
+1. **Where:** PCSX2 or the PS2?
+2. **What:** which Demo entry or part of the game, and roughly what was happening (a voice line starting, a page change, a map load).
+3. **How it looks:** frozen picture, black screen, PCSX2 error dialog, or emulator closed.
+
+If it was PCSX2, I can reproduce it with my runner, which captures the full log and the crash report. Just name the cutscene, or I'll start with `map3_s00 func_800D0CF8` if that's the one.
+
+## User
+
+Duckstation stopped outputting frames, so I manually closed it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls -la tools/port/duckstation_cutscene.py build/port/ps1_cutscene.log 2>&1; cat build/port/ps1_cutscene.log 2>/d
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for s in g_MainMenuState g_Controller0 GameState_MainMenu_Update g_GameWorkPtr g_MainMenu_SelectedEntry; do grep
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='tools/port/gdb/cutscene_ps1.py'; s=open(p).read() s=s.replace('''The next map load (the attra
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='tools/port/gdb/cutscene_ps1.py'; s=open(p).read() s=s.replace('''__import__("sh1").MAPS.index
+
+## Claude
+
+I'm running the reference again. A DuckStation window will open; please leave it running. It closes by itself when the cutscene ends or after 90 emulated seconds.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 900 python3 tools/port/duckstation_cutscene.py "map3_s00 func_800D0CF8" --seconds 90 --timeout 840 2>&1 
+
+## User
+
+[Request interrupted by user for tool use]
+
+## User
+
+I switched to the software renderer, which I want to be used going forward. I'm noticing that duckstation is being paused and unpaused many times per second. Is that necessary? Run the reference again.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for s in Sd_XaAudioStop Sd_XaAudioPlay; do grep -h "^$s *=" configs/USA/sym.bodyprog.txt; done; python3 - <<'P' 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "} s_Sd_AudioStreamingStates\|AudioStreamingStates;" include | head -3; f=$(grep -rln "} s_Sd_AudioStre
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 194,202p include/bodyprog/sound/sound_system.h
+
+## Claude
+
+Now the rewrite. Logging hooks only the XA routines, and the end of the cutscene is detected by `Event_Update` running again:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='tools/port/gdb/cutscene_ps1.py'; s=open(p).read() # EventStart: after the start, its next hit
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='tools/port/gdb/cutscene_ps1.py'; s=open(p).read() a='''        if rd(G_GAMEWORK_GAMESTATE) ==
+
+## Claude
+
+The original game played the whole cutscene. Here's the start of the log, to compare the pairing with the port:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep "\[cut\]" build/port/ps1_cutscene.log | grep -v "XA stop" | head -24
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -h "SysWork_StateStepIncrement\|SysWork_StateStepSet\b\|Gfx_MapMsg_StringDraw\|Gfx_StringDraw *=" configs/U
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(find asm/USA/bodyprog -name "Gfx_MapMsg_StringDraw.s" | head -1); echo $f; grep -n "sw\b.*\(0x234C\|mapMsgTi
+
+## Claude
+
+The page timer is set by a single store instruction in `Gfx_MapMsg_StringDraw` (0x8004B2CC). I'll hook that to log each page start with the cutscene step at that moment.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='tools/port/gdb/cutscene_ps1.py'; s=open(p).read() s=s.replace('''class MenuPress(gdb.Breakpoi
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|^G_SAVEGAME_MAPIDX = 0xA4|G_SAVEGAME_MAPIDX = 0xA4\nG_MAP_MSG_CURRENT_IDX = 0x800A99AC  # g_MapMsg_Cur
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='tools/port/gdb/cutscene_ps1.py'; s=open(p).read() s=s.replace('''class PageWatch(gdb.Breakpoi
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 40,128p src/bodyprog/text/map_msg_display.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='tools/port/gdb/cutscene_ps1.py'; s=open(p).read() a='''    def stop(self):         if State.s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/bodyprog/sys/game_main.c'; s=open(p).read() a='''                while (g_VBlanks < 1)   
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/bodyprog/text/text_draw.c'; s=open(p).read() a='''                            g_SysWork.m
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; SH1_XA_STATES=1 timeout 900 python3 tools/port/duckstation_cutscene.py "map3_s00 func_800D0CF8" --timeout 840 > 
+
+## Claude
+
+The full PS1 log changes the picture. After the first voice line, every line goes from "start reading" to playing in exactly 9 vertical blanks, wherever it sits on the disc. Only the first line took 27; later seeks are already done by the game's preload while the previous line plays. And 9 blanks is exactly three of the PS1's 3-blank frames in this scene.
+
+So disc seek time isn't the real cause. The cutscene's voice and message handling counts frames, and the PS1 runs this scene at about 20 fps. Here's how one stretch compares:
+
+| From step 5 (vertical blanks) | PS1 (~20 fps) | Port (60 fps) |
+|---|---|---|
+| Voice load steps 0–6 | 18 (3 per step) | 7 (1 per step) |
+| Read start to page start | 25 | 1 |
+| Page starts | +57 | +14 |
+
+Meanwhile the steps that wait on the cutscene's own timer take about the same real time on both. On the PS1, message 15 ends 27 blanks after step 8 begins, which is comfortable. In the port it ends 2 blanks before, so step 9 restarts it. Other cutscenes with the same pattern would break the same way.
+
+Ways to fix it:
+1. **Model PS1 drive response time in libcd (recommended).** After each command in a voice line's start sequence, `CdSync` would report "busy" for about one PS1 frame (50 ms), as the real game sees it. In this scene that turns the port's lead-in into about 33 blanks against the PS1's 57, and message 15 then ends about 18 blanks after step 8 starts, as on the PS1. It's contained: only the XA start sequence, no game code changes, and the 60 fps gameplay stays. The catch: it's a compensating delay rather than accurate drive timing, since a real drive answers in milliseconds. Other frame-counted cutscene logic would still run faster than on the PS1.
+2. **Run cutscenes at the PS1's pace.** A frame cap during cutscenes (20–30 fps) would make every frame-counted part of a cutscene behave like the PS1. It's more faithful, but cutscenes would look choppier than gameplay, and I measured that 30 fps alone isn't slow enough for this scene.
+3. **Patch the race in game code** (under `SH_PORT`). Stop `Event_DisplayMapMsgWithAudio` from restarting a message that has just finished in the same cutscene. It's targeted, but it changes game logic, and other scenes may have different races.
+
+Which do you want? I'd start with option 1 and check it against the PS1 log for this cutscene, then the café.
+
+## User
+
+From now on, run Duckstation with its audio output muted. Is there anything we can do to make cutscene timing not dependent on frame rate, but have the timing identical to the PS1 game?
+One other thing you could test is using the 60 FPS cheat in Duckstation combined with a 300% CPU overclock to see how the PS1 game responds to a higher frame rate in that cutscene.
+
+## Claude
+
+First, muting DuckStation: I'll add its mute setting to the overrides the reference runs apply. Then I'll check what's available for the 60 fps cheat and the CPU overclock.
+
+- tool `Bash`: D=~/.local/share/duckstation; grep -n -i "^\[audio\]\|muted\|OutputMuted\|Overclock\|EnableCheats\|^\[CPU\]\|^\[Cheats\]" $D/settings.ini | head -20; ls $D; ls 
+
+## Claude
+
+No cheat files exist locally, so DuckStation's 60 fps patch for this game would come from its built-in patch database inside the AppImage. I'll extract it and look for Silent Hill (SLUS-00707).
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; cd $S; [ -d squashfs-root ] || ~/Downloads/DuckS
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/squashfs-root/usr/bin/resources; unzip -l $S/patc
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/squashfs-root/usr/bin/resources; unzip -p $S/patc
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:40]); s=s.replace(a,b,1); open(p,'w').w
+
+## Claude
+
+Now the reference with the 60 FPS patch and a 300% overclock, logging the same steps, pages and voice-load states:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; SH1_XA_STATES=1 timeout 900 python3 tools/port/duckstation_cutscene.py "map3_s00 func_800D0CF8" --steps 12 --fps
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "s_Req.pos\b.*=\|s_Req.pos +=\|s_Req.pos++" src/port/ps2/libcd_ps2.c | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 186,200p src/port/ps2/libcd_ps2.c; grep -n "^int CdSync" -A8 src/port/ps2/libcd_ps2.c; grep -n "Port_VBla
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' def ed(a,b):     global s; assert a in s,a[:50]; s=s.replace(a,b,1) p='src/port/ps2/libcd_ps2.c'
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/libcd_ps2.c'; s=open(p).read() s=s.replace('''        WaitSema(-1); /* placehold
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|#define SEEK_FAR_VBLANKS 24                  /\* extra for the farthest seek \*/|#define SEEK_FAR_VBLA
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; F=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/p
+
+## Claude
+
+The three lines still cut in the port (200, 136, 181) all have pages shorter than their clips: for example, 2.4 s of page for a 2.95 s clip. I'll check how long the PS1 actually lets them play.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk '/XA start: index (200|136|181) /{p=1; print; next} p && /XA stop/{print; p=0}' build/port/ps1_cutscene.log
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; F=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; F=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; make -j8 build < /dev/null > /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d5
+
