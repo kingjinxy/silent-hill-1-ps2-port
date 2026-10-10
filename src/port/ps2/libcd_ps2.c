@@ -68,6 +68,27 @@ static int s_XaPlaying;
 extern void Port_XaStart(unsigned int hillLsn, unsigned int index, unsigned int file, unsigned int chan); /* spu_ps2.c */
 extern void Port_XaStop(void);
 
+/* Timing of calls that can wait for the drive (SH1_MSG_DEBUG builds): any over 2 ms is logged. */
+#ifdef SH_PORT_MSG_DEBUG
+static unsigned int cyc(void)
+{
+    unsigned int c;
+    __asm__ volatile("mfc0 %0, $9" : "=r"(c));
+    return c;
+}
+#define TIMED(name, expr)                                                                          \
+    ({                                                                                             \
+        unsigned int t0_ = cyc();                                                                  \
+        __typeof__(expr) r_ = (expr);                                                              \
+        unsigned int d_ = cyc() - t0_;                                                             \
+        if (d_ > 589824)                                                                           \
+            printf("slow: %s took %u ms\n", name, d_ / 294912);                                   \
+        r_;                                                                                        \
+    })
+#else
+#define TIMED(name, expr) (expr)
+#endif
+
 /* Bounce buffer for DVD reads: the EE side of libcdvd DMAs into it. */
 #define BOUNCE_SECTORS 32
 static unsigned char s_Bounce[BOUNCE_SECTORS * DVD_SECTOR] __attribute__((aligned(64)));
@@ -95,7 +116,7 @@ static int dvd_start(unsigned int lsn, unsigned int count)
     mode.spindlctrl  = SCECdSpinNom;
     mode.datapattern = SCECdSecS2048;
     mode.pad         = 0;
-    return sceCdRead(lsn, count, s_Bounce, &mode);
+    return TIMED("sceCdRead (data)", sceCdRead(lsn, count, s_Bounce, &mode));
 }
 
 /** Starts the next chunk of the request; 0 on failure (the request is then in error). */
@@ -182,7 +203,7 @@ static void advance(int wait)
     {
         if (s_Req.inFlight)
         {
-            if (sceCdSync(wait ? 0 : 1))
+            if (TIMED(wait ? "sceCdSync(0) (data)" : "sceCdSync(1) (data)", sceCdSync(wait ? 0 : 1)))
             {
                 return; /* still reading */
             }
@@ -280,7 +301,7 @@ int CdControl(unsigned char com, unsigned char* param, unsigned char* result)
          * changes leave it running. */
         if (s_Req.inFlight)
         {
-            sceCdSync(0);
+            TIMED("sceCdSync(0) (stop)", sceCdSync(0));
         }
         s_Req.active   = 0;
         s_Req.inFlight = 0;
@@ -306,16 +327,19 @@ int CdControl(unsigned char com, unsigned char* param, unsigned char* result)
     {
         if ((s_Ready || CdInit()) && s_Pos >= (int)s_HillPs1Start)
         {
-            Port_XaStart(s_Hill.lsn, (unsigned int)(s_Pos - (int)s_HillPs1Start), (unsigned int)s_XaFile,
-                         (unsigned int)s_XaChan);
+            TIMED("XA start", (Port_XaStart(s_Hill.lsn, (unsigned int)(s_Pos - (int)s_HillPs1Start), (unsigned int)s_XaFile,
+                         (unsigned int)s_XaChan), 0));
             s_XaPlaying = 1;
         }
     }
     else if ((com == CdlStop || com == CdlPause || com == CdlInit || com == CdlReadN || com == CdlReadS) &&
              s_XaPlaying)
     {
-        Port_XaStop();
+        TIMED("XA stop", (Port_XaStop(), 0));
         s_XaPlaying = 0;
+#ifdef SH_PORT_MSG_DEBUG
+        printf("msgdbg: XA stopped by libcd command %02X\n", com);
+#endif
     }
     return 1; /* Seeks etc. complete immediately. */
 }

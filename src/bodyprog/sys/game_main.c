@@ -216,18 +216,30 @@ void MainLoop(void) // 0x80032EE0
         }
 
         PROF_BEGIN("MainLoop: fade, memory card, sound, files, pad, camera")
+        PROF_BEGIN("ml: Screen_FadeUpdate")
         Screen_FadeUpdate();
+        PROF_END("ml: Screen_FadeUpdate")
+        PROF_BEGIN("ml: MemCard_Update")
         MemCard_Update();
+        PROF_END("ml: MemCard_Update")
 
         // Update sound.
+        PROF_BEGIN("ml: Sd_TaskPoolExecute")
         Sd_TaskPoolExecute();
+        PROF_END("ml: Sd_TaskPoolExecute")
         if (Sd_AudioStreamingCheck() == AudioStreamingState_None)
         {
+            PROF_BEGIN("ml: Fs_QueueUpdate")
             Fs_QueueUpdate();
+            PROF_END("ml: Fs_QueueUpdate")
         }
 
+        PROF_BEGIN("ml: func_80089128")
         func_80089128();
+        PROF_END("ml: func_80089128")
+        PROF_BEGIN("ml: func_8008D78C")
         func_8008D78C(); // Camera update?
+        PROF_END("ml: func_8008D78C")
         PROF_END("MainLoop: fade, memory card, sound, files, pad, camera")
         DrawSync(SyncMode_Wait);
 

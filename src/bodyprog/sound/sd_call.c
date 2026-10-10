@@ -1,4 +1,5 @@
 #include "game.h"
+#include "port/prof.h"
 
 #include <psyq/libcd.h>
 #include <psyq/libetc.h>
@@ -869,6 +870,9 @@ static void Sd_XaAudioPlay(void) // 0x80046E00
 
     g_Sd_AudioWork.cdErrorCount++;
 
+#ifdef SH_PORT_MSG_DEBUG
+    printf("msgdbg: XA load state %d\n", g_Sd_AudioStreamingStates.xaLoadState);
+#endif
     switch (g_Sd_AudioStreamingStates.xaLoadState)
     {
         case XaLoadState_Initialize:
@@ -975,14 +979,28 @@ static void Sd_XaAudioPlay(void) // 0x80046E00
             break;
 
         case XaLoadState_EnableAudio:
+#ifdef SH_PORT_MSG_DEBUG
+            {
+                u32 t0, t1;
+                __asm__ volatile("mfc0 %0, $9" : "=r"(t0));
+                printf("msgdbg: XA line %d starts (length %d vblanks), text timer %d ms\n", xaAudioIdx,
+                       gSDXATable[xaAudioIdx].audioLength, (s32)((g_SysWork.mapMsgTimer * 1000) >> 12));
+                __asm__ volatile("mfc0 %0, $9" : "=r"(t1));
+                printf("msgdbg: that printf took %u us\n", (t1 - t0) / 295);
+            }
+#endif
             g_Sd_AudioWork.xaAudioIdx = xaAudioIdx;
 
+            PROF_BEGIN("xa: SdSetSerialAttr")
             SdSetSerialAttr(0, 0, 1);
+            PROF_END("xa: SdSetSerialAttr")
             g_Sd_XaAudioPlayTracking.vSyncTimeSinceBoot     = VSync(SyncMode_Count);
             g_Sd_XaAudioPlayTracking.xaAudioPlayCurrentTime = 0;
             g_Sd_AudioStreamingStates.xaLoadState           = XaLoadState_Initialize;
 
+            PROF_BEGIN("xa: Sd_TaskPoolUpdate")
             Sd_TaskPoolUpdate();
+            PROF_END("xa: Sd_TaskPoolUpdate")
             g_Sd_AudioWork.cdErrorCount   = 0;
             g_Sd_AudioWork.isXaNotPlaying = false;
             break;
@@ -1703,7 +1721,9 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
             break;
 
         case 1:
+            PROF_BEGIN("sd: Sd_XaAudioPlay")
             Sd_XaAudioPlay();
+            PROF_END("sd: Sd_XaAudioPlay")
             break;
 
         case 2:
@@ -1788,7 +1808,9 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
             }
         }
 
+        PROF_BEGIN("sd: Sd_BgmVolumeSet (ramp)")
         Sd_BgmVolumeSet(gSDVolConfig.volumeBgmToSet, gSDVolConfig.volumeBgmToSet);
+        PROF_END("sd: Sd_BgmVolumeSet (ramp)")
     }
 
     if (g_Sd_XaAudioPlayTracking.xaAudioPlayCurrentTime > g_Sd_XaAudioPlayTracking.xaAudioLength)
@@ -1816,7 +1838,9 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
                 gSDVolConfig.globalVolumeGame = 0;
             }
 
+            PROF_BEGIN("sd: SdSetMVol")
             SdSetMVol(gSDVolConfig.globalVolumeGame, gSDVolConfig.globalVolumeGame);
+            PROF_END("sd: SdSetMVol")
         }
     }
     else
@@ -1829,7 +1853,9 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
                 gSDVolConfig.globalVolumeGame = OPT_SOUND_VOLUME_MAX - 1;
             }
 
+            PROF_BEGIN("sd: SdSetMVol")
             SdSetMVol(gSDVolConfig.globalVolumeGame, gSDVolConfig.globalVolumeGame);
+            PROF_END("sd: SdSetMVol")
         }
     }
 

@@ -57,6 +57,28 @@ static u32  s_Fills;
 static u32  s_Madr[4]; /* DMA address at the last interrupts */
 static int  s_Peak; /* loudest output sample since the last diagnostic line */
 
+/* Per-stream timing, in output frames (48 kHz), for the "XA stream" line (xa_report). */
+static volatile int s_Eof;     /* the reader has passed the stream's last sector */
+static u32  s_StFrames;        /* frames output since the stream started */
+static u32  s_StFirst;         /* frame of the first audio (start latency) */
+static u32  s_StGaps;          /* silent frames after the first audio, before the end */
+static u32  s_StGapCount;      /* separate gaps */
+static int  s_StAudio, s_StInGap, s_StOpen;
+static u32  s_ReadMax;         /* slowest disc read of the stream (us), from the reader */
+
+static void xa_report(const char* how)
+{
+    if (s_StOpen)
+    {
+        printf("sh1spu: XA stream %s: started after %u ms, %u gaps (%u ms of silence), %u ms long, slowest read %u ms\n", how,
+               (unsigned)(s_StFirst / 48), (unsigned)s_StGapCount, (unsigned)(s_StGaps / 48),
+               (unsigned)((s_StFrames - s_StFirst) / 48), (unsigned)(s_ReadMax / 1000));
+    }
+    s_StOpen = s_StAudio = s_StInGap = 0;
+    s_StFrames = s_StFirst = s_StGaps = s_StGapCount = 0;
+    s_ReadMax = 0;
+}
+
 static const int K0[4] = { 0, 60, 115, 98 };
 static const int K1[4] = { 0, 0, -52, -55 };
 
@@ -159,6 +181,8 @@ static void fill(u8* half)
     {
         s_MixGen = s_Gen;
         reset_decoder();
+        xa_report("cut off");
+        s_StOpen = s_Active;
     }
     for (f = 0; f < HALF_FRAMES; f++)
     {
@@ -174,11 +198,34 @@ static void fill(u8* half)
             }
             s_Pos -= played << 16;
         }
+        if (s_StOpen)
+        {
+            s_StFrames++;
+        }
         if (n >= s_DecCount)
         {
             l[0] = l[BLOCK] = 0; /* nothing to play */
+            if (s_StOpen && s_StAudio)
+            {
+                if (s_Eof && s_FifoOut == s_FifoIn)
+                {
+                    xa_report("ended"); /* played to the end */
+                }
+                else
+                {
+                    s_StGaps++;
+                    s_StGapCount += !s_StInGap;
+                    s_StInGap = 1;
+                }
+            }
             continue;
         }
+        if (s_StOpen && !s_StAudio)
+        {
+            s_StAudio = 1;
+            s_StFirst = s_StFrames;
+        }
+        s_StInGap = 0;
         i    = (s_Pos >> 8) & 0xFF;
         outL = ((GAUSS[0xFF - i] * s_DecL[n - 3]) >> 15) + ((GAUSS[0x1FF - i] * s_DecL[n - 2]) >> 15) +
                ((GAUSS[0x100 + i] * s_DecL[n - 1]) >> 15) + ((GAUSS[i] * s_DecL[n]) >> 15);
@@ -274,7 +321,8 @@ static void mixer(void* arg)
 
 static void reader(void* arg)
 {
-    sceCdRMode mode;
+    sceCdRMode      mode;
+    iop_sys_clock_t t0, t1;
     (void)arg;
     mode.trycount    = 0;
     mode.spindlctrl  = SCECdSpinNom;
@@ -292,12 +340,32 @@ static void reader(void* arg)
         lsn   = s_HillLsn + off / 2048;
         skip  = off % 2048;
         count = (skip + BATCH * PS1_RAW + 2047) / 2048;
+        GetSystemTime(&t0);
         if (!sceCdRead(lsn, count, s_Read, &mode))
         {
             DelayThread(2000); /* drive busy (a data read from the EE): try again */
             continue;
         }
-        sceCdSync(0);
+        /* Poll instead of sceCdSync(0): a blocking wait kept the command thread (main.c) from running
+         * for the whole read (50-120 ms), and the EE's sound driver, spinning on voice status that
+         * then didn't update, stalled the game for as long at every voice line. */
+        while (sceCdSync(1))
+        {
+            DelayThread(1000);
+        }
+        GetSystemTime(&t1);
+        {
+            u32 sec, usec;
+            iop_sys_clock_t d;
+            d.lo = t1.lo - t0.lo;
+            d.hi = 0;
+            SysClock2USec(&d, &sec, &usec);
+            usec += sec * 1000000;
+            if (usec > s_ReadMax)
+            {
+                s_ReadMax = usec;
+            }
+        }
         for (k = 0; k < BATCH && s_Active && gen == s_Gen; k++)
         {
             const u8* p = s_Read + skip + k * PS1_RAW;
@@ -319,6 +387,7 @@ static void reader(void* arg)
             if (p[2] & 0x80) /* end of file */
             {
                 s_Active = 0;
+                s_Eof    = 1;
                 printf("sh1spu: XA end of file (%d sectors played)\n", s_FifoIn - s_Started);
             }
         }
@@ -340,6 +409,7 @@ void xa_start(u32 hillLsn, u32 index, u32 file, u32 chan)
     s_File    = file;
     s_Chan    = chan;
     s_Started = s_FifoIn;
+    s_Eof     = 0;
     s_Active  = 1;
     printf("sh1spu: XA file %u channel %u from HILL. sector %u\n", (unsigned)file, (unsigned)chan, (unsigned)index);
     SignalSema(s_ReadSema);

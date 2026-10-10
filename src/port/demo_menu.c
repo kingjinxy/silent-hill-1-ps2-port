@@ -135,8 +135,54 @@ int Port_DemoEventStart(void)
     return 1;
 }
 
+#ifdef SH_PORT_MSG_DEBUG
+void Port_Spike(const char* name, unsigned int ms)
+{
+    printf("spike: %s took %u ms (sysState %d step %d)\n", name, ms, g_SysWork.sysState, g_SysWork.sysStateSteps[0]);
+}
+
+/* Test (SH1_MSG_DEBUG=1): once a second, how far the voiced text timer fell against the frame time
+ * and the vertical blanks that passed. */
+static void msg_debug(void)
+{
+    extern s32 Port_VBlanks(u32* cycles);
+    static s32 prevTimer = -1, frames, timerDrop, rawSum, vbStart = -1;
+    u32        cycles;
+    s32        vb = Port_VBlanks(&cycles), t = g_SysWork.mapMsgTimer;
+    if (vbStart < 0)
+    {
+        vbStart = vb;
+    }
+    if (prevTimer > 0 && t >= 0 && t < prevTimer)
+    {
+        timerDrop += prevTimer - t;
+    }
+    prevTimer = t;
+    {
+        static s32 prevStep = -1;
+        if (g_SysWork.sysStateSteps[0] != prevStep)
+        {
+            printf("msgdbg: step %d at vblank %d\n", g_SysWork.sysStateSteps[0], vb);
+            prevStep = g_SysWork.sysStateSteps[0];
+        }
+    }
+    rawSum += g_DeltaTimeRaw;
+    frames++;
+    if (vb - vbStart >= 60)
+    {
+        printf("msgdbg: %d vblanks, %d frames, frame time %d.%03d s, text timer fell %d.%03d s\n", vb - vbStart, frames,
+               rawSum >> 12, ((rawSum & 0xFFF) * 1000) >> 12, timerDrop >> 12, ((timerDrop & 0xFFF) * 1000) >> 12);
+        vbStart = vb;
+        frames = timerDrop = rawSum = 0;
+    }
+}
+#endif
+
 void Port_DemoTick(void)
 {
+#ifdef SH_PORT_MSG_DEBUG
+    msg_debug();
+#endif
     if (s_Chosen < 0 || !s_Started)
     {
         return;

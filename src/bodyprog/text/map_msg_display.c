@@ -1,4 +1,5 @@
 #include "game.h"
+#include "port/prof.h"
 
 #include <psyq/libetc.h>
 #include <psyq/libpad.h>
@@ -130,7 +131,21 @@ s32 Gfx_MapMsg_Draw(s32 mapMsgIdx) // 0x800365B8
             Gfx_StringPositionSet(SCREEN_WIDTH / 8, (SCREEN_HEIGHT / 3) * 2);
 #endif
 
+#if defined(SH_PORT) && SH_PORT_FPS == 60
+            {
+                // Port option (`SH1_FPS=60`): the rollout advances per frame, tuned for 30 fps, so at 60 fps
+                // text appeared twice as fast, voiced pages started (and ended) early, and cutscenes that
+                // show a message across several steps restarted it, putting their voice lines a page
+                // early. Advance by the time passed instead (one 30 fps step per 1/30 s).
+                static s32 rolloutFrac;
+
+                rolloutFrac   += displayLengthInc * g_DeltaTimeRaw * 30;
+                displayLength += rolloutFrac / Q12(1.0f);
+                rolloutFrac   %= Q12(1.0f);
+            }
+#else
             displayLength += displayLengthInc;
+#endif
             displayLength  = CLAMP(displayLength, 0, MAP_MESSAGE_DISPLAY_ALL_LENGTH);
 
             if (g_MapMsg_AudioType != MapMsgAudioType_None && g_SysWork.mapMsgTimer > Q12(0.0f))
@@ -159,7 +174,9 @@ s32 Gfx_MapMsg_Draw(s32 mapMsgIdx) // 0x800365B8
 
                             if (g_SysWork.bgmStatusFlags & BgmStatusFlag_VoiceDialog)
                             {
+                                PROF_BEGIN("msg: SD_Call(19) (voice stop)")
                                 SD_Call(19);
+                                PROF_END("msg: SD_Call(19) (voice stop)")
                             }
                             break;
                         }
@@ -262,7 +279,9 @@ s32 Gfx_MapMsg_Draw(s32 mapMsgIdx) // 0x800365B8
             }
 
             rolloutState  = 0;
+            PROF_BEGIN("msg: SelectionUpdate (text draw)")
             menuSelection = Gfx_MapMsg_SelectionUpdate(g_MapMsg_CurrentIdx, &displayLength);
+            PROF_END("msg: SelectionUpdate (text draw)")
 
             if (menuSelection != MapMsgReturnCode_None && menuSelection < MapMsgReturnCode_YesOrNo)
             {

@@ -100,6 +100,10 @@ static void send(u32 n)
     u32                size = st->size;
     u32                tail = s_Pos + n > size ? size - s_Pos : 0;
     static u32         wrap[4] __attribute__((aligned(64))) = { OP_WRAP, 0, 0, 0 };
+#ifdef SH_PORT_MSG_DEBUG
+    u32 t0, t1;
+    __asm__ volatile("mfc0 %0, $9" : "=r"(t0));
+#endif
     while (size - (s_Sent - st->done) <= tail + n) /* wait for room (never fill the ring completely) */
     {
     }
@@ -116,6 +120,13 @@ static void send(u32 n)
     s_WPosOut[0] = s_Pos;
     dma(s_WPosOut, st->wpos, 16);
     dma_wait(); /* s_Packet and s_WPosOut are reused */
+#ifdef SH_PORT_MSG_DEBUG
+    __asm__ volatile("mfc0 %0, $9" : "=r"(t1));
+    if (t1 - t0 > 294912)
+    {
+        printf("slow: SPU command (%u bytes) took %u ms\n", (unsigned)n, (unsigned)((t1 - t0) / 294912));
+    }
+#endif
 }
 
 static void flush_regs(void)

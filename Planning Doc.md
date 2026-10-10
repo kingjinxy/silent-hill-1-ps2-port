@@ -456,3 +456,10 @@ Ideas to try, roughly by expected payoff:
   - `SH1_XA_SOLO=1` mutes everything but the XA input.
   - `pcsx2_run.py --audio` turns PCSX2's time-stretching off; with it on, the recording drops and repeats 10–20 ms pieces.
   - Recordings still lose 128-frame chunks steadily, probably the host audio output running behind emulation.
+
+## Voice lines vs. frame rate and timing (2026-10-09)
+- Frame drops at each voice line: the IOP's XA reader waited on its disc reads with `sceCdSync(0)` (50–120 ms). During that wait the sh1spu command thread didn't run, so the EE's sound driver (tick thread, priority 20) spun on stale voice status and starved the game: one frame of 100–230 ms per line. The reader now polls `sceCdSync(1)` with a 1 ms delay. Per-second frame counts at line starts went from 36–41 to 47–52, and the spikes are gone.
+- Frame time loss: counter 1 (GsGetVcount) was reset to "now" after drawing, so the GS conversion time between the read and the reset was never counted, and slow scenes ran in slow motion. ResetRCnt(CNT1) now goes back to the last read (rcnt_ps2.c).
+- At 60 fps (SH1_FPS=60), message text now rolls out by elapsed time, as at 30 fps on the PS1 (map_msg_display.c).
+- Still open: in map3_s00 func_800D0CF8, message 15 is shown twice (steps 5/7, then step 9 restarts it), so every later voice clip plays one page early and is cut when its page ends. Clip and page lengths match exactly when shifted by one. This looks like a race between the message's 1 s page and the cutscene timer reaching 25.
+- Debug build switch: SH1_MSG_DEBUG=1 (with SH1_EXTRA_CFLAGS=-DSH_PORT_MSG_DEBUG for the game files). It logs per-second frames, frame time and text timer; XA line starts; libcd/SPU calls over 2 ms; and spikes, which are PROF sections over 30 ms.

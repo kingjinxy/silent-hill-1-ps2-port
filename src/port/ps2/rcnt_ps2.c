@@ -35,6 +35,14 @@ typedef struct
 
 static RCnt s_Cnt[RCNT_COUNT];
 
+/* Counter 1: where it was last read. The game reads it (GsGetVcount) for the frame time, then draws
+ * and resets it (GsClearVcount). On the PS1, drawing between the two is a DMA kick; in the port it's
+ * the GS conversion, which takes a good part of a slow frame. Resetting to "now" lost that time, so
+ * slow scenes ran in slow motion (cutscenes fell behind their voice lines). A reset of counter 1
+ * goes back to the last read instead, so that time counts toward the next frame. */
+static unsigned long long s_Cnt1Read;
+static int                s_Cnt1ReadValid;
+
 /** 64-bit EE cycle count, extended from the 32-bit CP0 Count register (must be read at least every
  * ~14 s, which the game's frame loop does). */
 static unsigned long long ee_cycles(void)
@@ -91,7 +99,16 @@ long GetRCnt(unsigned long spec)
     {
         return 0;
     }
-    v = source(i) - s_Cnt[i].base;
+    if (i == 1)
+    {
+        s_Cnt1Read      = source(1);
+        s_Cnt1ReadValid = 1;
+        v               = s_Cnt1Read - s_Cnt[i].base;
+    }
+    else
+    {
+        v = source(i) - s_Cnt[i].base;
+    }
     if (s_Cnt[i].target)
     {
         v %= s_Cnt[i].target;
@@ -105,6 +122,12 @@ long ResetRCnt(unsigned long spec)
     if (i < 0)
     {
         return 0;
+    }
+    if (i == 1 && s_Cnt1ReadValid)
+    {
+        s_Cnt[i].base   = s_Cnt1Read;
+        s_Cnt1ReadValid = 0;
+        return 1;
     }
     s_Cnt[i].base = source(i);
     return 1;

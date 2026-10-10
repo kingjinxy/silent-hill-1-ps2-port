@@ -23,3 +23,6 @@ static int  sceCdRead(u32 l, u32 n, void* b, sceCdRMode* m) { (void)l; (void)n; 
 static int  sceCdSync(int m) { (void)m; return 0; }
 static void* sceSdSetTransIntrHandler(int c, int (*f)(int, void*), void* a) { (void)c; (void)f; (void)a; return 0; }
 static int  sceSdBlockTrans(int c, int m, void* b, u32 s) { (void)c; (void)m; (void)b; (void)s; return 0; }
+typedef struct { u32 lo, hi; } iop_sys_clock_t;
+static void GetSystemTime(iop_sys_clock_t* c) { c->lo = c->hi = 0; }
+static void SysClock2USec(iop_sys_clock_t* c, u32* s, u32* u) { (void)c; *s = *u = 0; }

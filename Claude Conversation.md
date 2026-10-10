@@ -10920,3 +10920,302 @@ PCSX2 is set to `SyncMode = TimeStretch`, and its 20 ms seek window and 10 ms ov
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/input.txt; source .venv/bin/activate; unset SH1_XA_SOLO; export SH1_FPS=60 SH1_NO_RECOMP=1; (py
 
+## Claude
+
+I found and fixed the main cause of the static, and the new build is ready to try in PCSX2: `build/port/sh1_ps2.iso`.
+
+**Test against the disc:**
+- I wrote an independent XA decoder in Python from the psx-spx spec ([xa_ref.py](tools/port/xa_test/xa_ref.py)).
+- I compiled the IOP's own decode and resample code on this machine and ran both on the café's 6-second line straight from `HILL.`.
+- They're identical sample for sample, so decoding and Gaussian resampling are correct.
+- `build/port/xa_test/ref_48k.wav` is that reference line, at 48 kHz, as it should sound.
+
+**Cause of the static:**
+- I added `SH1_XA_SOLO=1`, which mutes everything except the voice input, recorded PCSX2 with it, and lined the recording up against the reference in 20 ms pieces.
+- The match was poor, with jumps of about 10.7 ms (512 frames). That pointed to the buffer layout.
+- I was writing blocks of 128 left samples then 128 right samples. The SPU2's input takes 256 left then 256 right, so it was playing pieces of left and right out of order. That's the mechanical static.
+- After the fix, the pieces correlate at 0.97–1.00 with the reference.
+
+**PCSX2 recording quirks** (these affect my recordings, and maybe what you hear):
+- PCSX2's time-stretching (`SyncMode = TimeStretch`) drops and repeats 10–20 ms chunks. My `--audio` recordings now turn it off.
+- Even then, recordings lose a 128-frame chunk every so often, about 4.6% overall.
+- I believe that's PCSX2's audio output falling behind emulation rather than our code: the IOP refills exactly 48,000 frames a second, and the audio between the drops is clean. I couldn't confirm it, because this PCSX2 build lacks the SPU2 debug WAV dump.
+- If you still hear small stutters in PCSX2, try listening with time-stretching off. Real hardware will be the final check.
+
+Please try the café cutscene in PCSX2 and compare it with the reference WAV. If it sounds right, I'll deploy to the PS2.
+
+It's committed as 835626ba8, along with the test tools in [tools/port/xa_test](tools/port/xa_test). I installed numpy into `.venv` for the comparison scripts.
+
+## User
+
+For the cafe cutscene, is the dialogue all one file or separate files for each line?
+
+## Claude
+
+Separate clips, one per line, but they're packed into a few shared XA files rather than stored as one file per line.
+
+**How the clips are stored:**
+- The disc's `\XA\` folder has 10 XA files, listed in `g_FileXaLoc`.
+- Each file is interleaved: its sectors rotate between several channels (up to 8).
+- Each channel carries a run of separate clips, one after another, each ending with an end-of-file flag.
+- The game finds each clip through `gSDXATable`: which XA file, which channel, the starting sector, and its length.
+
+**What the café cutscene played** (from my PCSX2 log):
+
+| Order | XA file | Channel | Starting sector | Sectors |
+|---|---|---|---|---|
+| 1 | 4 | 2 | 1458 | 29 |
+| 2 | 5 | 2 | 1690 | 28 |
+| 3 | 1 | 0 | 0 | 113 |
+| 4 | 5 | 0 | 1792 | 22 |
+| 5 | 1 | 2 | 2 | 88 |
+| 6 | 2 | 0 | 904 | 45 |
+| 7 | 2 | 7 | 527 | 65 |
+| 8 | 4 | 4 | 1452 | 31 |
+| 9 | 4 | 6 | 1438 | 33 |
+
+Nine clips across four XA files, each started separately when its line comes up. The 6-second line I used for the reference (file 1, channel 0) is the third, and probably Harry's "Was I dreaming?". I haven't matched clips to lines yet. My log only covered about the first 40 seconds of the cutscene, so it has more clips after these.
+
+The short clips at the start (29 and 28 sectors) are about 1.5 seconds each, so they may be sound effects or short phrases rather than dialogue. I can render each of these clips to its own WAV with the reference decoder if you want to listen to them one by one.
+
+## User
+
+Are the voice lines and other audio being loaded as blocking DVD reads or non-blocking? It seems like they're causing frame drops when they load.
+
+## Claude
+
+The voice lines themselves don't block the game, but two things around them can cost frames. One is a real blocking wait I wrote into the sound code; the other is two readers sharing one drive.
+
+**Voice lines (XA): not blocking the EE.**
+- The IOP's reader thread does the disc reads, and only that IOP thread waits on them.
+- The EE just sends one 16-byte command and carries on.
+
+**Sound bank uploads (VABs): blocking. This is my main suspect.**
+- When the game loads a sound bank, the port's `SpuWrite` pushes the whole bank through the IOP command ring before returning. That can be several hundred KB; I saw 386 KB at boot.
+- The ring is only 96 KB, so the EE has to wait for the IOP to drain each piece into SPU2 memory.
+- Worse, `Port_SpuUpload` holds interrupts disabled (`DI`) while it waits for ring space. That's in [spu_ps2.c](src/port/ps2/spu_ps2.c), `send()`.
+- So a big upload freezes the EE outright: no game thread, no vblank interrupt, possibly for tens of milliseconds or more. That would show up as frame drops exactly when sound loads. On the PS1, the same upload was a background DMA the game only checked on later (`SpuIsTransferCompleted`).
+
+**Drive contention: possible, not confirmed.**
+- While a voice line streams, the IOP reader keeps the drive busy with reads of about 37 KB, over the network under Neutrino.
+- If the game requests data at the same time, its read has to wait its turn. The data read is asynchronous on the EE, but the file queue can stall waiting for it.
+- On the PS1 the drive was dedicated to XA during playback, so the game simply didn't read then. Our port may overlap the two more than the original did.
+
+**Proposed fix:**
+1. Make `SpuWrite` asynchronous, as on the PS1: queue the bank and return at once. The sound tick or a low-priority thread feeds it into the ring as space frees up, and `SpuIsTransferCompleted` reports when it's done. Never wait with interrupts disabled; the `DI` would only protect the few instructions that write a packet.
+2. Measure before and after: log how long each `SpuWrite` takes and how long the game's disc reads wait while a voice line streams. Then we'd know how much each of the two causes costs.
+
+Should I go ahead with both?
+
+## User
+
+I'm running PCSX2 right now, and the cutscene I'm about to load demonstrates the issue perfectly. The audio rapidly becomes desynced.
+
+## Claude
+
+I'll check PCSX2's log of your session for the XA start and end lines.
+
+- tool `Bash`: L=~/.config/PCSX2/logs/emulog.txt; ls -la --time-style=+%H:%M:%S $L; grep -a "sh1spu\|map load\|SH1 port: starting" $L | tail -25
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "I_GetSystemTime\|I_GetSystemTimeLow\|SysClock2USec\|I_GetSystemTime" ~/ps2dev/ps2sdk/iop/include/syscli
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "s_Active\b\|s_Gen\b" src/port/iop/sh1spu/xa.c | head -30; sed -n '/^static void fill/,/^}/p' src/port/i
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/iop/sh1spu/xa.c'; s=open(p).read() def ed(a,b):     global s; assert a in s,a[:50]; 
+
+## Claude
+
+The measurements build, and the host test still matches the reference exactly. Each stream will now log a line like `XA stream ended/cut off: started after N ms, G gaps (M ms of silence), L ms long, slowest read R ms`.
+
+I won't start my own PCSX2 run while yours is open: my test runner temporarily rewrites PCSX2's settings file and would interfere with your session. You can test this build yourself, but the log lines only reach me through my runner or the PS2. Tell me when you've closed PCSX2 and I'll run the café cutscene with the measurements. Or tell me which cutscene shows the desync best, and I'll use that one.
+
+## User
+
+Run the cutscene called "map3_s00func_800D0CF8"  for these tests.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; unset SH1_XA_SOLO; (python3 tools/port/port_link.p
+
+## Claude
+
+It's entry 4 in the list. I'm running it in PCSX2 at real-time speed with the measurements on:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; { echo "20 down"; echo "21 cross"; for i in 0 1 2 3; do echo "$((23+i)).5 down"; done; echo "28 cross"; } > buil
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for a in "8530 4 2 2559" "12193 13 1 1791" "8963 5 3 1727" "6590 1 6 1770" "9935 7 7 2495" "12778 15 2 703"; do 
+
+## Claude
+
+The game cuts lines short by a lot. The worst case is 1.8 s played out of 4.5 s. So the game believes the lines finish sooner than they do. I'm looking at how it tracks a line's progress.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "xaAudioPlayCurrentTime\|vSyncTimeSinceBoot\|xaAudioLength\|isXaNotPlaying" src/bodyprog/sound/*.c | hea
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat src/maps/shared/Event_CutsceneTimerAdvance.h | head -40; grep -rn "SH1_FPS\|SH_PORT_FPS" tools/port/port_lin
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(find include src -name "Event_CutsceneTimerAdvance.h" | head -1); echo $f; sed -n 1,40p $f; sed -n 90,110p s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_DeltaTime *=\|g_DeltaTimeCpy *=\|g_DeltaTimeRaw *=" src/bodyprog src/main --include=*.c | head; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_DeltaTime\b *=\|g_DeltaTimeRaw\b *=\|g_DeltaTime =\|DeltaTimeRaw =" src --include=*.c | grep -v "Q12
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "gSDXATable\[\] *=\|s_XaItemData gSDXATable" src --include=*.c | head -2; f=$(grep -rln "gSDXATable\[\]
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 201,215p src/bodyprog/sound/sound_data.c; python3 - <<'P' import re s=open('src/bodyprog/sound/sound_data
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 80,105p src/maps/map3_s00/map3_s00_2.c; grep -n "Event_CutsceneTimerAdvance\|g_Cutscene_Timer\|Q12(.*f), 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "'J'\|case 'J'" src/bodyprog --include=*.c | head -5
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "0x4A\b\|'J'\|== 74\b" src/bodyprog/text src/bodyprog/*.c src/bodyprog/*/*.c 2>/dev/null | head -8; gre
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "Timer\|timer\|DeltaTime\|VSync\|vblank\|Count" src/bodyprog/text/map_msg_display.c src/bodyprog/text/te
+
+## Claude
+
+That text timer counts down by `g_DeltaTimeRaw`, which is real time, so it isn't simply counting frames. I'll read how a voiced line decides it's finished.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 125,170p src/bodyprog/text/map_msg_display.c; sed -n 510,560p src/bodyprog/text/text_draw.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/demo_menu.c'; s=open(p).read() a='''void Port_DemoTick(void) {''' b='''#ifdef SH_POR
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 225,275p src/bodyprog/sys/game_main.c | grep -n "define\|vCount\|GsGetVcount\|MIN\|g_VBlanks" ; grep -n "
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "GsClearVcount\|GsGetVcount\|ResetRCnt\|StartRCnt\|SetRCnt" src --include=*.c | grep -v "^src/port/ps2/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "GsClearVcount\|GsGetVcount" -A25 build/port/recomp/libgs_gs_009.c | grep -n "jal\|Rcnt\|RCnt\|call\|0x"
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 236,300p src/bodyprog/sys/game_main.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 84,112p src/port/ps2/rcnt_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/rcnt_ps2.c'; s=open(p).read() def ed(a,b):     global s; assert a in s,a[:40]; s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d5
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:40]); s=s.replace(a,b,1); open(p,'w').w
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "SH_PORT_FPS\|CFLAGS\|-D" tools/port/ee_compile_check.sh | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|    dump += \["-DSH_PORT_WATCH_TEST"\] if os.environ.get("SH1_WATCH_TEST") else \[\]|&\n    dump += ["
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:40]); s=s.replace(a,b,1); open(p,'w').w
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1092,1185p src/bodyprog/sound/sd_call.c; grep -n "case 19\|== 19\|19:" src/bodyprog/sound/sd_call.c | hea
+
+## User
+
+[Request interrupted by user]
+
+## User
+
+As part of your reasoning, note the performance throughout the cutscene. I noticed that FPS drops seemed to be associated with loading new voice lines. Continue with the analysis.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -ln "MAP_MESSAGES\[\] = {" src/maps/map3_s00/*.c); grep -o '~J[01](\([0-9.]*\))[^"]*' $f | head -30
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n '/^static void Sd_XaPreLoadAudio/,/^}/p' src/bodyprog/sound/sd_call.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -rln "Event_DisplayMapMsgWithAudio(" include/maps/shared src/maps/shared 2>/dev/null | head -1); [ -z "
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -ln "^void func_800D0CF8" src/maps/map3_s00/*.c); n=$(grep -n "^void func_800D0CF8" $f | cut -d: -f1); 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "D_800D24F0\|D_800D256C" src/maps/map3_s00/*.c | grep -v "Event_Display" | head; f=$(grep -ln "^void fu
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "D_800D24F0" asm/USA/maps/map3_s00 src/maps/map3_s00 2>/dev/null | grep -v "Event_Display" | head -3; f
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/demo_menu.c'; s=open(p).read() a='''    prevTimer = t;     rawSum += g_DeltaTimeRaw;
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/demo_menu.c'; s=open(p).read() s=s.replace('''            printf("msgdbg: step %d at
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -ln "MAP_MESSAGES\[\] = {" src/maps/map3_s00/*.c); python3 - $f <<'P' import sys,re s=open(sys.argv[1])
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -ln "MAP_MESSAGES\[\] = {" src/maps/map3_s00/*.c); n=$(grep -n "MAP_MESSAGES\[\] = {" $f | cut -d: -f1)
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -ln "^void func_800D0CF8" src/maps/map3_s00/*.c); n=$(grep -n "^void func_800D0CF8" $f | cut -d: -f1); 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "displayLengthInc\|displayLength\b" src/bodyprog/text/map_msg_display.c | head -20
+
+## Claude
+
+I'll make the rollout follow elapsed time in 60 fps mode, so it matches the PS1's 30 fps speed. Each frame adds the 30 fps increment scaled by the frame time, carrying the remainder over.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/bodyprog/text/map_msg_display.c'; s=open(p).read() a='''            displayLength += disp
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; timeout 600 python3 tools/port/pcsx2_run.py build/port/sh1_ps2.iso --seconds 42 --sta
+
+## User
+
+[Request interrupted by user for tool use]
+
+## User
+
+I still really think this might have to do with the frame drops in the scene. The average frame rate being lower is expected because the 3D rendering is not quite optimized yet, but there are consistent frame drops whenever a new voice line loads.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^int Cd\|^long Cd\|^unsigned.*Cd\|^int CdReadSync\|^static int advance\|^static.*chunk_start\|^static.*
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "sceCdRead(\|sceCdSync(" src/port/ps2/libcd_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:40]); s=s.replace(a,b,1); open(p,'w').w
+
+## Claude
+
+I'm also timing the sound command path (`send()` in [spu_ps2.c](src/port/ps2/spu_ps2.c)), since every sound register change and every key on or off goes through it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/spu_ps2.c'; s=open(p).read() a='''    static u32         wrap[4] __attribute__((
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,60p include/port/prof.h | head -60; grep -rn "PROF_BEGIN(" src --include=*.c | wc -l
+
+## Claude
+
+To catch the long frame, I'm making the profiler sections (`PROF_BEGIN`/`PROF_END` in the main loop) print any section that takes over 30 ms in a single frame, in this debug build only.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "PROF_BEGIN(" src --include=*.c | sed 's/:.*PROF_BEGIN/ PROF_BEGIN/'
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='include/port/prof.h'; s=open(p).read() a='''#else #define PROF_BEGIN(name) { #define PROF_END
+
+## Claude
+
+My first version clashed with the game's own `printf` declaration, so the game files didn't rebuild. I'm routing the report through a small port function instead.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='include/port/prof.h'; s=open(p).read() s=s.replace('''int printf(const char* fmt, ...);''',''
+
+## Claude
+
+Found it. At every line start, one game update takes about 190 ms. I'll narrow it down by timing the message drawing, the sound calls, and each step of the XA start sequence separately.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:40]); s=s.replace(a,b,1); open(p,'w').w
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/bodyprog/text/map_msg_display.c'; s=open(p).read() s=s.replace('''                       
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 560,600p src/bodyprog/text/text_draw.c
+
+## Claude
+
+That branch only reads the number, so the slow part may well be my own debug `printf` there. I'm removing it and measuring again.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/bodyprog/text/text_draw.c'; s=open(p).read() a='''#ifdef SH_PORT_MSG_DEBUG               
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/bodyprog/sound/sd_call.c'; s=open(p).read() a='''            printf("msgdbg: XA line %d s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n '/Sd_CdPrimitiveCmdTry(s32/,/^}/p' src/bodyprog/sound/sd_call.c; grep -n "^.*Sd_CdPrimitiveCmdTry(" src/b
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/bodyprog/sound/sd_call.c'; s=open(p).read() a='''            SdSetSerialAttr(0, 0, 1);   
+
+## Claude
+
+Also in this section: `func_8008D78C`, which reaches the full 1 MB VRAM download from the GS that I flagged earlier. I'm timing each call separately.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/bodyprog/sys/game_main.c'; s=open(p).read() for a in ['        Screen_FadeUpdate();\n',' 
+
+## Claude
+
+The time is inside `Sd_TaskPoolExecute`, the game's sound task runner. It's spent before the XA line's final start step and outside the commands I'd timed. I'll read the task runner.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n '/^void Sd_TaskPoolExecute/,/^}/p' src/bodyprog/sound/sd_call.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/bodyprog/sound/sd_call.c'; s=open(p).read() i=s.index('void Sd_TaskPoolExecute(void)'); j
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/iop/sh1spu/xa.c'; s=open(p).read() a='''        sceCdSync(0);         GetSystemTime(
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; make -j8 build < /dev/null > /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d5
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/input.txt; source .venv/bin/activate; unset SH1_MSG_DEBUG SH1_EXTRA_CFLAGS; export SH1_FPS=60; 
+

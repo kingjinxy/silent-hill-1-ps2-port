@@ -1,4 +1,5 @@
 #include "game.h"
+#include "port/prof.h"
 #include "inline_no_dmpsx.h"
 
 #include <psyq/libpad.h>
@@ -567,14 +568,18 @@ void Event_DisplayMapMsgWithAudio(s32 mapMsgIdx, u8* audioIdx, const u16* audioC
 
     g_SysWork.bgmStatusFlags |= BgmStatusFlag_VoiceDialog;
 
+    PROF_BEGIN("msg: Gfx_MapMsg_Draw")
     mapMsgState = Gfx_MapMsg_Draw(mapMsgIdx);
+    PROF_END("msg: Gfx_MapMsg_Draw")
     if (mapMsgState == MapMsgState_SelectEntry0)
     {
         SysWork_StateStepIncrement(0);
     }
     else if (mapMsgState == MapMsgState_Finish)
     {
+        PROF_BEGIN("msg: SD_Call (next voice)")
         SD_Call(audioCmds[*audioIdx]);
+        PROF_END("msg: SD_Call (next voice)")
         *audioIdx += 1;
     }
 }
