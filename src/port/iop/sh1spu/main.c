@@ -14,6 +14,7 @@
  */
 
 #include "irx_imports.h"
+#include "log.h"
 
 IRX_ID("sh1spu", 1, 0);
 
@@ -215,6 +216,7 @@ int _start(int argc, char* argv[])
 {
     iop_thread_t th;
     int          i;
+    spu_log_init();
     for (i = 1; i < argc; i++)
     {
         if (!strncmp(argv[i], "st=", 3))

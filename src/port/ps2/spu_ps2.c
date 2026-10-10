@@ -20,6 +20,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "port/prof.h"
+
 extern unsigned char freesd_irx[];
 extern unsigned int  size_freesd_irx;
 extern unsigned char sh1spu_irx[];
@@ -99,8 +101,16 @@ static void dma(void* src, u32 dest, u32 size)
     }
 }
 
-/** Sends s_Packet (n bytes, a multiple of 16) as the next command. Interrupts are off. */
+/** Sends s_Packet (n bytes, a multiple of 16) as the next command, holding the lock (lock()). */
+static void send_impl(u32 n);
 static void send(u32 n)
+{
+    PROF_BEGIN("spu: send")
+    send_impl(n);
+    PROF_END("spu: send")
+}
+
+static void send_impl(u32 n)
 {
     volatile status_t* st   = status();
     u32                size = st->size;
@@ -110,12 +120,16 @@ static void send(u32 n)
     u32 t0, t1;
     __asm__ volatile("mfc0 %0, $9" : "=r"(t0));
 #endif
+    PROF_BEGIN("spu: wait for ring room")
     while (size - (s_Sent - st->done) <= tail + n) /* wait for room (never fill the ring completely) */
     {
     }
+    PROF_END("spu: wait for ring room")
     /* The previous send must be finished first: at most one send (3 transfers) is ever queued, so the
      * kernel's SIF DMA queue never fills, even with interrupts off. */
+    PROF_BEGIN("spu: wait for previous send")
     dma_wait_id(&s_BufDma[s_Buf ^ 1]);
+    PROF_END("spu: wait for previous send")
     if (tail)
     {
         dma(wrap, st->ring + s_Pos, 16);
@@ -143,6 +157,30 @@ static void send(u32 n)
 #endif
 }
 
+/* The game thread and the sound tick thread take turns through a semaphore, not by turning interrupts
+ * off: sends wait for SIF DMA and for room in the IOP's ring, and waiting with interrupts off could hang
+ * the EE for good (a boot freeze at the first sound activity, 2026-10-10). Before Port_SpuStart creates
+ * it, only the game thread runs here. */
+static int s_Lock = -1;
+
+static void lock(void)
+{
+    if (s_Lock >= 0)
+    {
+        PROF_BEGIN("spu: lock")
+        WaitSema(s_Lock);
+        PROF_END("spu: lock")
+    }
+}
+
+static void unlock(void)
+{
+    if (s_Lock >= 0)
+    {
+        SignalSema(s_Lock);
+    }
+}
+
 static void flush_regs(void)
 {
     u32 n;
@@ -166,14 +204,14 @@ void Port_SpuReg(unsigned int off, unsigned int value)
     {
         return;
     }
-    DI();
+    lock();
     if (s_RegCount == MAX_REGS)
     {
         flush_regs();
     }
     s_Regs[s_RegCount++] = (off << 16) | (value & 0xFFFF);
     s_StRegs++;
-    EI();
+    unlock();
 }
 
 /** Sends the queued register writes. */
@@ -183,9 +221,9 @@ void Port_SpuFlush(void)
     {
         return;
     }
-    DI();
+    lock();
     flush_regs();
-    EI();
+    unlock();
 }
 
 /** Uploads `size` bytes to SPU2 memory at byte address `addr` (in 64-byte blocks, as the PS1 did). */
@@ -200,7 +238,7 @@ void Port_SpuUpload(unsigned int addr, const void* data, unsigned int size)
     for (done = 0; done < size; done += CHUNK)
     {
         unsigned int n = size - done < CHUNK ? size - done : CHUNK;
-        DI();
+        lock();
         flush_regs();
         s_Packet[0] = OP_WRITE;
         s_Packet[1] = addr + done;
@@ -208,7 +246,7 @@ void Port_SpuUpload(unsigned int addr, const void* data, unsigned int size)
         memcpy(&s_Packet[16], (const u8*)data + done, n);
         memset((u8*)&s_Packet[16] + n, 0, ((n + 63) & ~63u) - n);
         send(64 + ((n + 63) & ~63u));
-        EI();
+        unlock();
     }
 }
 
@@ -219,14 +257,14 @@ void Port_SpuClear(unsigned int addr, unsigned int size)
     {
         return;
     }
-    DI();
+    lock();
     flush_regs();
     s_Packet[0] = OP_CLEAR;
     s_Packet[1] = addr;
     s_Packet[2] = size;
     s_Packet[3] = 0;
     send(16);
-    EI();
+    unlock();
 }
 
 /** Starts XA playback (src/port/iop/sh1spu/xa.c): `file`/`chan` of the raw PS1 sectors from `index`
@@ -237,14 +275,14 @@ void Port_XaStart(unsigned int hillLsn, unsigned int index, unsigned int file, u
     {
         return;
     }
-    DI();
+    lock();
     flush_regs();
     s_Packet[0] = OP_XA;
     s_Packet[1] = hillLsn;
     s_Packet[2] = index;
     s_Packet[3] = file | (chan << 8);
     send(16);
-    EI();
+    unlock();
 }
 
 void Port_XaStop(void)
@@ -253,12 +291,12 @@ void Port_XaStop(void)
     {
         return;
     }
-    DI();
+    lock();
     flush_regs();
     s_Packet[0] = OP_XASTOP;
     s_Packet[1] = s_Packet[2] = s_Packet[3] = 0;
     send(16);
-    EI();
+    unlock();
 }
 
 /** Running count of command bytes sent (compare with Port_SpuDone). */
@@ -330,8 +368,10 @@ static void tick_thread(void* arg)
         SleepThread();
         if (s_TickOn)
         {
+            PROF_BEGIN("spu: sound driver tick (thread)")
             Port_EventDeliver(0xF2000002UL, 0x0002); /* RCntCNT2, EvSpINT */
             Port_SpuFlush();
+            PROF_END("spu: sound driver tick (thread)")
         }
     }
 }
@@ -378,6 +418,13 @@ void Port_SpuStart(void)
         return;
     }
     tried = 1;
+    {
+        ee_sema_t sema;
+        sema.init_count = 1;
+        sema.max_count  = 1;
+        sema.option     = 0;
+        s_Lock          = CreateSema(&sema);
+    }
     (void)s_StatusPad;
     memset(&s_Status, 0, sizeof(s_Status));
     FlushCache(0);

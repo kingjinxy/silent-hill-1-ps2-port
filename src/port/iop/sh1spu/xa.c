@@ -15,6 +15,7 @@
  */
 
 #include "irx_imports.h"
+#include "log.h"
 #include "gauss_table.h"
 
 #define PS1_RAW     2336 /* raw HILL. sector: 8-byte subheader + 2328 */

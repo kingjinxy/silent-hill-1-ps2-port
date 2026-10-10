@@ -80,7 +80,7 @@ def send(ip, command, timeout=1.0, tries=3, payload=b""):
         for _ in range(tries):
             sock.sendto(COMMANDS[command] + payload, (ip, PORT))
             try:
-                data, _ = sock.recvfrom(256)
+                data, _ = sock.recvfrom(2048)
                 return data.lstrip(b" ").decode("latin-1").strip()
             except socket.timeout:
                 continue

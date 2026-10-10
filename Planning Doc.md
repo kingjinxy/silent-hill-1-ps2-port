@@ -510,3 +510,18 @@ Ideas to try, roughly by expected payoff:
   - Per frame (k-cycles): game update 3,248 → 2,801 (MVMVA 419 → 195 from the light dot product in C); polygon conversion 1,676 → 1,588; DrawOTag 2,819 → 2,641 (UCAB packets and OT prefetch).
   - Sound task 410 → 442: overlapping the SPU sends didn't help, so its cost is elsewhere (to profile).
   - The build boots cleanly after remote restarts; voice lines behave as before.
+
+## Console freezes and long stalls (2026-10-10)
+- Symptom: on some boots (3 of 9 on 2026-10-10, always while a load was starting) the PS2 stopped at a black screen. All output stopped at once: the EE heartbeat, the IOP sound module and the agent's `where`. Only the IOP agent's `ping` still answered. One later run kept going for 11 s, then stopped when a voice line started (yellow watchdog screen).
+- Cause found: Neutrino's console device (ministack's udptty) stops accepting output for good during disc loads. Every write takes one semaphore (tty_sema) and some thread never gives it back; which thread is still unknown (smap's TX path and udpfs's waits look fine). Every printf then waited forever: on the EE in the fileio RPC (the game, heartbeat and agent), on the IOP in sh1spu's threads (the command thread stopped draining the sound ring, and the game spun waiting for room).
+- Fix: none of our output goes through udptty any more.
+  - EE: stdout/stderr go into a 32 KB ring (src/port/ps2/log_ps2.c, linked with --wrap=_write); a log thread hands chunks to sh1agent.irx by SIF DMA, and the agent broadcasts them to UDP 18194 itself, as udptty did (tools/port/ps2_log.py unchanged). In PCSX2, and before the agent loads, the thread writes to the console. When the ring is full, output is dropped and counted ("log: N bytes of output dropped").
+  - IOP: sh1spu's messages go into a ring printed by a lowest-priority thread (src/port/iop/sh1spu/log.c), so only that thread waits if the console stalls. sysclib's vsprintf printed garbage (a single 0xFF) on the console, so the messages are formatted with sprintf.
+  - Neutrino's own modules still print through udptty.
+- Diagnostics kept:
+  - `ps2_ctl.py ping` now shows the EE's state, sent twice a second from the vertical blank interrupt: vertical blank and frame counts, the game thread's kernel state, log bytes pending/dropped. It also shows the IOP's SIF DMA registers.
+  - Watchdog thread (libetc_ps2.c): the TV turns red if the EE-to-IOP SIF DMA is stuck for over a second, yellow if no frame was shown for 10 s. It stays black if the EE stopped altogether.
+- Result: 17 restarts of the diagnostic build plus deploys into long sessions, with no freeze. Freezes were intermittent before (and never seen on the restarts), so this is not proof yet.
+- The long single-call stalls in the profile (GsSwapDispBuff up to 216 ms, the sound task's VSync up to 29 ms) were the profiler's own report and other printfs blocking on udptty. GsSwapDispBuff's longest call is now 3.8 ms (the report).
+- Pad polling: padInfoMode ×12 (IOP RPCs) every frame cost ~210k cycles a frame on hardware. The mode info is now read only when the pad's state changes, plus once a second: Pad_Poll 216k → 15k cycles a frame.
+- Kaufmann cutscene, profiling build 09:44: 50–55 fps through the cutscene (47.1 mean at the last measurement).

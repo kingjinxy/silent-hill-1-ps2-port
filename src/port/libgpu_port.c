@@ -329,6 +329,7 @@ DISPENV* PutDispEnv(DISPENV* env)
         static u32 frames;
         if (++frames == 120)
         {
+            PROF_BEGIN("prof: report (printing)")
             Prof_Report(frames);
             {
                 extern void Gte_ProfSites(unsigned int frames);
@@ -338,6 +339,7 @@ DISPENV* PutDispEnv(DISPENV* env)
                 extern void ProfFn_Report(unsigned int frames);
                 ProfFn_Report(frames);
             }
+            PROF_END("prof: report (printing)")
             frames = 0;
         }
     }
@@ -348,7 +350,9 @@ DISPENV* PutDispEnv(DISPENV* env)
     {
         if (g_PortGsRenderer)
         {
+            PROF_BEGIN("gs: Display_PresentGs")
             Display_PresentGs(env->disp.x, env->disp.y, env->disp.w, env->disp.h, env->isrgb24, env->isinter);
+            PROF_END("gs: Display_PresentGs")
         }
         else
         {

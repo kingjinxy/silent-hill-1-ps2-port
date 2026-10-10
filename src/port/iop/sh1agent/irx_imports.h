@@ -6,5 +6,6 @@
 #include <sifman.h>
 #include <sysclib.h>
 #include <stdio.h>
+#include <thbase.h>
 #include "ministack.h"
 #endif

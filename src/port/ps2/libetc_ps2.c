@@ -8,6 +8,7 @@
 
 #include <kernel.h>
 #include <stdio.h>
+#include "port/prof.h"
 
 static volatile int s_VBlanks;
 static int          s_Sema = -1;
@@ -24,6 +25,56 @@ static int s_HeartbeatSema = -1;
 static u8  s_HeartbeatStack[4096] __attribute__((aligned(16)));
 
 extern void Port_SpuStats(void); /* spu_ps2.c */
+
+/* Watchdog for the black-screen hangs on hardware (2026-10-10): every EE output path (log, agent
+ * status, sound commands, RPCs) goes through the EE-to-IOP SIF DMA (channel 6), so when everything
+ * went quiet at once it couldn't tell a stopped EE from a stuck transfer. This thread uses neither:
+ * it shows the state on the TV as a solid colour (GS BGCOLOR, the picture switched off).
+ *   red:    the SIF DMA to the IOP has been stuck for over a second (same addresses, still running);
+ *   yellow: the transfer is fine, but no frame was shown for 10 s (the game thread is stuck).
+ * The screen stays black if the EE stops altogether (no interrupts: this thread doesn't run). */
+static ee_sema_t s_WatchSemaDef;
+static int       s_WatchSema = -1;
+static u8        s_WatchStack[2048] __attribute__((aligned(16)));
+
+static void watch_color(unsigned int rgb)
+{
+    *(volatile unsigned long long*)0x12000000 = 4;   /* PMODE: both read circuits off */
+    *(volatile unsigned long long*)0x120000E0 = rgb; /* BGCOLOR: the whole screen shows it */
+}
+
+static void watchdog(void* arg)
+{
+    unsigned int lastChcr = 0, lastMadr = 0, lastTadr = 0, lastQwc = 0, stuck = 0, lastFrame = 0, still = 0;
+    int          shown = 0;
+    (void)arg;
+    for (;;)
+    {
+        unsigned int chcr, madr, tadr, qwc, frame;
+        WaitSema(s_WatchSema); /* twice a second */
+        chcr  = *(volatile unsigned int*)0x1000C400; /* D6 (SIF1, EE to IOP) */
+        madr  = *(volatile unsigned int*)0x1000C410;
+        qwc   = *(volatile unsigned int*)0x1000C420;
+        tadr  = *(volatile unsigned int*)0x1000C430;
+        frame = (unsigned int)Display_FrameCount();
+        stuck = (chcr & 0x100) && chcr == lastChcr && madr == lastMadr && qwc == lastQwc && tadr == lastTadr
+                    ? stuck + 1 : 0;
+        still = frame == lastFrame ? still + 1 : 0;
+        lastChcr = chcr, lastMadr = madr, lastQwc = qwc, lastTadr = tadr, lastFrame = frame;
+        if (!shown && stuck >= 3)
+        {
+            shown = 1;
+            watch_color(0x0000FF);
+            printf("watchdog: SIF DMA to the IOP stuck: D6 CHCR %08x MADR %08x QWC %08x TADR %08x\n", chcr, madr, qwc, tadr);
+        }
+        else if (!shown && still >= 20)
+        {
+            shown = 1;
+            watch_color(0x00FFFF);
+            printf("watchdog: no frame for 10 s (frame %u); D6 CHCR %08x\n", frame, chcr);
+        }
+    }
+}
 
 static void heartbeat(void* arg)
 {
@@ -74,9 +125,17 @@ static int vblank_handler(int cause)
     {
         iSignalSema(s_HeartbeatSema);
     }
+    if (s_VBlanks % 30 == 0 && s_WatchSema >= 0)
     {
-        extern void Port_AgentVBlank(void); /* agent_ps2.c: commands from the VM */
-        Port_AgentVBlank();
+        iSignalSema(s_WatchSema);
+    }
+    {
+        extern void Port_AgentVBlank(unsigned int vblanks, unsigned int epc); /* agent_ps2.c: commands from the VM */
+        Port_AgentVBlank(s_VBlanks, epc);
+    }
+    {
+        extern void Port_LogVBlank(void); /* log_ps2.c: sends the console output */
+        Port_LogVBlank();
     }
     if (s_Callback && !s_CallbackManual)
     {
@@ -111,15 +170,34 @@ static void init(void)
         th.initial_priority = 1;
         StartThread(CreateThread(&th), NULL);
     }
+    {
+        static ee_thread_t th;
+        s_WatchSemaDef      = sema;
+        s_WatchSema         = CreateSema(&s_WatchSemaDef);
+        th.func             = (void*)watchdog;
+        th.stack            = s_WatchStack;
+        th.stack_size       = sizeof(s_WatchStack);
+        th.gp_reg           = &_gp;
+        th.initial_priority = 1;
+        StartThread(CreateThread(&th), NULL);
+    }
     s_HandlerId = AddIntcHandler(INTC_VBLANK_S, vblank_handler, 0);
     EnableIntc(INTC_VBLANK_S);
 }
 
 /** The game runs in the main thread at a low priority, so the heartbeat (and anything else that
  * must not starve) still runs if the game busy-waits. */
+static int s_MainThread = -1;
+
 void Port_MainThreadInit(void)
 {
-    ChangeThreadPriority(GetThreadId(), 64);
+    s_MainThread = GetThreadId();
+    ChangeThreadPriority(s_MainThread, 64);
+}
+
+int Port_MainThreadId(void)
+{
+    return s_MainThread;
 }
 
 /** gsKit's setup (run again on every display mode change) drops our vertical blank handler: the
@@ -182,7 +260,9 @@ static void pad_refresh(void)
     if (polledAt != s_VBlanks)
     {
         polledAt = s_VBlanks;
+        PROF_BEGIN("pad: Pad_Poll")
         Pad_Poll();
+        PROF_END("pad: Pad_Poll")
     }
 }
 

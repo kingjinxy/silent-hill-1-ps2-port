@@ -1727,11 +1727,15 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
             break;
 
         case 2:
+            PROF_BEGIN("sd: Sd_XaAudioStop")
             Sd_XaAudioStop();
+            PROF_END("sd: Sd_XaAudioStop")
             break;
 
         case 6:
+            PROF_BEGIN("sd: Sd_XaPreLoadAudio")
             Sd_XaPreLoadAudio();
+            PROF_END("sd: Sd_XaPreLoadAudio")
             break;
 
         case 7:
@@ -1745,19 +1749,26 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
         default:
             if (g_Sd_CurrentTask >= 160)
             {
+                PROF_BEGIN("sd: Sd_VabLoad")
                 Sd_VabLoad();
+                PROF_END("sd: Sd_VabLoad")
             }
             else if (g_Sd_CurrentTask >= 32)
             {
+                PROF_BEGIN("sd: Sd_KdtLoad")
                 Sd_KdtLoad();
+                PROF_END("sd: Sd_KdtLoad")
             }
             else
             {
+                PROF_BEGIN("sd: Sd_TaskPoolUpdate")
                 Sd_TaskPoolUpdate();
+                PROF_END("sd: Sd_TaskPoolUpdate")
             }
             break;
     }
 
+    PROF_BEGIN("sd: after the task (volumes, XA timing)")
     if (g_Sd_AudioWork.xaAudioIdx != 0)
     {
         g_Sd_XaAudioPlayTracking.xaAudioPlayCurrentTime = VSync(SyncMode_Count) -
@@ -1859,6 +1870,7 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
         }
     }
 
+    PROF_END("sd: after the task (volumes, XA timing)")
     // Reset audio streaming system if failed.
     if (g_Sd_AudioWork.cdErrorCount > CD_ERROR_LIMIT)
     {

@@ -16,6 +16,8 @@ I_strncmp
 I_strtoul
 I_memset
 I_memcpy
+I_sprintf
+I_strcpy
 sysclib_IMPORTS_end
 
 stdio_IMPORTS_start

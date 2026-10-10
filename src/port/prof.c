@@ -12,6 +12,7 @@ typedef struct
     const char*  name;
     unsigned int cycles; /* in units of 16 cycles, to fit a long report interval */
     unsigned int calls;
+    unsigned int max; /* longest single call (cycles) since the last report */
 } Slot;
 
 static Slot s_Slots[SLOTS];
@@ -36,9 +37,16 @@ void Prof_End(const char* name, unsigned int start)
     {
         h = (h + 1) % SLOTS;
     }
-    s_Slots[h].name = name;
-    s_Slots[h].cycles += (count() - start) >> 4;
-    s_Slots[h].calls++;
+    {
+        unsigned int d = count() - start;
+        s_Slots[h].name = name;
+        s_Slots[h].cycles += d >> 4;
+        s_Slots[h].calls++;
+        if (d > s_Slots[h].max)
+        {
+            s_Slots[h].max = d;
+        }
+    }
 }
 
 /** Prints the counters as kcycles per frame (largest first), then clears them. */
@@ -50,7 +58,7 @@ void Prof_Report(unsigned int frames)
         return;
     }
     printf("prof: per frame over %u frames (kcycles, calls):\n", frames);
-    for (printed = 0; printed < 25; printed++)
+    for (printed = 0; printed < 60; printed++)
     {
         int best = -1;
         for (i = 0; i < SLOTS; i++)
@@ -64,14 +72,15 @@ void Prof_Report(unsigned int frames)
         {
             break;
         }
-        printf("prof: %7u %6u %s\n", s_Slots[best].cycles * 16 / 1000 / frames, s_Slots[best].calls / frames,
-               s_Slots[best].name);
+        printf("prof: %7u %6u %s (longest call %u us)\n", s_Slots[best].cycles * 16 / 1000 / frames,
+               s_Slots[best].calls / frames, s_Slots[best].name, s_Slots[best].max / 295);
         s_Slots[best].calls = 0; /* printed */
     }
     for (i = 0; i < SLOTS; i++)
     {
         s_Slots[i].cycles = 0;
         s_Slots[i].calls  = 0;
+        s_Slots[i].max    = 0;
     }
 }
 

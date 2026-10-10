@@ -347,7 +347,15 @@ static void cache_invalidate(s32 x, s32 y, s32 w, s32 h)
 
 /** Host-to-local image transfer of `bytes` (a multiple of 16) from `src`. */
 /** Host-to-local transfer of the `bytes` (a multiple of 16) already placed at &s_ImgPkt[2]. */
+static void upload_staged_impl(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s32 h, u32 bytes);
 static void upload_staged(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s32 h, u32 bytes)
+{
+    PROF_BEGIN("gs: upload (texture page, CLUT, LoadImage)")
+    upload_staged_impl(dbp, dbw, psm, x, y, w, h, bytes);
+    PROF_END("gs: upload (texture page, CLUT, LoadImage)")
+}
+
+static void upload_staged_impl(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s32 h, u32 bytes)
 {
     u32 qwc = bytes / 16;
     s_StUploads++;
@@ -1285,7 +1293,9 @@ void GpuGs_Download(u16 (*dst)[VRAM_W])
 /** Copies the GS's VRAM into g_PortVram (StoreImage). */
 void GpuGs_StoreAll(void)
 {
+    PROF_BEGIN("gs: StoreAll (VRAM readback)")
     GpuGs_Download(g_PortVram);
+    PROF_END("gs: StoreAll (VRAM readback)")
 }
 
 /* --- Display ----------------------------------------------------------------------------------*/

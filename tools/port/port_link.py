@@ -292,7 +292,7 @@ def main():
 
     def final_link(extra):
         return run([CC, "-T", os.path.join(PS2SDK, "ee", "startup", "linkfile"), "-L", os.path.join(PS2SDK, "ee", "lib"),
-                    "-Wl,-zmax-page-size=128", "-Wl,--unresolved-symbols=report-all", "-o", elf,
+                    "-Wl,-zmax-page-size=128", "-Wl,--wrap=_write", "-Wl,--unresolved-symbols=report-all", "-o", elf,
                     combined, *port_objs, *extra, "-Wl,--start-group", recomp_lib, "-Wl,--end-group",
                     "configs/USA/relative_syms.ld", "configs/USA/port_relative_syms.ld", "configs/USA/port_syms.ld",
                     "-L" + os.path.join(GSKIT, "lib"), "-lgskit", "-ldmakit", "-lcdvd", "-lpad", "-leedebug", "-lpatches"],

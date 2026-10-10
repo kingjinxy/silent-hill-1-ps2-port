@@ -97,6 +97,10 @@ static int crash_handler(EE_RegFrame* frame);
 
 static void crash_report(void)
 {
+    {
+        extern void Port_LogDirect(void); /* log_ps2.c */
+        Port_LogDirect();
+    }
 #ifdef SH_PORT_WATCH_PACKET
     if (s_Watch)
     {

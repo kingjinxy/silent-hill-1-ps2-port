@@ -1204,3 +1204,21 @@ Neutrino, even for a deliberate store; the software checks did the job. GsLinkOb
 model's first primitive header on purpose (group count and type).
 
 - 2026-10-08 (hardware): attract-demo freeze found. The main thread was spinning in gpu_gs.c download_rows (water effect StoreImage → GS→EE VRAM readback), waiting on VIF1 DMA (D1_CHCR) forever. It found this by reading the stack over the network: `ps2_ctl.py md 0x1FFC000 0x4000`. Fix: clear FINISH, wait for the GS's FINISH before turning the bus around, add spin timeouts, and on a stuck transfer stop D1 and reset VIF1 with a log line ("VRAM download stuck"). The vblank EPC sampler (`ps2_ctl.py where`) shows only the kernel inside INTC handlers, so use the stack instead. A remote restart from this state hangs, so press RESET.
+
+### Hardware freezes: the network console (2026-10-10)
+
+Under Neutrino, every printf goes to ministack's udptty, and it can stall for good during disc loads. On the old builds every thread that printed then waited forever, so the PS2 looked dead: a black screen, no log, no `where`, but `ping` still answered (the IOP agent replies without printing).
+
+Now:
+- The game's output goes through its own path: a ring buffer on the EE (log_ps2.c), sent to sh1agent.irx by SIF DMA, then broadcast by the agent to `ps2_log.py`.
+- sh1spu's messages are buffered and printed by a low-priority thread (sh1spu/log.c).
+
+If the PS2 seems stuck:
+- `python3 tools/port/ps2_ctl.py ping`, twice a few seconds apart. The `EE:` line shows the vertical blank count, with the change since the last ping, plus the frame count, the game thread's state (1 running, 2 ready, 4 waiting; wait type 2 = a semaphore) and log bytes pending/dropped.
+  - Count not moving: the EE stopped.
+  - Count moving but frame count not: the game thread is stuck.
+- The TV's colour, from the watchdog thread:
+  - red: the EE-to-IOP SIF DMA is stuck;
+  - yellow: no frame for 10 s;
+  - black: the EE stopped (or nothing is wrong yet).
+- When the PS2 is stuck, `deploy` can't restart it; press RESET. The server switches to the newest build on `touch build/port/.udpfs_refresh` (deploy does this too).

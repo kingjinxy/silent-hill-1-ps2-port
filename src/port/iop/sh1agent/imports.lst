@@ -15,7 +15,14 @@ sysclib_IMPORTS_start
 I_strncmp
 I_strtoul
 I_sprintf
+I_strcpy
 sysclib_IMPORTS_end
+
+thbase_IMPORTS_start
+I_CreateThread
+I_StartThread
+I_DelayThread
+thbase_IMPORTS_end
 
 stdio_IMPORTS_start
 I_printf

@@ -17,6 +17,7 @@
 #include <libpad.h>
 #include <stdio.h>
 #include <string.h>
+#include "port/prof.h"
 
 #define PORTS 2
 
@@ -27,6 +28,8 @@ static unsigned char  s_Act[PORTS][6];
 static unsigned char* s_ActSrc[PORTS];
 static int            s_ActLen[PORTS];
 static int            s_LastState[PORTS] = { -1, -1 };
+static int            s_InfoState[PORTS] = { -1, -1 }; /* the state when the mode info was last read */
+static int            s_InfoAge[PORTS];
 static int            s_Info[PORTS][4];      /* PadInfoMode terms 1-3 (current ID, extended ID, offset) */
 static int            s_IdTable[PORTS][9];   /* term 4: offs -1 (count), then IDs 0-7 */
 
@@ -99,6 +102,15 @@ static int s_ActSent[PORTS]; /* s_Act holds what was last sent to the motors */
 static int s_Polls, s_NotReady[PORTS]; /* reads that weren't ready, logged every 600 polls */
 
 /** Refreshes the receive buffers (the PS1 BIOS does this every vertical blank). */
+static int pad_read(int p, struct padButtonStatus* st)
+{
+    int r;
+    PROF_BEGIN("pad: padRead")
+    r = padRead(p, 0, st);
+    PROF_END("pad: padRead")
+    return r;
+}
+
 void Pad_Poll(void)
 {
     int p;
@@ -118,7 +130,10 @@ void Pad_Poll(void)
     for (p = 0; p < PORTS; p++)
     {
         struct padButtonStatus st;
-        int                    state = padGetState(p, 0);
+        int                    state;
+        PROF_BEGIN("pad: padGetState")
+        state = padGetState(p, 0);
+        PROF_END("pad: padGetState")
 
         if (s_ActSrc[p] && state == PAD_STATE_STABLE)
         {
@@ -140,11 +155,17 @@ void Pad_Poll(void)
             printf("libpad: port %d state %d\n", p + 1, state);
             s_LastState[p] = state;
         }
-        /* Mode info, read once per frame: with the BIOS's PADMAN, padInfoMode can go through an IOP
-         * RPC, which the game would otherwise call several times per frame. */
-        if (state == PAD_STATE_STABLE || state == PAD_STATE_FINDCTP1)
+        /* Mode info, read when the pad's state changes (a mode change, e.g. the Analog button,
+         * goes through other states) and once a second besides: with the BIOS's PADMAN, padInfoMode
+         * goes through an IOP RPC, and the 12 calls cost about 210k cycles every frame (4% of a
+         * 60 fps frame) on hardware. */
+        if ((state == PAD_STATE_STABLE || state == PAD_STATE_FINDCTP1) &&
+            (state != s_InfoState[p] || ++s_InfoAge[p] >= 60))
         {
             int i;
+            s_InfoState[p] = state;
+            s_InfoAge[p]   = 0;
+            PROF_BEGIN("pad: padInfoMode x12")
             for (i = 1; i <= 3; i++)
             {
                 s_Info[p][i] = padInfoMode(p, 0, i, 0);
@@ -154,8 +175,13 @@ void Pad_Poll(void)
             {
                 s_IdTable[p][i + 1] = i < s_IdTable[p][0] ? padInfoMode(p, 0, PAD_MODETABLE, i) : 0;
             }
+            PROF_END("pad: padInfoMode x12")
         }
-        else if (state == PAD_STATE_DISCONN || state == PAD_STATE_FINDPAD)
+        else if (state != PAD_STATE_STABLE && state != PAD_STATE_FINDCTP1)
+        {
+            s_InfoState[p] = -1; /* read again when it is back */
+        }
+        if (state == PAD_STATE_DISCONN || state == PAD_STATE_FINDPAD)
         {
             memset(s_Info[p], 0, sizeof(s_Info[p]));
             memset(s_IdTable[p], 0, sizeof(s_IdTable[p]));
@@ -164,7 +190,7 @@ void Pad_Poll(void)
         {
             continue;
         }
-        if ((state == PAD_STATE_STABLE || state == PAD_STATE_FINDCTP1) && padRead(p, 0, &st) != 0 && st.ok == 0)
+        if ((state == PAD_STATE_STABLE || state == PAD_STATE_FINDCTP1) && pad_read(p, &st) != 0 && st.ok == 0)
         {
             memcpy(s_Recv[p], &st, 8);
             /* Sticks resting near the centre read as exactly 80h, as PS1 pads (and DuckStation) report:

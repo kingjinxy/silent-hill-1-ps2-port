@@ -20,6 +20,7 @@
 #include <sbv_patches.h>
 #include <sifrpc.h>
 #include <stdio.h>
+#include <string.h>
 
 extern unsigned char sh1agent_irx[];
 extern unsigned int  size_sh1agent_irx;
@@ -36,6 +37,15 @@ static volatile unsigned int s_Request; /* a command from the game itself (Port_
 static int          s_Sema = -1;
 static int          s_MailboxOn; /* sh1agent.irx loaded: the vertical blank handler polls the mailbox */
 static unsigned char s_Stack[4096] __attribute__((aligned(16)));
+static unsigned int  s_IopStatus; /* the IOP agent's copy of our state (Port_AgentVBlank) */
+static unsigned int  s_IopLog;    /* the IOP agent's buffer for our console output (log_ps2.c) */
+
+typedef struct
+{
+    unsigned int magic, vblanks, frames, epc, main_status, main_wait, main_wait_id, log_pending, log_dropped, pad[3];
+} Status;
+
+static Status s_Status __attribute__((aligned(64)));
 
 /** The mailbox as the IOP's DMA wrote it (uncached: no stale cache lines). */
 static volatile Mailbox* mailbox(void)
@@ -127,6 +137,17 @@ static void agent(void* arg)
     }
 }
 
+/** The IOP agent's console output buffer (0: no agent, e.g. in PCSX2), and the last chunk it sent. */
+unsigned int Port_AgentLogBuffer(void)
+{
+    return s_MailboxOn ? s_IopLog : 0;
+}
+
+unsigned int Port_AgentLogAck(void)
+{
+    return mailbox()->pad[2];
+}
+
 /** A command from the game itself (thread context), e.g. the in-game reset combo: "OS". */
 void Port_AgentRequest(const char* cmd)
 {
@@ -138,13 +159,52 @@ void Port_AgentRequest(const char* cmd)
     SignalSema(s_Sema);
 }
 
-/** From the vertical blank interrupt: a new command wakes the agent thread. */
-void Port_AgentVBlank(void)
+/** Sends our state to the IOP agent (the ping's answer). From the interrupt: no waiting; if the SIF
+ * DMA queue is full, the next one goes. */
+static void send_status(unsigned int vblanks, unsigned int epc)
+{
+    extern int          Display_FrameCount(void);                         /* display_ps2.c */
+    extern int          Port_MainThreadId(void);                          /* libetc_ps2.c */
+    extern unsigned int Port_LogPending(unsigned int* dropped);           /* log_ps2.c */
+    volatile Status*    st = (volatile Status*)((unsigned int)&s_Status | 0x20000000); /* uncached */
+    ee_thread_status_t  th;
+    SifDmaTransfer_t    dt;
+    unsigned int        dropped;
+
+    memset(&th, 0, sizeof(th));
+    if (Port_MainThreadId() >= 0)
+    {
+        iReferThreadStatus(Port_MainThreadId(), &th);
+    }
+    st->magic        = 0x53314853; /* 'SH1S' */
+    st->vblanks      = vblanks;
+    st->frames       = (unsigned int)Display_FrameCount();
+    st->epc          = epc;
+    st->main_status  = th.status;
+    st->main_wait    = th.waitType;
+    st->main_wait_id = th.waitId;
+    st->log_pending  = Port_LogPending(&dropped);
+    st->log_dropped  = dropped;
+    __asm__ volatile("sync.l");
+    dt.src  = &s_Status;
+    dt.dest = (void*)s_IopStatus;
+    dt.size = sizeof(s_Status);
+    dt.attr = 0;
+    iSifSetDma(&dt, 1);
+}
+
+/** From the vertical blank interrupt: a new command wakes the agent thread; twice a second our state
+ * goes to the IOP agent. */
+void Port_AgentVBlank(unsigned int vblanks, unsigned int epc)
 {
     unsigned int seq;
     if (!s_MailboxOn)
     {
         return;
+    }
+    if (s_IopStatus && vblanks % 30 == 0)
+    {
+        send_status(vblanks, epc);
     }
     seq = mailbox()->seq;
     if (seq != s_LastSeq)
@@ -196,6 +256,8 @@ void Port_AgentInit(void)
         return;
     }
     s_LastSeq   = mailbox()->seq;
+    s_IopStatus = mailbox()->pad[0];
+    s_IopLog    = mailbox()->pad[1];
     s_MailboxOn = 1;
     printf("port: remote control on UDP port 62968 (tools/port/ps2_ctl.py)\n");
 }

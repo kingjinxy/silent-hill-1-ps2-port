@@ -6,6 +6,7 @@ extern int Game_PsxMain(void);
 
 extern void Crash_Install(void);        /* src/port/ps2/crash_ps2.c */
 extern void Port_MainThreadInit(void);  /* src/port/ps2/libetc_ps2.c */
+extern void Port_LogInit(void);         /* src/port/ps2/log_ps2.c */
 extern void Port_OverlaySnapshot(void); /* src/port/overlay.c */
 
 int main(int argc, char** argv)
@@ -14,6 +15,7 @@ int main(int argc, char** argv)
     (void)argv;
     printf("SH1 port: starting (build " __DATE__ " " __TIME__ ")\n");
     Port_MainThreadInit();
+    Port_LogInit();
     Port_OverlaySnapshot();
     Crash_Install();
     return Game_PsxMain();
