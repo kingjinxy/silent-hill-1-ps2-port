@@ -1097,9 +1097,51 @@ static const char* const OP_NAMES[64] = {
     "GTE RTPT", "GTE 31", "GTE 32", "GTE 33", "GTE 34", "GTE 35", "GTE 36", "GTE 37",
     "GTE 38", "GTE 39", "GTE 3A", "GTE 3B", "GTE 3C", "GTE GPF", "GTE GPL", "GTE NCCT",
 };
+/* Call sites of GTE commands (profiling builds): count per return address, printed by Gte_ProfSites. */
+#define SITES 128
+static struct
+{
+    u32 addr, cmd, calls;
+} s_Sites[SITES];
+
+void Gte_ProfSites(unsigned int frames)
+{
+    int k, i;
+    printf("gtesites: GTE command call sites per frame over %u frames (address, command, calls):\n", frames);
+    for (k = 0; k < 20; k++)
+    {
+        int best = -1;
+        for (i = 0; i < SITES; i++)
+        {
+            if (s_Sites[i].calls && (best < 0 || s_Sites[i].calls > s_Sites[best].calls))
+            {
+                best = i;
+            }
+        }
+        if (best < 0)
+        {
+            break;
+        }
+        printf("gtesites: %08x %-10s %u\n", s_Sites[best].addr, OP_NAMES[s_Sites[best].cmd & 63] + 4,
+               s_Sites[best].calls / frames);
+        s_Sites[best].calls = 0;
+    }
+    memset(s_Sites, 0, sizeof(s_Sites));
+}
+
 void Gte_Command(unsigned int cmd)
 {
-    unsigned int t;
+    unsigned int t, ra = (unsigned int)__builtin_return_address(0), h = (ra >> 2) % SITES, i;
+    for (i = 0; i < SITES; i++, h = (h + 1) % SITES)
+    {
+        if (s_Sites[h].addr == ra || s_Sites[h].calls == 0)
+        {
+            s_Sites[h].addr = ra;
+            s_Sites[h].cmd  = cmd;
+            s_Sites[h].calls++;
+            break;
+        }
+    }
     Prof_Begin(OP_NAMES[cmd & 63], &t);
     gte_command(cmd);
     Prof_End(OP_NAMES[cmd & 63], t);

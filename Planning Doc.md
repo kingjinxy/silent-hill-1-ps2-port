@@ -490,3 +490,10 @@ Ideas to try, roughly by expected payoff:
   - SPU sends from a sender thread.
   - GTE on MMI.
   - Primitive conversion on VU1.
+- Boot freeze at the Konami logo (2026-10-09). Its cause: the port's ResetCallback cleared the vertical blank callback every time. The recompiled libgpu ResetGraph calls it again during boot on some paths, so Screen_VSyncCallback was lost, and the logo's gameStateCounter never advanced. The PS1's libetc only acts on the first call: the routine at 0x800134F0 returns at once when its "initialised" flag is set. The port now does the same. The two earlier logo freezes, blamed on the asynchronous GIF and SPU sends, probably had this cause too: they came and went with the boot path, not the change. So those designs are not ruled out.
+- GTE pass 1:
+  - The profiling build counts GTE call sites (Gte_ProfSites, "gtesites:" lines).
+  - In map3_s00, ~4,400 DPCS/DCPL a frame came from Gfx_MeshDrawPort's lit-and-fogged path (the flashlight): a DPCS and a DCPL per corner.
+  - These are now exact inline functions, Port_Dpcs/Port_Dcpl (sf 1, lm 0), with no GTE register round trips. The fog/light memo also lasts across meshes while its inputs are unchanged (Port_MemoCheck).
+  - SH_PORT_CHECK_BATCH: 0 mismatches over 475k meshes (cutscene, town, school).
+  - On the PS2: game update 3,494 → 3,248k-cycles, and the cutscene's common rate went from 40–43 to 44–46 fps.

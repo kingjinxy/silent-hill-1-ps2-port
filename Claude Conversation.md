@@ -11909,3 +11909,266 @@ Now a full clean build without the profiling counters (rebuilding the translated
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "Planning Doc.md" <<'E'  ## Performance pass 1 (2026-10-09), Kaufmann cutscene (map3_s00 func_800D0CF8) -
 
+## Claude
+
+The measured gain on the PS2 is modest. Splitting the GS state memo cut per-primitive state work from about 1,206k to about 760k cycles a frame. The Kaufmann cutscene is still mostly 40–46 fps on the console, so this pass doesn't get it to 60.
+
+**What I tried:**
+
+| Change | Result on the PS2 |
+|---|---|
+| Split the GS state memo (texture state / everything else) | Kept. Frames unchanged in PCSX2. |
+| Asynchronous GS sends | Reverted: froze the console at the logo screens. |
+| Asynchronous sound sends | Reverted: the same freeze. |
+| Cache of recent texture/palette pairs | Removed: no measurable gain. |
+
+**Why the two asynchronous changes froze the console:** both send their data with interrupts disabled. On real hardware, queued DMA transfers apparently only start from the kernel's interrupt handler, so the waits never ended. PCSX2 doesn't model this, which is why both ran fine there.
+
+**Remote start:** `ps2_ctl.py demo "<name or number>"` works now. It started the Kaufmann cutscene on the console without anyone touching the controller.
+
+**Where the PS2 time goes now**, per frame, in k-cycles against a 60 fps budget of 4,915:
+
+| | k-cycles |
+|---|---|
+| GS conversion (`DrawOTag`) | 2,830 |
+| …polygon setup | 1,733 |
+| …texture changes (~540 per frame, ~1,000 cycles each) | 579 |
+| …other state | 224 |
+| …DMA sends | 321 |
+| GTE maths | ~1,420 |
+| Sound task (synchronous sound sends) | 476 |
+| Rest of the game | ~2,100 |
+
+**What I'd do next:**
+1. **Sound sends from a dedicated sender thread** (~0.4M cycles, about 8%). Sound commands go into a memory queue, and a separate thread sends them to the IOP with interrupts enabled. That avoids the freeze, and the game never waits.
+2. **A finer hardware profile of a texture change and a polygon.** It's not the cache lookups, so it's the register writes or memory/cache behaviour. I need hardware numbers before guessing again.
+3. **The structural changes:**
+   - GTE maths exactly on MMI, the EE's 128-bit integer SIMD unit (~1.4M cycles);
+   - moving primitive conversion to VU1, so the GS work runs in parallel with the EE (up to ~2.8M cycles).
+
+   These are the ones that can reach 60 fps here; the others are trimming.
+
+From now on, any change that touches DMA or interrupts gets one boot test on the console before I build on it.
+
+Committed as b0e79abc9; the PS1 build still matches all 50 checksums. The ISO in `build/port` is a full clean build without profiling counters, but it isn't on the console yet: the PS2 is still running the 22:54 profiling build. Shall I deploy this build and start on the sound sender thread, or go straight for one of the structural changes?
+
+## Claude
+
+That map2_s00 load is the attract demo looping on the title screen. Nothing new there. I'm waiting for your call on the next step.
+
+## User
+
+Let's go for the structural changes. Can both approaches be used at the same time, or are they mutually exclusive?
+
+## Claude
+
+They can run at the same time; they're complementary.
+
+- **MMI is part of the EE itself:** 128-bit integer SIMD instructions in the EE's own pipeline. It would speed up the GTE maths that runs inside the game update: transforms, lighting, depth cue.
+- **VU1 is a separate processor** with its own memory and its own path to the GS. It would take over turning the PS1 drawing packets into GS commands, during the drawing phase. While VU1 converts one frame's primitives, the EE can already run the next game update.
+
+Each takes a different part of the frame (GTE about 1.4M cycles, GS conversion about 2.8M), so the savings mostly add up. VU0 stays free in either case.
+
+How they'd fit together, and the risks:
+- **The data flow stays the same.** The game computes positions and colours with the GTE (now on MMI), writes PS1 primitives into its ordering table, and the port hands those to VU1 instead of converting them on the EE. Neither change needs to know about the other.
+- **MMI is exact by construction.** `PMADDH` and related instructions do signed 16×16→32 integer multiply-adds, which is the GTE's arithmetic. I can check each new operation against the current C implementation over millions of inputs on the PC before it ever runs in the game.
+- **VU1 is the bigger, riskier job.**
+  - VU1 is weak at bit-twiddling, so the plan is to let the hardware do the unpacking. VIF `UNPACK` spreads a PS1 primitive's bytes and halfwords into 32-bit lanes. VU1 adds the draw offset and outputs GS data in PACKED mode, where the GS itself assembles colours and coordinates.
+  - The EE keeps deciding texture and blend state, since it owns the texture cache.
+  - Drawing would move from the GIF path we use now (PATH3) to VU1's path (PATH1). Texture uploads must stay in order with the draws, so they'd go through VIF1 too.
+  - This touches DMA, the area that just froze the console twice, so every step gets a boot test on hardware.
+
+**Order I'd propose:**
+1. GTE on MMI first: contained, provably exact, and safe on hardware since it doesn't touch DMA. Hot operations first: `DPCS`/`DCPL` (about 1,930 calls a frame each), `MVMVA`, `RTPT`, `NCT`.
+2. Then VU1 primitive conversion, in stages:
+   1. untextured polygons only, compared against the EE path frame by frame;
+   2. textured polygons;
+   3. sprites;
+   4. moving texture uploads onto the same path.
+
+I'll start on step 1 unless you'd rather go the other way round.
+
+## User
+
+What role does VU0 play in all this?
+
+## Claude
+
+In this plan, VU0 does nothing yet.
+
+**Why the GTE maths goes to MMI rather than VU0:**
+- **VU0's maths is floating point.** Its four-lane multiply-adds run on 32-bit floats with a 24-bit mantissa. The PS1 GTE does fixed-point integer arithmetic: 16×16-bit products summed into 32-bit and 44-bit accumulators, with specific rounding and saturation. A float result can differ in the last bits, so it would no longer match the PS1 exactly. That's the requirement you set for this work. VU0's integer unit is only 16 bits wide, too narrow for these sums.
+- **MMI is integer SIMD in the EE's own pipeline.** It does exactly those 16×16→32 products, four or eight at a time, with no data transfer: operands are already in EE registers.
+- **VU0 has a hand-off cost in macro mode.** Each GTE operation is small and comes one at a time from game code, so moving data into VU0's registers and back would eat much of the gain.
+
+**Where VU0 could help later:**
+1. **Work that doesn't need bit-exact PS1 results.** For example, maths that only the port uses, such as computing GS coordinates or clipping inside the conversion path.
+2. **A partner for VU1.** VU0 could take part of the primitive conversion or texture preparation, so the EE, VU0 and VU1 run in parallel. That's only worth it if the EE and VU1 alone don't reach 60 fps.
+3. **Batched GTE work in micro mode.** Whole meshes at once, as many PS2 games do with VU0. That would mean restructuring the game's drawing code around batches, and the float-exactness problem is still there.
+
+So the plan stays: MMI for the GTE maths, VU1 for drawing, and VU0 kept in reserve.
+
+## Claude
+
+That map1_s01 load is another attract demo on the console (the school map). Nothing for me to act on. I'll begin the GTE-on-MMI work when you give the go-ahead.
+
+## User
+
+Alright, let's proceed with GTE on MMI
+
+## Claude
+
+I'll start by reading the port's current GTE implementation, for the hot operations first.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "Gte_CmdRtpt\|Gte_Command" src/port include/port | head; f=$(grep -rln "void Gte_CmdRtpt\|Gte_CmdRtpt(
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 554,612p src/port/gte.c; sed -n 714,834p src/port/gte.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 834,1100p src/port/gte.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -o "Gte_[A-Za-z]*" build/port/recomp/*.c | awk -F: '{print $2}' | sort | uniq -c | sort -rn | head; grep -n
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -l "^void rc_GsTMDfastTG3LFG" build/port/recomp/*.c | head -1); echo $f; awk '/^void rc_GsTMDfastTG3LFG
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "gte_dpcs\|gte_dcpl\|gte_DpqColor\|gte_dpcl\|gte_ldrgb\b" src --include=*.c | head; grep -rn "gte_dpcs
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 700,800p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 30,70p include/port/gte.h; grep -n "^void Gte_Cmd\|Gte_Cmd[A-Za-z]*(void)" src/port/gte.c | head -20
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n '/^void Gte_Command(unsigned int cmd)/,/^}/p' src/port/gte.c | head -30
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/gte.c'; s=open(p).read() a='''void Gte_Command(unsigned int cmd) {     unsigned int 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/libgpu_port.c'; s=open(p).read() a='''            Prof_Report(frames);''' assert a i
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "gte_dcpl\|gte_dpcs" src/bodyprog/gfx/bodyprog_80056D8C.c | head -20; n=$(grep -n "gte_dcpl" src/bodypro
+
+## Claude
+
+The `DCPL` calls come through a differently named macro. Lines 2060–2120 hold a run of paired `DPCS` calls, so I'll read that region.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 2030,2135p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^static void Gfx_MeshDrawPort\|^void Gfx_MeshDraw\|^#ifdef\|^#endif\|^#else\|^#if\|^[a-z].*(.*) *// 0x\
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "s_PortMeshGen" src/bodyprog/gfx/bodyprog_80056D8C.c | head; grep -n "field_4;\|field_8;\|field_C;" incl
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1500,1512p src/bodyprog/gfx/bodyprog_80056D8C.c; grep -n "field_380" -B2 -A30 include/bodyprog/bodyprog.h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 140,160p include/bodyprog/bodyprog.h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/bodyprog/gfx/bodyprog_80056D8C.c'; s=open(p).read() def ed(a,b,cnt=1):     global s; asse
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n '/#ifdef SH_PORT_CHECK_BATCH/,/#endif/p' src/bodyprog/gfx/bodyprog_80056D8C.c | sed -n 3,60p | grep -n "p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1530,1600p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; unset SH1_PROF; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_EXTRA_CFLAGS=-DSH_PORT_CHECK_BA
+
+## Claude
+
+The check mode found no differences in 196,608 meshes, so the packets are exact. Next, a profiling build to see how many GTE calls that removed.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; unset SH1_EXTRA_CFLAGS SH1_NO_RECOMP; export SH1_FPS=60 SH1_PROF=1; (bash tools/port/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; F=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 785,1500p src/bodyprog/gfx/bodyprog_80056D8C.c | grep -o "gte_[a-z0-9_]*" | sort | uniq -c | sort -rn | h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(sed -n 785,1500p src/bodyprog/gfx/bodyprog_80056D8C.c | grep -n "gte_dpcl" | head -1 | cut -d: -f1); n=$((n+
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "gte_ldsv_\|define gte_lddp\|define gte_ldrgb\b\|define gte_strgb\b" include/port/gte_from_inline_no_dmp
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' import re p='src/bodyprog/gfx/bodyprog_80056D8C.c'; s=open(p).read() helpers=''' /* DPCS and DCP
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; unset SH1_PROF; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_EXTRA_CFLAGS=-DSH_PORT_CHECK_BA
+
+## Claude
+
+No mismatches in 204,800 meshes, and the cutscene exercises exactly this lit-and-fogged path. To cover the town and school as well, I'll also run the attract demos with the check build.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mv build/port/input.txt /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; unset SH1_EXTRA_CFLAGS SH1_NO_RECOMP; export SH1_FPS=60 SH1_PROF=1; (bash tools/port/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(wc -l < build/port/ps2_log.out); until tail -n +$n build/port/ps2_log.out | grep -aq "gameState 7"; do sleep
+
+## Claude
+
+I've deployed the profiling build with the exact inline fog/light maths to the PS2; the restart was acknowledged. Once the main menu appears, the Kaufmann cutscene starts remotely, and I'll compare the profile when it ends. Please leave the controller alone during this run.
+
+## User
+
+The game crashed on the Konami logo again
+
+## Claude
+
+That's the third freeze at the logo, and this time with a build whose only real change is game-side maths that I verified exact. So my earlier explanations may have been wrong. I'll compare the boots that worked with the ones that froze.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -an "SH1 port: starting\|ministack.irx started\|agent: command RS" build/port/ps2_log.out | tail -16
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n '213447,$p' build/port/ps2_log.out | grep -av "libpad\|prof:\|gtesites" | tail -25; sed -n '154646,154760
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "GameState_KonamiLogo_Update" src --include=*.c | head -2; f=$(grep -rln "^void GameState_KonamiLogo_Up
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "define PORT_LOGO_SKIP" src include | head -3; sed -n 60,100p src/port/ps2/libetc_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 40 python3 tools/port/ps2_ctl.py md g_SysWork+0x1C 8; timeout 40 python3 tools/port/ps2_ctl.py md s_Call
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 128,145p src/port/ps2/libetc_ps2.c; grep -rn "ResetCallback()\|VSyncCallback(" src --include=*.c | grep -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; head -30 build/port/overlay_ranges.c; grep -c "" build/port/overlay_ranges.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; NM=~/ps2dev/ee/bin/mips64r5900el-ps2-elf-nm; $NM -n build/port/sh1.elf | grep "__ovl_.*_bss_\(start\|end\)\|__ov
+
+## Claude
+
+No overlay range touches `s_Callback`, so that theory is out. Next: maybe the game only registers the callback after the logo screens. I'll check where `VSyncCallback` is called in the boot sequence.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 120,160p src/bodyprog/sys/game_main.c; sed -n 60,95p src/main/main.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ~/ps2dev/ee/bin/mips64r5900el-ps2-elf-nm -n -S build/port/sh1.elf | awk '{a=strtonum("0x"$1)} 1' 2>/dev/null | h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "ResetCallback\|s_Callback *= *0\|VSyncCallback(0\|VSyncCallback(NULL" src/port build/port/recomp/*.c 2
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 90,115p build/port/recomp/libgpu_sys.c; grep -n "^void rc_\|^/\*.*\*/$" build/port/recomp/libgpu_sys.c | 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/libetc_ps2.c'; s=open(p).read() a='''int ResetCallback(void) {     init();     s
+
+## Claude
+
+Before relying on that, I'll confirm it against the PS1 binary: the game's own copy of libetc's `ResetCallback`.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -h "^ResetCallback\|^_96_\|^ResetCallback " configs/USA/sym.main.txt | head; f=$(find asm/USA/main -name "R
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' e=open('rom/USA/SLUS_007.07','rb').read() import struct o=0x8001335C-0x80010000+0x800 for i in r
+
+## Claude
+
+On the PS1, `ResetCallback` jumps through a function table (`*(0x80022590) + 0xC`). I'll follow that pointer and disassemble the real routine to look for a "first call only" check.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' import struct,subprocess e=open('rom/USA/SLUS_007.07','rb').read() def rd(a): return struct.unpa
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; unset SH1_EXTRA_CFLAGS SH1_NO_RECOMP; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1; (
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(wc -l < build/port/ps2_log.out); until tail -n +$n build/port/ps2_log.out | grep -aq "gameState 7"; do sleep
+
+## Claude
+
+My cleanup command stopped the old waiting job, but it also killed itself before the deploy ran. Deploying now:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 20 python3 tools/port/ps2_ctl.py deploy
+
+## Claude
+
+I've deployed the fixed build (restart acknowledged). This is exactly the case that froze before: a remote restart into the profiling build. If the fix is right, it gets past the logo, reaches the menu, and the Kaufmann cutscene starts remotely. Then I'll read the profile.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/bpj3
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; make -j8 build < /dev/null > /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d5
+

@@ -322,6 +322,10 @@ DISPENV* PutDispEnv(DISPENV* env)
         {
             Prof_Report(frames);
             {
+                extern void Gte_ProfSites(unsigned int frames);
+                Gte_ProfSites(frames);
+            }
+            {
                 extern void ProfFn_Report(unsigned int frames);
                 ProfFn_Report(frames);
             }

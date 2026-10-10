@@ -715,13 +715,76 @@ void func_80057B7C(s_MeshHeader* meshHdr, s32 offset, s_GteScratchData* scratchD
 /* Port version of Gfx_MeshDraw: the same packets, with
  * - the back-face test (NCLIP) computed inline, exactly as the GTE does it (MAC0 of the screen xy);
  * - fog and lighting colours (DPCS of a fixed colour by a per-vertex fog byte or a per-corner light
- *   byte) memoized by that byte for the call: the first use of a value goes through the GTE, later
- *   ones reuse its result, instead of 4-8 DPCS per face.
+ *   byte) memoized by that byte while the fog/colour inputs stay the same (Port_MemoCheck): the first
+ *   use of a value goes through the GTE, later ones reuse its result, instead of 4-8 DPCS per face.
  * GTE data registers afterwards can differ from the PS1's (fewer commands ran); nothing reads them
  * before the next mesh reloads them. -DSH_PORT_CHECK_BATCH compares the packets with the original. */
 static u32 s_PortMeshGen = 1;
+static s32 s_PortMemoFog = -1;     /* inputs the memo was built with: scratch field_4, field_8, field_C */
+static u32 s_PortMemoCol8, s_PortMemoColC, s_PortMemoFc[3];
+
+/** The memo holds while its inputs (fog offset, the two colours, the GTE far colour) are unchanged:
+ * they stay the same across most meshes of a frame, and resetting it per mesh (the world is many small
+ * meshes) made nearly every corner miss again (~4,400 DPCS a frame in map3_s00). */
+static inline void Port_MemoCheck(s_GteScratchData* scratchData)
+{
+    extern unsigned int g_GteCtrl[32];
+    u32 c8 = *(u32*)&scratchData->field_380.s_0.field_8, cC = *(u32*)&scratchData->field_380.s_0.field_C;
+    if (scratchData->field_380.s_0.field_4 != s_PortMemoFog || c8 != s_PortMemoCol8 || cC != s_PortMemoColC ||
+        g_GteCtrl[21] != s_PortMemoFc[0] || g_GteCtrl[22] != s_PortMemoFc[1] || g_GteCtrl[23] != s_PortMemoFc[2])
+    {
+        s_PortMeshGen++;
+        s_PortMemoFog   = scratchData->field_380.s_0.field_4;
+        s_PortMemoCol8  = c8;
+        s_PortMemoColC  = cC;
+        s_PortMemoFc[0] = g_GteCtrl[21];
+        s_PortMemoFc[1] = g_GteCtrl[22];
+        s_PortMemoFc[2] = g_GteCtrl[23];
+    }
+}
 static u32 s_PortFogGen[256], s_PortFog2[256], s_PortFog3[256];
 static u32 s_PortLitGen[256], s_PortLit[256];
+
+
+/* DPCS and DCPL as the GTE computes them for sf = 1, lm = 0 (the commands this code issues), straight
+ * from their inputs, without the GTE's register file: the same colour and code byte as RGB2 after the
+ * command (the GTE's formulas, as in src/port/gte.c dpcs_small/dcpl_small and interp_fc_small). The
+ * lit-and-fogged path (the flashlight) needed one of each per corner, ~4,400 GTE commands a frame in
+ * map3_s00 at ~200 EE cycles each; this is a few dozen. */
+static inline u32 Port_DepthCue(s32 m0, s32 m1, s32 m2, s32 ir0, u32 rgbc)
+{
+    extern unsigned int g_GteCtrl[32];
+    s32 m[3], i;
+    u32 out = rgbc & 0xFF000000u;
+    m[0] = m0;
+    m[1] = m1;
+    m[2] = m2;
+    for (i = 0; i < 3; i++)
+    {
+        s64 t   = ((s64)(s32)g_GteCtrl[21 + i] << 12) - m[i];
+        s32 v   = (s32)(t >> 12);
+        s32 mac;
+        v   = v < -0x8000 ? -0x8000 : v > 0x7FFF ? 0x7FFF : v;
+        mac = (s32)(((s64)(v * ir0) + m[i]) >> 12) >> 4;
+        out |= (u32)(mac < 0 ? 0 : mac > 0xFF ? 0xFF : mac) << (i * 8);
+    }
+    return out;
+}
+
+/** DPCS (sf 1, lm 0) of colour `rgbc` by IR0 = `ir0`: the RGB2 result. */
+static inline u32 Port_Dpcs(u32 rgbc, s32 ir0)
+{
+    return Port_DepthCue((s32)(rgbc & 0xFF) << 16, (s32)((rgbc >> 8) & 0xFF) << 16, (s32)((rgbc >> 16) & 0xFF) << 16,
+                         (s16)ir0, rgbc);
+}
+
+/** DCPL (sf 1, lm 0) of colour `rgbc` by IR1-3 = `ir` (all three) and IR0 = `ir0`: the RGB2 result. */
+static inline u32 Port_Dcpl(u32 rgbc, s32 ir, s32 ir0)
+{
+    ir = (s16)ir;
+    return Port_DepthCue((s32)((rgbc & 0xFF) * ir) << 4, (s32)(((rgbc >> 8) & 0xFF) * ir) << 4,
+                         (s32)(((rgbc >> 16) & 0xFF) * ir) << 4, (s16)ir0, rgbc);
+}
 
 static inline s32 Port_Nclip(s32 xy0, s32 xy1, s32 xy2)
 {
@@ -740,6 +803,7 @@ static inline s32 Port_Nclip(s32 xy0, s32 xy1, s32 xy2)
     do                                                                                   \
     {                                                                                    \
         u32 f_ = (f);                                                                    \
+        Port_MemoCheck(scratchData);                                                     \
         if (s_PortFogGen[f_] != s_PortMeshGen)                                           \
         {                                                                                \
             s32 t_ = Q12(1.0f) - (s32)f_ * 16 - scratchData->field_380.s_0.field_4;      \
@@ -747,14 +811,8 @@ static inline s32 Port_Nclip(s32 xy0, s32 xy1, s32 xy2)
             {                                                                            \
                 t_ = 0;                                                                  \
             }                                                                            \
-            gte_lddp(t_);                                                                \
-            gte_ldrgb(&scratchData->field_380.s_0.field_C);                              \
-            gte_dpcs();                                                                  \
-            gte_strgb(&s_PortFog2[f_]);                                                  \
-            gte_lddp(Q12(1.0f) - t_);                                                    \
-            gte_ldrgb(&scratchData->field_380.s_0.field_8);                              \
-            gte_dpcs();                                                                  \
-            gte_strgb(&s_PortFog3[f_]);                                                  \
+            s_PortFog2[f_] = Port_Dpcs(*(u32*)&scratchData->field_380.s_0.field_C, t_);                                                  \
+            s_PortFog3[f_] = Port_Dpcs(*(u32*)&scratchData->field_380.s_0.field_8, Q12(1.0f) - t_);                                                  \
             s_PortFogGen[f_] = s_PortMeshGen;                                            \
         }                                                                                \
         *(u32*)(out2) = s_PortFog2[f_];                                                  \
@@ -771,12 +829,10 @@ static inline s32 Port_Nclip(s32 xy0, s32 xy1, s32 xy2)
             *(u32*)(out) = 0x3C000000;                                                   \
             break;                                                                       \
         }                                                                                \
+        Port_MemoCheck(scratchData);                                                     \
         if (s_PortLitGen[l_] != s_PortMeshGen)                                           \
         {                                                                                \
-            gte_lddp(Q12(1.0f) - (l_ << 5));                                             \
-            gte_ldrgb(&scratchData->field_380.s_0.field_8);                              \
-            gte_dpcs();                                                                  \
-            gte_strgb(&s_PortLit[l_]);                                                   \
+            s_PortLit[l_] = Port_Dpcs(*(u32*)&scratchData->field_380.s_0.field_8, Q12(1.0f) - (l_ << 5));                                                   \
             s_PortLitGen[l_] = s_PortMeshGen;                                            \
         }                                                                                \
         *(u32*)(out) = s_PortLit[l_];                                                    \
@@ -863,10 +919,7 @@ static void Gfx_MeshDrawPort(s_MeshHeader* meshHdr, s_GteScratchData* scratchDat
 
     if (g_WorldEnvWork.field_0 == UnkGfxEnum_0)
     {
-        gte_lddp(Q12(1.0f) - g_WorldEnvWork.field_20);
-        gte_ldrgb(&scratchData->field_380.s_0.field_8);
-        gte_dpcs();
-        gte_strgb(&scratchData->field_380.s_0.field_8);
+        *(u32*)(&scratchData->field_380.s_0.field_8) = Port_Dpcs(*(u32*)(&scratchData->field_380.s_0.field_8), Q12(1.0f) - g_WorldEnvWork.field_20);
     }
 
     scratchData->field_380.s_0.field_C    = g_WorldEnvWork.fog.color;
@@ -962,15 +1015,8 @@ static void Gfx_MeshDrawPort(s_MeshHeader* meshHdr, s_GteScratchData* scratchDat
                             var_t3 = 0;
                         }
 
-                        gte_lddp(var_t3);
-                        gte_ldrgb(&scratchData->field_380.s_0.field_C);
-                        gte_dpcs();
-                        gte_strgb(&poly1->r0);
-                        gte_lddp(scratchData->field_252[scratchData->field_380.s_0.field_10] << 4);
-                        gte_ldsv_(scratchData->field_2B8[scratchData->field_380.s_0.field_14] << 5);
-                        gte_ldrgb(&scratchData->field_380.s_0.field_8);
-                        gte_dpcl();
-                        gte_strgb(&poly3->r0);
+                        *(u32*)(&poly1->r0) = Port_Dpcs(*(u32*)(&scratchData->field_380.s_0.field_C), var_t3);
+                        *(u32*)(&poly3->r0) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_14] << 5, scratchData->field_252[scratchData->field_380.s_0.field_10] << 4);
 
                         var_t3  = Q12(1.0f) - scratchData->field_252[scratchData->field_380.s_0.field_11] * 16;
                         var_t3 -= scratchData->field_380.s_0.field_4;
@@ -979,15 +1025,8 @@ static void Gfx_MeshDrawPort(s_MeshHeader* meshHdr, s_GteScratchData* scratchDat
                             var_t3 = 0;
                         }
 
-                        gte_lddp(var_t3);
-                        gte_ldrgb(&scratchData->field_380.s_0.field_C);
-                        gte_dpcs();
-                        gte_strgb(&poly1->r1);
-                        gte_lddp(scratchData->field_252[scratchData->field_380.s_0.field_11] << 4);
-                        gte_ldsv_(scratchData->field_2B8[scratchData->field_380.s_0.field_15] << 5);
-                        gte_ldrgb(&scratchData->field_380.s_0.field_8);
-                        gte_dpcl();
-                        gte_strgb(&poly3->r1);
+                        *(u32*)(&poly1->r1) = Port_Dpcs(*(u32*)(&scratchData->field_380.s_0.field_C), var_t3);
+                        *(u32*)(&poly3->r1) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_15] << 5, scratchData->field_252[scratchData->field_380.s_0.field_11] << 4);
 
                         var_t3  = Q12(1.0f) - scratchData->field_252[scratchData->field_380.s_0.field_12] * 0x10;
                         var_t3 -= scratchData->field_380.s_0.field_4;
@@ -996,15 +1035,8 @@ static void Gfx_MeshDrawPort(s_MeshHeader* meshHdr, s_GteScratchData* scratchDat
                             var_t3 = 0;
                         }
 
-                        gte_lddp(var_t3);
-                        gte_ldrgb(&scratchData->field_380.s_0.field_C);
-                        gte_dpcs();
-                        gte_strgb(&poly1->r2);
-                        gte_lddp(scratchData->field_252[scratchData->field_380.s_0.field_12] << 4);
-                        gte_ldsv_(scratchData->field_2B8[scratchData->field_380.s_0.field_16] << 5);
-                        gte_ldrgb(&scratchData->field_380.s_0.field_8);
-                        gte_dpcl();
-                        gte_strgb(&poly3->r2);
+                        *(u32*)(&poly1->r2) = Port_Dpcs(*(u32*)(&scratchData->field_380.s_0.field_C), var_t3);
+                        *(u32*)(&poly3->r2) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_16] << 5, scratchData->field_252[scratchData->field_380.s_0.field_12] << 4);
 
                         var_t3  = Q12(1.0f) - scratchData->field_252[scratchData->field_380.s_0.field_13] * 0x10;
                         var_t3 -= scratchData->field_380.s_0.field_4;
@@ -1013,15 +1045,8 @@ static void Gfx_MeshDrawPort(s_MeshHeader* meshHdr, s_GteScratchData* scratchDat
                             var_t3 = 0;
                         }
 
-                        gte_lddp(var_t3);
-                        gte_ldrgb(&scratchData->field_380.s_0.field_C);
-                        gte_dpcs();
-                        gte_strgb(&poly1->r3);
-                        gte_lddp(scratchData->field_252[scratchData->field_380.s_0.field_13] << 4);
-                        gte_ldsv_(scratchData->field_2B8[scratchData->field_380.s_0.field_17] << 5);
-                        gte_ldrgb(&scratchData->field_380.s_0.field_8);
-                        gte_dpcl();
-                        gte_strgb(&poly3->r3);
+                        *(u32*)(&poly1->r3) = Port_Dpcs(*(u32*)(&scratchData->field_380.s_0.field_C), var_t3);
+                        *(u32*)(&poly3->r3) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_17] << 5, scratchData->field_252[scratchData->field_380.s_0.field_13] << 4);
 
                         *(s32*)&poly3->u0 = *(s32*)&prim->u0;
                         *(s32*)&poly3->u1 = *(s32*)&prim->u1 & 0xFFFFFF;
@@ -1138,29 +1163,13 @@ static void Gfx_MeshDrawPort(s_MeshHeader* meshHdr, s_GteScratchData* scratchDat
 
                     *(s32*)&scratchData->field_380.s_0.field_14 = *(s32*)&prim->field_10;
 
-                    gte_lddp(scratchData->field_252[scratchData->field_380.s_0.field_10] << 4);
-                    gte_ldsv_(scratchData->field_2B8[scratchData->field_380.s_0.field_14] << 5);
-                    gte_ldrgb(&scratchData->field_380.s_0.field_8);
-                    gte_dpcl();
-                    gte_strgb(&poly3->r0);
+                    *(u32*)(&poly3->r0) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_14] << 5, scratchData->field_252[scratchData->field_380.s_0.field_10] << 4);
 
-                    gte_lddp(scratchData->field_252[scratchData->field_380.s_0.field_11] << 4);
-                    gte_ldsv_(scratchData->field_2B8[scratchData->field_380.s_0.field_15] << 5);
-                    gte_ldrgb(&scratchData->field_380.s_0.field_8);
-                    gte_dpcl();
-                    gte_strgb(&poly3->r1);
+                    *(u32*)(&poly3->r1) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_15] << 5, scratchData->field_252[scratchData->field_380.s_0.field_11] << 4);
 
-                    gte_lddp(scratchData->field_252[scratchData->field_380.s_0.field_12] << 4);
-                    gte_ldsv_(scratchData->field_2B8[scratchData->field_380.s_0.field_16] << 5);
-                    gte_ldrgb(&scratchData->field_380.s_0.field_8);
-                    gte_dpcl();
-                    gte_strgb(&poly3->r2);
+                    *(u32*)(&poly3->r2) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_16] << 5, scratchData->field_252[scratchData->field_380.s_0.field_12] << 4);
 
-                    gte_lddp(scratchData->field_252[scratchData->field_380.s_0.field_13] << 4);
-                    gte_ldsv_(scratchData->field_2B8[scratchData->field_380.s_0.field_17] << 5);
-                    gte_ldrgb(&scratchData->field_380.s_0.field_8);
-                    gte_dpcl();
-                    gte_strgb(&poly3->r3);
+                    *(u32*)(&poly3->r3) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_17] << 5, scratchData->field_252[scratchData->field_380.s_0.field_13] << 4);
 
                     *(s32*)&poly3->u0 = *(s32*)&prim->u0;
                     *(s32*)&poly3->u1 = *(s32*)&prim->u1 & 0xFFFFFF;
@@ -1504,7 +1513,6 @@ static void Gfx_MeshDrawOrig(s_MeshHeader* meshHdr, s_GteScratchData* scratchDat
 
 void Gfx_MeshDraw(s_MeshHeader* meshHdr, s_GteScratchData* scratchData, GsOT_TAG* tag, s32 otShift) // 0x8005801C
 {
-    s_PortMeshGen++;
 #ifdef SH_PORT_WATCH_PACKET
     {
         // Debugging (SH1_WATCH_PACKET=1): the packet pointer must be inside the PS1 RAM area (found

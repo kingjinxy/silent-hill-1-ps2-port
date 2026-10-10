@@ -137,10 +137,19 @@ void Port_VBlankReinstall(void)
     EnableIntc(INTC_VBLANK_S);
 }
 
+/** As PSY-Q's libetc: only the first call resets the callbacks; later ones do nothing. libgpu's
+ * ResetGraph (recompiled) calls it again during boot, on some paths; clearing every time removed the
+ * game's vertical blank callback (Screen_VSyncCallback), whose counter the boot logos wait for: the
+ * game sometimes stayed on the Konami logo (2026-10-09). */
 int ResetCallback(void)
 {
+    static int done;
     init();
-    s_Callback = 0;
+    if (!done)
+    {
+        done       = 1;
+        s_Callback = 0;
+    }
     return 0;
 }
 
