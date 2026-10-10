@@ -7,7 +7,10 @@ SysState_EventCallback) whose function, from the map's g_MapEventFuncs table, us
 machinery: letterbox borders, the cutscene timer or flag, or camera/animation data (DMS). Functions
 still in assembly are checked by the functions they call. FMVs (SysState_Fmv) are separate events
 and aren't listed, nor are later parts of a cutscene (events started by another cutscene event's
-completion flag).
+completion flag, or that depend on what an earlier event set up: DMS data they read but don't load,
+a character they spawn but don't load). When such a later part's required flag is set by another
+event on the map that starts by itself, that event is listed instead (map4_s01 func_800D1FF0, which
+loads Cybil for func_800D2408).
 
     python3 tools/port/cutscene_list.py --report          # list with each event's first lines of dialogue
     python3 tools/port/cutscene_list.py --c OUT.c         # the table compiled into the port
@@ -73,10 +76,83 @@ def resumes(body):
     return bool(m) and float(m.group(1)) > 0
 
 
+_MAP_FUNCS = {}
+
+
+def map_functions(mp):
+    """name -> body of every C function in the map's files."""
+    if mp not in _MAP_FUNCS:
+        out = {}
+        for f in glob.glob(os.path.join(REPO, "src", "maps", mp, "*.c")):
+            s = read(f)
+            for m in re.finditer(r"\n[A-Za-z_][\w \t\*]*?\b(\w+)\([^;{]*\)[^;{\n]*\n\{", s):
+                i, depth = m.end(), 1
+                while depth and i < len(s):
+                    depth += {"{": 1, "}": -1}.get(s[i], 0)
+                    i += 1
+                out.setdefault(m.group(1), s[m.end():i])
+        _MAP_FUNCS[mp] = out
+    return _MAP_FUNCS[mp]
+
+
+def needs_setup(body, mp):
+    """C code that relies on an earlier event: it reads DMS tracks without loading a DMS file (also
+    in the map's helper functions it calls), or spawns a character that only another event loads
+    (the map's own characters: its charaGroupIds, loaded with it, and those its other code loads,
+    e.g. map0_s01's Map_WorldObjectsInit)."""
+    fns = map_functions(mp)
+    event_fns = set(funcs(mp))
+    whole, seen, todo = body, set(), [body]
+    for _ in range(3):  # helpers of the map it calls, three levels deep
+        calls = {c for b in todo for c in re.findall(r"\b(\w+)\(", b) if c in fns and c not in event_fns and c not in seen}
+        seen |= calls
+        todo = [fns[c] for c in calls]
+        whole += "".join(todo)
+    # DMS buffers it reads (Dms_*(..., FS_BUFFER_n)) but never loads a DMS file into: map7_s03
+    # func_800E3B6C reads FS_BUFFER_20, which func_800E3390 loaded.
+    used = set(re.findall(r"\bDms_\w+\([^;]*?\bFS_BUFFER_(\d+)", whole))
+    loaded = set(re.findall(r"Fs_QueueStartRead\(FILE_\w*_DMS,\s*(?:\([^)]*\))?\s*FS_BUFFER_(\d+)", whole))
+    if used - loaded:
+        return "DMS data in FS_BUFFER_%s, which it doesn't load" % ", ".join(sorted(used - loaded))
+    header = read(os.path.join(REPO, "src", "maps", mp, mp + "_header.c"))
+    m = re.search(r"\.charaGroupIds\s*=\s*\{([^}]*)\}", header)
+    own = set(re.findall(r"Chara_\w+", m.group(1))) if m else set()  # loaded with the map
+    for name, b in fns.items():
+        if name not in event_fns:
+            own |= set(re.findall(r"Chara_Load\([^,]*,\s*(Chara_\w+)", b))
+    loaded = set(re.findall(r"Chara_Load\([^,]*,\s*(Chara_\w+)", whole))
+    for chara in re.findall(r"Chara_Spawn\((Chara_\w+)", whole):
+        if chara not in loaded and chara not in own:
+            return "%s, which only another event loads" % chara
+    return None
+
+
+def flag_setters(mp, files):
+    """flag -> [(event, function)] of the map's event-callback events that set it (their
+    completion flag, or a flag their code sets), and only those that need no flag to start."""
+    setters = {}
+    table = funcs(mp)
+    for ev, fields in events(mp):
+        if fields.get("sysState") != "SysState_EventCallback" or fields.get("requiredEventFlag") not in (None, "EventFlag_None"):
+            continue
+        try:
+            name = table[int(fields.get("eventParam", "0"), 0)]
+        except (ValueError, IndexError):
+            continue
+        body = c_body(name, files) or ""
+        flags = {fields.get("completeEventFlag")} | set(re.findall(r"Savegame_EventFlagSet\w*\((EventFlag_\w+)\)", body))
+        for f in flags:
+            setters.setdefault(f, []).append((ev, name))
+    return setters
+
+
 def funcs(mp):
     s = read(os.path.join(REPO, "src", "maps", mp, mp + "_header.c"))
     m = re.search(r"g_MapEventFuncs\[\]\)\(\) = \{(.*?)\};", s, re.S)
     return re.findall(r"([A-Za-z_][A-Za-z_0-9]*)\s*,", m.group(1)) if m else []
+
+
+EXCLUDED = []  # (cutscene, reason): later parts left out by needs_setup
 
 
 def cutscenes():
@@ -114,6 +190,25 @@ def cutscenes():
         done |= {(mp, f.get("completeEventFlag")) for _, f in events(mp)
                  if f.get("sysState") == "SysState_Fmv" and (mp, f.get("requiredEventFlag")) in done}
     found = [c for c in found if (c["map"], c["required"]) not in done and not resumes(c["body"])]
+    # Parts that rely on an earlier event's setup (C code only): left out, and the event that sets
+    # their required flag listed instead, if it starts by itself and needs no setup either.
+    kept = []
+    for c in found:
+        why = None if "glabel" in c["body"] else needs_setup(c["body"], c["map"])
+        if not why:
+            kept.append(c)
+            continue
+        EXCLUDED.append((c, why))
+        files = glob.glob(os.path.join(REPO, "src", "maps", c["map"], "*.c")) + \
+            glob.glob(os.path.join(REPO, "src", "maps", "shared", "**", "*.h"), recursive=True)
+        setters = flag_setters(c["map"], files) if c["required"] not in (None, "EventFlag_None") else {}
+        for ev, name in setters.get(c["required"], []):
+            body = c_body(name, files) or ""
+            if name != c["func"] and body and not needs_setup(body, c["map"]):
+                kept.append({"map": c["map"], "mapIdx": c["mapIdx"], "event": ev, "func": name, "body": body,
+                             "required": None, "complete": None})
+                break
+    found = kept
     # One entry per function and map (several events can start the same cutscene).
     seen, out = set(), []
     for c in found:
@@ -138,6 +233,8 @@ def main():
             lines = re.findall(r'//\s*(".*?")', c["body"])[:3]
             print("%-9s ev %2d  %-44s %s" % (c["map"], c["event"], c["func"], " / ".join(lines)))
         print("%d cutscenes" % len(cs))
+        for c, why in EXCLUDED:
+            print("left out: %-9s ev %2d %-28s (%s)" % (c["map"], c["event"], c["func"], why))
     if args.c:
         with open(args.c, "w") as f:
             f.write("/* Generated by tools/port/cutscene_list.py: the Demo menu's cutscenes (src/port/demo_menu.c). */\n")

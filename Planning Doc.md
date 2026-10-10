@@ -548,6 +548,9 @@ Ideas to try, roughly by expected payoff:
     - map6_s04 func_800E3244: a parasite without bone coordinates.
     - map7_s02 func_800DA248 hung in a music stop/start loop right after map7_s01 func_800D9C9C; started after a restart, it played through.
   - **Not yet diagnosed:** map6_s04 func_800E2950 (first part of the CybilDeath sequence) busy-loops about 1.7 s after starting (no frames, 0% idle), on both runs.
-- Next for the Demo menu:
-  - The list should treat a cutscene as a continuation when it reads DMS data it doesn't load, or when its required flag is the completion flag of any event on the map (listing that event instead).
-  - In Demo mode, spawning a character whose model isn't loaded could load it.
+- Demo list (tools/port/cutscene_list.py) now leaves out later parts that rely on an earlier event's setup (C code, with the map's helper functions it calls, three levels deep):
+  - DMS data in an FS_BUFFER it never loads a DMS file into;
+  - a character it spawns that only another event loads. The map's own characters are its charaGroupIds and those its non-event code loads (map0_s01's Map_WorldObjectsInit loads the Air Screamer).
+  - When such a part's required flag is set by an event of the map that starts by itself, that event is listed instead.
+  - Result: map4_s01 func_800D2408, func_800D3420 and map7_s03 func_800E3B6C left out; map4_s01 func_800D1FF0 added (it loads Cybil, and played on through the next part, 270 s, on the PS2). 54 entries.
+  - Not covered: map6_s04 func_800E2950 (busy loop) and func_800E3244 (parasite without bone coordinates), both inside the CybilDeath sequence.
