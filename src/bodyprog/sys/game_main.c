@@ -294,15 +294,27 @@ void MainLoop(void) // 0x80032EE0
             g_VBlanks  = g_Demo_VideoPresentInterval;
 #if defined(SH_PORT) && (defined(SH_PORT_BENCH) || defined(SH_PORT_DEMO_TRACE))
             {
-                // Demo sync trace: Harry's position every 60 demo frames; identical lines between a
-                // normal and an uncapped (SH1_BENCH=1) run mean the demo plays the same.
-                static s32 demoFrames;
-                if (++demoFrames % 60 == 0)
+                // Demo sync trace and deterministic frame dumps, by the demo's own playback position
+                // (g_Demo_DemoStep, the recorded input in use; frames spent waiting for the disc don't
+                // advance it): Harry's position every 60 steps; identical lines between a normal and
+                // an uncapped (SH1_BENCH=1) run mean the demo plays the same. Benchmark builds dump
+                // the screen (host:frame_*.ppm) at steps 100, 200, ... 1000 for exact renderer
+                // comparisons (tools/port/bench_frames.sh).
+                static u32 nextTrace = 60, nextDump = 100;
+                if (g_Demo_DemoStep >= nextTrace)
                 {
-                    printf("demo trace: frame %d, Harry at %d %d %d\n", demoFrames,
-                           g_SysWork.playerWork.player.position.vx, g_SysWork.playerWork.player.position.vy,
-                           g_SysWork.playerWork.player.position.vz);
+                    printf("demo trace: step %d, Harry at %d %d %d\n", g_Demo_DemoStep, g_SysWork.playerWork.player.position.vx,
+                           g_SysWork.playerWork.player.position.vy, g_SysWork.playerWork.player.position.vz);
+                    nextTrace = g_Demo_DemoStep + 60 - g_Demo_DemoStep % 60;
                 }
+#ifdef SH_PORT_BENCH
+                if (g_Demo_DemoStep >= nextDump && nextDump <= 1000)
+                {
+                    extern void Display_RequestDump(void);
+                    Display_RequestDump();
+                    nextDump += 100;
+                }
+#endif
             }
 #endif
         }
