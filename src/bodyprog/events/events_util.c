@@ -15,6 +15,9 @@
 #include "bodyprog/math/math.h"
 #include "bodyprog/sound/sound_system.h"
 #include "main/fsqueue.h"
+#ifdef SH_PORT
+#include "port/demo_menu.h"
+#endif
 
 /** @brief EVENT AND INTERACTION HELPERS
  *
@@ -878,6 +881,12 @@ void Event_DisplayBgTexture(e_FsFile texFileIdx, q19_12 fadeTimestep0, q19_12 fa
         case 4:
             Event_BgTextureCmd(BgTextureCmd_Draw, 0, false);
 
+#ifdef SH_PORT
+            if (Port_DemoAutoPress(1, true)) // Demo cutscenes: past a shown image (src/port/demo_menu.c)
+            {
+                g_Controller0->buttonFlags.clicked |= g_GameWorkPtr->config.controllerConfig.enter;
+            }
+#endif
             if (g_Controller0->buttonFlags.clicked & (g_GameWorkPtr->config.controllerConfig.enter |
                                                       g_GameWorkPtr->config.controllerConfig.cancel))
             {
@@ -1001,6 +1010,12 @@ void Event_DisplayMapMsgWithDimmedBg(e_FsFile texFileIdx, q19_12 fadeTimestep0, 
             }
 
             // Check for "continue" input.
+#ifdef SH_PORT
+            if (Port_DemoAutoPress(2, true)) // Demo cutscenes (src/port/demo_menu.c)
+            {
+                g_Controller0->buttonFlags.clicked |= g_GameWorkPtr->config.controllerConfig.enter;
+            }
+#endif
             if (g_Controller0->buttonFlags.clicked & (g_GameWorkPtr->config.controllerConfig.enter |
                                                       g_GameWorkPtr->config.controllerConfig.cancel))
             {

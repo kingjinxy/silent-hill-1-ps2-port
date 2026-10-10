@@ -559,3 +559,19 @@ Ideas to try, roughly by expected payoff:
   - GCC turned that provable NULL dereference into `lw 0(zero); teq zero, zero`, and the unhandled trap left the game thread spinning. 15 such traps were in the build (Chara_AnimPlaybackStateGet and Chara_AnimStartKeyframeIdxGet in the overlays, Vw_CoordHierarchyMatrixCompute). Found from the -finstrument-functions shadow stack read over the network (prof_fn.c s_StackFn/s_Top).
   - Game code is now compiled with -fno-delete-null-pointer-checks -fno-isolate-erroneous-paths-dereference: no traps left.
   - The crash reporter also handles bus errors, reserved instructions, overflow and traps.
+
+## Demo cutscene sweeps: port (PCSX2) vs PS1 (DuckStation), 2026-10-10
+- Demo cutscenes play without input: Port_DemoAutoPress (src/port/demo_menu.c) presses X for the player after two seconds at a wait. Waits are a fully shown text page without a voice line or a Yes/No prompt (Gfx_MapMsg_Draw), and a shown image (Event_DisplayBgTexture, Event_DisplayMapMsgWithDimmedBg). Voiced pages go on by themselves, so they are never cut short. Logged as "demo: X pressed for the player (...)".
+- Sweeps:
+  - Port: tools/port/demo_sweep.py runs PCSX2. The game plays the list itself from host:demo.txt ("sweep FIRST TIMEOUT LAST", src/port/ps2/demo_sweep_ps2.c) and logs "demo: <name> fps: ...".
+  - PS1: tools/port/duckstation_sweep.py runs tools/port/duckstation_cutscene.py per entry. gdb presses Cross at the same waits (breakpoints only at the wait points) and logs fps from g_TickCount over g_SysWork.gameStateCounter.
+  - tools/port/compare_sweeps.py tabulates both.
+- Results (52 entries):
+  - No crashes or hangs on either.
+  - 44 reached gameplay in the port, 43 on the PS1.
+  - Not reaching gameplay on both: map3_s05 func_800D6D1C, map7_s01 func_800D9C9C, map7_s02 func_800DFDDC, map7_s03 func_800E3D18, map6_s04 func_800E3EF4, map5_s01 func_800EBF70, MapEvent_CutsceneCherylSpotted, MapEvent_MapItemTake. These are limits of the Demo start (state from earlier play), not port differences. map3_s05 waits in a Player_PathWaypointExecute walk that never arrives.
+  - map7_s02 func_800DD2D4 reached gameplay in the port but not on the PS1: to look at.
+- Frame rate, frames drawn per second from the event's start to player control:
+  - Port in PCSX2 against the PS1 in DuckStation: median 2.00x, range 1.00x (scenes already at 60 on the PS1) to 3.07x (MapEvent_CafeCutscene 15.5 → 47.6).
+  - Kaufmann cutscene: 19.8 → 52.8 fps in PCSX2; the PS2 hardware measured 50–55 earlier.
+  - PCSX2 doesn't model the EE caches, so hardware figures can differ; a hardware sweep (ps2_ctl.py demo) gives the real ones.

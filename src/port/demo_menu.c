@@ -18,6 +18,7 @@
 #include "bodyprog/sys/joy.h"
 #include "bodyprog/text/text_draw.h"
 #include "bodyprog/sound/sound_system.h"
+#include "bodyprog/screen/screen_data.h"
 #include "port/demo_menu.h"
 
 #define ROWS       9
@@ -32,6 +33,8 @@ static int s_EventPending; /* waiting for Event_Update to start it */
 static int s_Started;
 static int s_ControlFrames;
 static int s_ReturnToList;
+static s32 s_StartTick, s_StartVBlank; /* g_TickCount and the vertical blank count at the event's start */
+static s32 s_ControlVBlanks, s_ControlTick; /* the same when the player had control */
 
 int Port_DemoMenuUpdate(void)
 {
@@ -122,6 +125,8 @@ int Port_DemoEventStart(void)
     s_Started      = 1;
     ev             = &g_MapOverlayHdr.mapEvents[g_PortCutscenes[s_Chosen].event];
     printf("demo: %s started\n", g_PortCutscenes[s_Chosen].name);
+    s_StartTick = g_TickCount;
+    s_StartVBlank = VSync(SyncMode_Count);
     if (ev->requiredEventFlag != EventFlag_None)
     {
         Savegame_EventFlagSet(ev->requiredEventFlag);
@@ -179,11 +184,100 @@ static void msg_debug(void)
 }
 #endif
 
+
+static volatile int s_Remote = -1; /* cutscene requested over the network (ps2_ctl.py demo) */
+
+/* Demo sweep (host:demo.txt, src/port/ps2/demo_sweep_ps2.c; tools/port/demo_sweep.py): the list
+ * played from a given cutscene to the end without input, each given a timeout to reach gameplay. */
+static int s_Sweep = -1;    /* next cutscene to request (-1: off) */
+static int s_SweepCur = -1; /* the one playing */
+static int s_SweepTimeout;  /* vertical blanks */
+static int s_SweepAt;       /* vertical blank count when it was requested */
+static int s_SweepEnd;      /* one past the last to play */
+
+static void sweep_tick(void)
+{
+    extern int Port_DemoSweepConfig(int* first, int* timeout, int* last); /* demo_sweep_ps2.c */
+    static int checked;
+    int        now = VSync(SyncMode_Count);
+
+    if (!checked)
+    {
+        int first, timeout, last;
+        checked = 1;
+        if (Port_DemoSweepConfig(&first, &timeout, &last))
+        {
+            s_SweepEnd     = last + 1 < g_PortCutsceneCount ? last + 1 : g_PortCutsceneCount;
+            s_Sweep        = first;
+            s_SweepTimeout = timeout * 60;
+            printf("demo sweep: from %d of %d, %d s each\n", first, g_PortCutsceneCount, timeout);
+        }
+    }
+    if (s_Sweep < 0)
+    {
+        return;
+    }
+    if (s_SweepCur >= 0 && now - s_SweepAt > s_SweepTimeout)
+    {
+        printf("demo: %s timeout (no gameplay within %d s; sysState %d, steps %d %d %d)\n", g_PortCutscenes[s_SweepCur].name,
+               s_SweepTimeout / 60, g_SysWork.sysState, g_SysWork.sysStateSteps[0], g_SysWork.sysStateSteps[1],
+               g_SysWork.sysStateSteps[2]);
+        s_SweepCur = -1;
+    }
+    /* The next one once the last is over, from the main menu or gameplay (not during the boot logos
+     * or a load), a couple of seconds after the last request. */
+    if (s_SweepCur < 0 && s_Remote < 0 && now - s_SweepAt > 120 &&
+        (g_GameWork.gameState == GameState_MainMenu || g_GameWork.gameState == GameState_InGame))
+    {
+        if (s_Sweep >= s_SweepEnd)
+        {
+            printf("demo sweep: done\n");
+            s_Sweep = -1;
+            return;
+        }
+        s_SweepCur = s_Sweep++;
+        s_SweepAt  = now;
+        Port_DemoRemote(s_SweepCur);
+    }
+}
+
+/** Demo cutscenes play without input: a wait point (`site`: 0 map messages, 1 a shown image, 2 its
+ * "continue") that has been `waiting` for two seconds gets an X press (once, then the wait starts
+ * over). Pages with voice lines aren't waits (they go on by themselves), so they aren't cut short. */
+int Port_DemoAutoPress(int site, int waiting)
+{
+    static int since[4] = { -1, -1, -1, -1 };
+    int        now;
+    if (s_Chosen < 0 || !s_Started || site < 0 || site >= 4)
+    {
+        return 0;
+    }
+    now = VSync(SyncMode_Count);
+    if (!waiting)
+    {
+        since[site] = -1;
+        return 0;
+    }
+    if (since[site] < 0 || now - since[site] > 240) /* a new wait (or one left long ago) */
+    {
+        since[site] = now;
+        return 0;
+    }
+    if (now - since[site] < 120)
+    {
+        return 0;
+    }
+    since[site] = -1;
+    printf("demo: X pressed for the player (%s)\n", site == 0 ? "message" : site == 1 ? "image" : "continue");
+    return 1;
+}
+
 void Port_DemoTick(void)
 {
 #ifdef SH_PORT_MSG_DEBUG
     msg_debug();
 #endif
+    sweep_tick();
     if (s_Chosen < 0 || !s_Started)
     {
         return;
@@ -191,7 +285,11 @@ void Port_DemoTick(void)
     if (g_GameWork.gameState == GameState_InGame && g_SysWork.sysState == SysState_Gameplay &&
         !(g_SysWork.sysFlags & SysFlag_CutsceneActive))
     {
-        s_ControlFrames++;
+        if (s_ControlFrames++ == 0)
+        {
+            s_ControlVBlanks = VSync(SyncMode_Count);
+            s_ControlTick    = g_TickCount;
+        }
     }
     else
     {
@@ -199,7 +297,15 @@ void Port_DemoTick(void)
     }
     if (s_ControlFrames >= 60)
     {
+        {
+            /* Frames drawn per second from the event's start until the player had control (60 frames
+             * ago, when these were taken), as tools/port/gdb/cutscene_ps1.py measures the PS1 game (tools/port/compare_sweeps.py). */
+            s32 frames = s_ControlTick - s_StartTick, vbs = s_ControlVBlanks - s_StartVBlank;
+            printf("demo: %s fps: %d frames in %d vertical blanks = %d.%02d fps\n", g_PortCutscenes[s_Chosen].name,
+                   frames, vbs, frames * 5994 / (vbs > 0 ? vbs : 1) / 100, frames * 5994 / (vbs > 0 ? vbs : 1) % 100);
+        }
         printf("demo: %s done (gameplay), back to the list\n", g_PortCutscenes[s_Chosen].name);
+        s_SweepCur = -1;
         s_Chosen      = -1;
         s_Started     = 0;
         s_ReturnToList = 1;
@@ -207,7 +313,6 @@ void Port_DemoTick(void)
     }
 }
 
-static volatile int s_Remote = -1; /* cutscene requested over the network (ps2_ctl.py demo) */
 
 /** From the remote control agent's thread: start cutscene `idx` as soon as the main menu runs; from
  * anywhere else in the game, soft-reset back to it first. */

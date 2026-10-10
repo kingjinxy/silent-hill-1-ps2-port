@@ -14,8 +14,12 @@ without its trigger. Logged, with the frame
 - "page"      a voiced text page starts: its ~J time, the cutscene step and the message
 - "XA start"  a voice line starts: its XA index, the page timer (~J time left) and the cutscene step
 - "XA stop"   the sound code stops the line (fade, then CdlPause)
+- "fps"       when the player has control again: frames drawn (g_TickCount) over vertical blanks
+              (g_SysWork.gameStateCounter, which the VSync callback counts) since the event started
 The run stops when the player has control again (Event_Update runs only then). gdb halts the game
-only in the title menu, for the movie skip, and in the XA routines around each voice line.
+only in the title menu, for the movie skip, in the XA routines around each voice line, and while the
+game waits for a button: a text page without a voice line, a Yes/No prompt or a shown image gets
+Cross after two seconds, as the port's Demo cutscenes do (src/port/demo_menu.c Port_DemoAutoPress).
 """
 import gdb
 
@@ -62,6 +66,10 @@ STREAM_MAX_FRAME = 0x801E3F40    # STREAM.BIN max_frame: the movie stops once fr
 G_SAVEGAME_MAPIDX = 0xA4
 G_MAP_MSG_CURRENT_IDX = 0x800A99AC  # g_MapMsg_CurrentIdx
 SYSFLAG_DEMO_ACTIVE = 1 << 1
+G_TICK_COUNT = 0x800B9CCC        # g_TickCount: main loop passes (frames drawn)
+MAP_MSG_DRAW = 0x800365B8        # Gfx_MapMsg_Draw
+MAP_MSG_WAIT = 0x80036818        # its Game_TimerUpdate call: a shown page without a voice line, waiting
+IMAGE_WAITS = (0x80087280, 0x80087684)  # Event_DisplayBgTexture / ..WithDimmedBg: reading the pad while an image is shown
 
 
 def rd(addr, size=4, signed=False):
@@ -86,6 +94,7 @@ class State:
     last_timer = 0
     frame0 = None
     limit = None
+    tick0 = vb0 = 0
 
 
 def frame():
@@ -104,6 +113,8 @@ class EventStart(gdb.Breakpoint):
         if State.started:
             # Event_Update only runs in gameplay: the player has control again.
             log("cutscene over (player in control)")
+            frames, vbs = rd(G_TICK_COUNT) - State.tick0, frame() - State.vb0
+            log("fps: %d frames in %d vertical blanks = %.2f fps" % (frames, vbs, frames * 59.94 / max(vbs, 1)))
             return True
         if not State.pending:
             return False
@@ -127,6 +138,7 @@ class EventStart(gdb.Breakpoint):
         gdb.execute("set $pc = $ra")  # return from Event_Update without its trigger checks
         State.pending, State.started = False, True
         State.frame0 = frame()
+        State.tick0, State.vb0 = rd(G_TICK_COUNT), frame()
         log("event %d started (sysState %d, param %d, required flag %d, completion flag %d)" % (
             State.event, sys_state, param, required, complete))
         return False
@@ -235,6 +247,49 @@ class MovieSkip(gdb.Breakpoint):
         return False
 
 
+def press_cross():
+    pad = rd(G_CONTROLLER0_PTR)
+    wr(pad + 0x10, rd(pad + 0x10) | rd(G_GAMEWORK_ENTER, 2))
+
+
+class WaitPress(gdb.Breakpoint):
+    """A point the game passes every frame while it waits for a button: after two seconds of it,
+    Cross (at once, or through `then`: a breakpoint armed for the next frame, before the pad is read)."""
+
+    def __init__(self, addr, what, then=None):
+        super().__init__("*0x%08X" % addr, internal=True)
+        self.what, self.then, self.start, self.last = what, then, None, None
+
+    def stop(self):
+        if not State.started:
+            return False
+        now = frame()
+        if self.last is None or now - self.last > 30:  # a new wait
+            self.start = now
+        self.last = now
+        if now - self.start >= 120:
+            log("Cross pressed for the player (%s)" % self.what)
+            self.start = now
+            if self.then:
+                self.then.enabled = True
+            else:
+                press_cross()
+        return False
+
+
+class PressNext(gdb.Breakpoint):
+    """One-shot: Cross for this frame, before Gfx_MapMsg_Draw reads the pad."""
+
+    def __init__(self, addr):
+        super().__init__("*0x%08X" % addr, internal=True)
+        self.enabled = False
+
+    def stop(self):
+        press_cross()
+        self.enabled = False
+        return False
+
+
 class Cutscene(gdb.Command):
     """sh-cutscene <map> <event> [seconds]: play a map event as the port's Demo menu does."""
 
@@ -255,6 +310,9 @@ class Cutscene(gdb.Command):
         if len(a) > 3:
             StepWatch(int(a[3], 16), int(a[4]) if len(a) > 4 else 12)
         PageWatch()
+        WaitPress(MAP_MSG_WAIT, "message", then=PressNext(MAP_MSG_DRAW))
+        for a in IMAGE_WAITS:
+            WaitPress(a, "image")
         XaPlayWatch()
         XaStopWatch()
         print("[cut] %s event %d armed" % (a[0], State.event))

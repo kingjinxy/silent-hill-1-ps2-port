@@ -73,6 +73,11 @@ def main():
         with open(args.log, "w") as log:
             p = subprocess.Popen(cmd, cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  stdin=subprocess.DEVNULL, text=True)
+            # The output loop blocks until gdb exits, so the wall-clock limit is a timer (a cutscene that
+            # never gives control back kept gdb, and DuckStation, running).
+            import threading
+            limit = threading.Timer(args.timeout, p.kill)
+            limit.start()
             try:
                 for line in p.stdout:
                     log.write(line)
@@ -81,6 +86,8 @@ def main():
                 p.wait(args.timeout)
             except subprocess.TimeoutExpired:
                 p.kill()
+            finally:
+                limit.cancel()
     finally:
         if ds:
             for sig in (signal.SIGTERM, signal.SIGKILL):

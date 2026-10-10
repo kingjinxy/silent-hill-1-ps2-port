@@ -25,5 +25,6 @@ int  Port_DemoRemoteTake(void);   /* main menu: the requested cutscene, or -1 */
 int  Port_DemoRemotePending(void);
 void Port_NewGameRemote(void);    /* network request (agent_ps2.c "NG", tools/port/ps2_ctl.py newgame) */
 int  Port_NewGameRemoteTake(void); /* main menu: 1 once after a request */
+int  Port_DemoAutoPress(int site, int waiting); /* Demo cutscenes: 1 when X should be pressed for the player */
 
 #endif

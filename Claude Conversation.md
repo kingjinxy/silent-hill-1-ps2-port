@@ -14544,3 +14544,442 @@ The list now has 52 entries: just #38 and #39 removed, nothing else changed. Bui
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1; (python3 tools/port/port_link.py && bas
 
+## Claude
+
+You've hit your session limit · resets 1:30pm (America/Chicago)
+
+## Claude
+
+You've hit your session limit · resets 1:30pm (America/Chicago)
+
+## User
+
+Continue, but for now let's test in PCSX2
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/bq5wjphft.output | cut -c1-200
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,40p tools/port/pcsx2_run.py; grep -rn '"host:' src/port | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "until\|seconds" tools/port/pcsx2_run.py | head -20; sed -n 55,90p src/port/ps2/warp_ps2.c
+
+## Claude
+
+`pcsx2_run.py` already stops on a stall (no new frame for N emulated seconds), which covers hangs. Writing the host-file reader:
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/demo_sweep_ps2.c
+
+## Claude
+
+Now the sweep logic in the Demo menu, driven from `Port_DemoTick`, which runs every frame:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## Claude
+
+My last replacement removed the wrong copy of the `s_Remote` declaration, so it now comes after `sweep_tick`, which uses it. Moving it up:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/demo_menu.c'; s=open(p).read() d='static volatile int s_Remote = -1; /* cutscene r
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/demo_sweep.py
+
+## Claude
+
+Checking the stall flag's exact name in `pcsx2_run.py`, then building:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 60,76p tools/port/pcsx2_run.py | grep -o '"--[a-z-]*"'; source .venv/bin/activate; export SH1_FPS=60 SH1_
+
+## Claude
+
+The build is ready. Starting the PCSX2 sweep over all 52 cutscenes. It runs in the background and will take a while:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 -u tools/port/demo_sweep.py --timeout 300
+
+- tool `Monitor`: PCSX2 demo sweep: results
+
+## Claude
+
+Checking after a couple of minutes that the sweep actually started inside PCSX2:
+
+- tool `Bash`: sleep 150; cd /home/alex/Documents/silent-hill-1-ps2-port; cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e
+
+## Claude
+
+PCSX2 is running from #0. The driver only sees PCSX2's output when a run ends, but PCSX2 also writes a live log file. Waiting for the first cutscene to start there:
+
+- tool `Bash`: L=$(ls -t ~/.config/PCSX2/logs/*.txt 2>/dev/null | head -1); echo $L; until grep -aq "demo: .* started" "$L" 2>/dev/null; do sleep 5; done; grep -a "demo sweep\
+
+## User
+
+[Request interrupted by user for tool use]
+
+## User
+
+One thing to know about the cutscenes is that some of them require the player to press X to say Yes to a text prompt, such as "Will you take the ITEM?", or to skip past a static image or text that's being shown. In the demo mode, all cutscenes should proceed without me needing to intervene and press X. Figure out if there's a way to do that. Furthermore, when the PCSX2 cutscene sweep is done, run the same sweep on the PS1 game and check for differences. I'm especially interested in measuring frame rate gains between PS1 and PS2. Another thought: if some PS1 cutscenes require data from previous cutscenes to work, that's fine, but I am thinking of creating a "movie mode"  down the line where all of the cutscenes in the game, including FMVs, play back in sequence, and I'm guessing that some cutscenes will require data to be loaded properly to achieve this. As a reminder, we do have a lot more RAM to work with and a faster storage medium than the PS1.
+
+- tool `TaskStop`: 
+
+- tool `TaskStop`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; pgrep -a -f "AppImage|pcsx2" | grep -iv "grep" | cut -c1-120; ls build/port/demo.txt 2>&1
+
+## Claude
+
+PCSX2 has exited, but the driver was killed before it could clean up `demo.txt`, so I'm removing it by hand. Then, where the game waits for X:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm build/port/demo.txt; grep -rn "controllerConfig.enter" src/bodyprog --include=*.c | cut -c1-150 | head -40
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 40,75p src/bodyprog/text/map_msg_display.c; sed -n 180,215p src/bodyprog/text/map_msg_display.c; sed -n 8
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 75,180p src/bodyprog/text/map_msg_display.c; sed -n 215,300p src/bodyprog/text/map_msg_display.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "MapMsgReturnCode_YesOrNo\|MapMsgReturnCode_None *=" include -r | head -3; python3 - <<'EOF' def ed(p,a,
+
+## Claude
+
+Both files need the Demo header, included under `SH_PORT` so the PS1 build is untouched:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' for p,anchor in (('src/bodyprog/text/map_msg_display.c','#include "bodyprog/events/map_msg.h"\
+
+## Claude
+
+The PS1 build still matches (50 OK). Building the port, game code included, and starting the PCSX2 sweep:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1; (bash tools/port/ee_compile_check.sh 2>
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 -u tools/port/demo_sweep.py --timeout 300
+
+## Claude
+
+The PCSX2 sweep is running. Meanwhile, the PS1 side: the existing DuckStation tools start a cutscene through gdb. Checking what they can do (start method, measurements, input):
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,60p tools/port/duckstation_cutscene.py; sed -n 1,60p tools/port/gdb/cutscene_ps1.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n '/^void MainLoop/,/^}/p' src/bodyprog/sys/game_main.c | grep -n "++\|+= 1\|Count\|Frame" | head -20; grep
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 60,400p tools/port/gdb/cutscene_ps1.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -h "g_TickCount\|g_Demo_FrameCount" configs/USA/sym*.txt | head; grep -n "^MapMsgState\|^s32 \|^e_MapMsgSta
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(find asm/USA/bodyprog -name "Gfx_MapMsg_Draw.s" | head -1); echo $f; grep -n "jal\|lhu.*0x..(\|0x2A0\|contro
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk 'NR<=885 && /^[a-zA-Z].*\(.*\).*\/\/ 0x/ {fn=$0} NR==885 {print fn}' src/bodyprog/events/events_util.c; awk 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for fn in Event_DisplayBgTexture Event_DisplayMapMsgWithDimmedBg; do f=$(find asm/USA/bodyprog -name "$fn.s" | h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 60,140p tools/port/duckstation_cutscene.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/duckstation_sweep.py
+
+## Claude
+
+Testing the PS1 tooling on a single cutscene first, the Kaufmann scene, before sweeping all of them:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; i=$(python3 -c " import sys; sys.path.insert(0,'tools/port'); import cutscene_list as
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gdb/cutscene_ps1.py'; s=open(p).read() s=s.replace('''G_DEMO_FRAME_COUNT = 0x800
+
+- tool `Bash`: L=$(ls -t ~/.config/PCSX2/logs/*.txt 2>/dev/null | head -1); echo $L; grep -a "demo sweep\|demo: .* \(started\|done\|timeout\)\|CRASH\|X pressed" "$L" | tail -1
+
+- tool `Bash`: L=~/.config/PCSX2/logs/emulog.txt; ls -la $L; tail -c 600 $L; pgrep -a -f "pcsx2_run\|AppImage" | cut -c1-100
+
+## Claude
+
+That log is from yesterday, and `pgrep` found no PCSX2 process. Checking whether the sweep is actually running:
+
+- tool `Bash`: ps aux | grep -i "pcsx2\|demo_sweep" | grep -v grep | cut -c1-200 | head
+
+## Claude
+
+PCSX2 is running, uncapped, and logging to a temporary file. Reading that log for progress:
+
+- tool `Bash`: L=$(ps aux | grep -o "\-logfile /tmp/tmp[a-z0-9_]*\.[a-z]*" | head -1 | cut -d' ' -f2); echo $L; grep -a "demo sweep\|demo: .* \(started\|done\|timeout\)\|CRASH
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/ps1_sweep.txt; source .venv/bin/activate; python3 -u tools/port/duckstation_sweep.py --timeout 
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/compare_sweeps.py
+
+## Claude
+
+Checking that the PS1 sweep is producing sensible results:
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/blyvb0stx.output
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls -la build/port/ps1_sweep_00.log 2>&1; tail -5 build/port/ps1_sweep_00.log 2>/dev/null | cut -c1-150
+
+## Claude
+
+The first PS1 run is still starting up; both emulators share the CPU. I'll get notified as PS1 results land, and when the PCSX2 sweep finishes:
+
+- tool `Monitor`: PS1 DuckStation sweep: results per cutscene
+
+## Claude
+
+Both sweeps are running, and the automatic X presses are in place on both sides.
+
+**Automatic X in Demo mode (port):** I hooked the three places cutscenes wait for a button:
+- **Map messages:** a text page *without* a voice line that's fully shown, or a Yes/No prompt. The cursor starts on Yes.
+- **Shown images:** both the plain image display and the image with a message over it.
+
+After 2 s of waiting, the game gets one X press for that frame and logs "demo: X pressed for the player (…)". Voiced pages advance on their own, so they're never cut short. It only runs while a Demo cutscene is playing. The code is under `SH_PORT`, and the PS1 build still passes all 50 checksums. The PCSX2 sweep is already logging these presses.
+
+**PS1 comparison:** the DuckStation script gets the same presses through breakpoints that fire only while the game is waiting, so there are no per-frame pauses. It also measures frames drawn per second of emulated time. A first test on the Kaufmann cutscene gave **19.8 fps on the PS1** (2,476 frames over 125 s). The PS2 hardware ran it at 50–55 fps. `tools/port/compare_sweeps.py` will put both sweeps side by side once they finish.
+
+One caveat on the numbers: PCSX2 doesn't model the PS2's caches and memory timing, so its frame rates will be higher than real hardware. I'll report them alongside the hardware figures I have, and a hardware sweep can follow.
+
+**Movie mode:** here's how I'd approach it.
+- **What breaks today:** later parts rely on state from earlier ones. Today's failures show the kinds:
+  - characters loaded by an earlier event;
+  - camera data loaded into a file buffer;
+  - NPCs already spawned and animating;
+  - event flags set by code still in assembly;
+  - music state carried over.
+- **Natural chaining:** start each scene at its first part and let the game chain the parts itself. `func_800D1FF0` already ran straight on into the next Cybil part, as the real game does. Movie mode would only advance when the player would get control.
+- **Snapshots for exact state:** capture the game's state at the start of each scene during one real playthrough. That's the 2 MB emulated PS1 RAM plus a little port state, about 2–3 MB per scene, roughly 150 MB for the whole game on the DVD. Movie mode restores the snapshot and runs the scene with exactly the right setup, which works even for scenes whose prerequisites we can't detect statically.
+- **Spare RAM:** while a scene plays, preload the next scene's snapshot, models, camera data and the FMV header, so transitions don't wait on the disc. FMVs would slot in between scenes through the existing movie code.
+
+## Claude
+
+First PS1 result: #0 (map2_s01 func_800CED88) played through at **17.6 fps** over 89.6 s. Both sweeps are continuing.
+
+## Claude
+
+#1 (map6_s02 func_800CF0B8) also played through on the PS1, at 18.6 fps.
+
+## Claude
+
+#2 (map6_s02 func_800CFC34) played through on the PS1 at 21.9 fps.
+
+## Claude
+
+#3 (map3_s06 func_800D0C14) played through on the PS1 at 21.7 fps.
+
+## Claude
+
+#4, the Kaufmann cutscene, gave 19.8 fps on the PS1 again, identical to the earlier test run.
+
+## Claude
+
+#5 (map6_s01 func_800D13D8) played through on the PS1 at 20.4 fps; it's a long one at 279 s.
+
+## Claude
+
+#6 (map4_s04 func_800D1910) played through on the PS1 at 19.7 fps.
+
+## Claude
+
+#7 (map5_s03 func_800D1AF8) played through on the PS1 at 24.4 fps. It needed 3 automatic X presses, which confirms the PS1 press breakpoints work.
+
+## Claude
+
+#8 (map4_s01 func_800D1FF0) played through on the PS1 at 23.4 fps in only 12.7 s, with 2 presses. That changes what I said earlier: on the PS1 this event hands control back quickly instead of running on into the Cybil scene. The 270 s on the PS2 was probably time spent waiting at prompts without automatic presses, before that feature existed. I'll compare the two once the PCSX2 sweep finishes.
+
+## Claude
+
+#9 (map6_s01 func_800D236C) played through on the PS1 at 25.1 fps.
+
+## Claude
+
+#10 (map4_s01 func_800D2F74) played through on the PS1 at 26.9 fps.
+
+## Claude
+
+#11 (map4_s01 func_800D4410) played through on the PS1 at 28.3 fps. Twelve of 52 done, all clean so far.
+
+## Claude
+
+#12 (map1_s05 func_800D49AC) played through on the PS1 at 20.1 fps.
+
+## Claude
+
+#13 (map5_s02 func_800D4B58) played through on the PS1 at 15.9 fps, with one press.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/bgjcz9do1.output | cut -c1-200
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import re L=open('build/port/demo_sweep.log',errors='replace').read().splitlines() names=['map
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' L=open('build/port/demo_sweep.log',errors='replace').read().splitlines() for n in ('map3_s05 f
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "unlimited\|audio" tools/port/pcsx2_run.py | head
+
+## Claude
+
+`pcsx2_run.py` has a `--realtime` option. I'll pass it through `demo_sweep.py` and add a last-entry limit to the in-game sweep, so single cutscenes can be rerun at normal speed:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## Claude
+
+Rerunning #20 (map3_s05 func_800D6D1C) at normal speed, logging to a separate file so the main sweep log stays intact for the comparison:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 -u tools/port/demo_sweep.py --first 20 --last 20 --realtime --log build/port/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -ln "^void func_800D6D1C(void)" src/maps/map3_s05/*.c); sed -n "/^void func_800D6D1C(void)/,/^}/p" $f |
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/demo_menu.c'; s=open(p).read() a='''        printf("demo: %s timeout (no gameplay 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's/ -fno-delete-null-pointer-checks -fno-isolate-erroneous-paths-dereference//' tools/port/ee_compile_che
+
+## Claude
+
+`grep` still found the flag text, so the edit may have hit only the comment. Checking which build that really was:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "isolate\|null-pointer" tools/port/ee_compile_check.sh
+
+## Claude
+
+The flags were removed from the actual command, and #20 still timed out without them, so they aren't the cause. Restoring them:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git diff --stat tools/port/ee_compile_check.sh; git checkout tools/port/ee_compile_check.sh; grep -c "fno-isolat
+
+## Claude
+
+Restored and rebuilt. While the PS1 sweep runs, I'll look at the waypoint walk. If it depends on frame rate, PCSX2's steadier 60 fps would explain a difference from hardware:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -rln "^void Event_PathWaypointExecutePlayer" src --include=*.c); sed -n "/^void Event_PathWaypointExecu
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "playerPathWaypointExecute" src/maps/map3_s05/map3_s05_header.c; f=$(grep -rln "Player_PathWaypointExecu
+
+## Claude
+
+This logic is sensitive to frame rate. Harry turns until he's within 5.6° of the heading, then walks until he's within a small distance of the waypoint. Arrival is checked only once per frame, so the result can change with the frame rate and the exact per-frame steps. That plausibly explains why it passed on the PS2 hardware (which ran slower) but not in PCSX2, which runs a steady 60 fps. I'll check all eight PCSX2 timeouts against the PS1 results, and on hardware, rather than guess further.
+
+The PS1 sweep is about halfway through; I'll put the comparison together once it finishes.
+
+## Claude
+
+The PS1 run of #20 (the same map3_s05 cutscene) reports "didn't start". Checking its log:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -a "^\[cut\]\|^\[sh1\]\|error\|Error" build/port/ps1_sweep_20.log | tail -15 | cut -c1-150; wc -l build/por
+
+## Claude
+
+The log is empty, so DuckStation or gdb never connected. That's probably contention with the PCSX2 runs and builds I was doing at the same moment. I'll rerun #20 on the PS1 once the sweep finishes.
+
+- tool `Monitor`: PS1 DuckStation sweep: failures
+
+## Claude
+
+I've re-armed the watch on the PS1 sweep. This time it only reports cutscenes that don't play through; I'll get the end of the sweep from the background task finishing.
+
+## Claude
+
+#21 also "didn't start", and nothing else was running this time. Checking for a leftover DuckStation or gdb holding the debugger port:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; wc -l build/port/ps1_sweep_21.log; ps aux | grep -i "duckstation\|gdb-multiarch" | grep -v grep | cut -c1-150; s
+
+- tool `Bash`: kill 1350965 1350970 1365555 1365561 1365862 1365867; sleep 2; ps aux | grep -i "DuckStation" | grep -v grep | awk '{print $2, $9}'
+
+- tool `TaskStop`: 
+
+- tool `Bash`: sleep 2; ps aux | grep -i "DuckStation\|gdb-multiarch\|duckstation_cutscene" | grep -v grep | awk '{print $2, $11, $12}' | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## Claude
+
+The first 20 PS1 results are good. Dropping the four bad entries (#20–#23) and resuming the PS1 sweep from #20:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='build/port/ps1_sweep.txt'; L=open(p).read().splitlines() L=[l for l in L if int(l.split()[0
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 -u tools/port/duckstation_sweep.py --first 20 --timeout 400
+
+## Claude
+
+The PS1 sweep has resumed at #20, with both scripts fixed so a stuck cutscene no longer leaves DuckStation running. The failure watch is still armed, and I'll build the PS1-vs-PS2 comparison when it finishes.
+
+## Claude
+
+A "#23 didn't start" line just appeared. The new sweep can't have reached #23 yet, so this looks like a leftover write from the old sweep process. Checking:
+
+- tool `Bash`: ps aux | grep "duckstation_sweep\|duckstation_cutscene\|DuckStation-x64" | grep -v grep | awk '{print $2, $9, $12, $13, $14, $15}'; tail -3 /home/alex/Documents
+
+## Claude
+
+The file is fine: the "#23" event was a stale line from before the cleanup, and it's not in the results. Only the new sweep is running, currently on #20.
+
+## Claude
+
+The PS1 also never finishes #20 (map3_s05 func_800D6D1C) when it's started this way. So that timeout isn't a PCSX2 or port problem; the original game behaves the same with this Demo-style start. That's good evidence the port matches the PS1 here. Why it passed once on the PS2 hardware is still open.
+
+## Claude
+
+#23 (map7_s01 func_800D9C9C) also doesn't finish on the PS1, matching its PCSX2 timeout. That's another Demo-start limitation, not a port difference.
+
+## Claude
+
+#30 (map7_s02 func_800DD2D4) doesn't finish on the PS1 but did in PCSX2: the first real difference between the two. I'll look at it with the rest once the sweep finishes.
+
+- tool `Monitor`: PS1 DuckStation sweep: failures
+
+## Claude
+
+The failure watch expired, so I've re-armed it. The PS1 sweep is still running; it's past #30.
+
+## Claude
+
+#34 (map7_s02 func_800DFDDC) doesn't finish on the PS1 either, matching its PCSX2 timeout.
+
+## Claude
+
+#38 (map7_s03 func_800E3D18) doesn't finish on the PS1 either, matching PCSX2.
+
+## Claude
+
+#39 (map6_s04 func_800E3EF4) doesn't finish on the PS1 either, matching PCSX2.
+
+- tool `Monitor`: PS1 DuckStation sweep: failures
+
+## Claude
+
+The failure watch expired again, so I've re-armed it. The PS1 sweep is past #39 and continuing.
+
+## Claude
+
+#41 (map5_s01 func_800EBF70) doesn't finish on the PS1 either, matching PCSX2.
+
+## Claude
+
+#45 (Cheryl spotted) doesn't finish on the PS1 either, matching PCSX2.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 41,60p build/port/ps1_sweep.txt | cut -c1-100; python3 tools/port/compare_sweeps.py
+
+## Claude
+
+The PS1/port outcomes line up, but the port's fps column is empty: my heartbeat parser found nothing usable. Checking the log around one cutscene:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -an "demo: map3_s00 func_800D0CF8 started" build/port/demo_sweep.log | head -1 | cut -d: -f1); sed -n "
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "g_TickCount" include -r | head -2; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s
+
+## Claude
+
+That vertical-blank expression is wrong. I'll also record the frame count at the moment control returns, instead of subtracting an assumed 60 frames:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 -u tools/port/demo_sweep.py --timeout 300 2>&1 | tail -3
+
+## Claude
+
+While that runs, I'm tidying the comparison script's description, which still talks about heartbeats:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/compare_sweeps.py'; s=open(p).read() a='''Per cutscene: how it ended on each, an
+
+## Claude
+
+The PCSX2 sweep is rerunning to collect the port's frame rate for every cutscene. The PS1 sweep is finished, so the comparison follows as soon as this one ends.
+
+## Claude
+
+That watch expired after the PS1 sweep finished, so it isn't needed any more. I'm waiting on the PCSX2 rerun; the background task will notify me when it ends.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/boww
+
+## Claude
+
+Both sweeps are done. Committing the tools and code, with a results summary in the Planning Doc:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; make -j8 build < /dev/null 2>&1 | grep -c ": OK"; cat >> "Planning Doc.md" <<'EOF'  ## Demo cutscene sweeps: por
+

@@ -7,6 +7,9 @@
 
 #include "bodyprog/bodyprog.h"
 #include "bodyprog/events/map_msg.h"
+#ifdef SH_PORT
+#include "port/demo_menu.h"
+#endif
 #include "bodyprog/math/math.h"
 #include "bodyprog/screen/screen_data.h"
 #include "bodyprog/screen/screen_draw.h"
@@ -51,6 +54,19 @@ s32 Gfx_MapMsg_Draw(s32 mapMsgIdx) // 0x800365B8
     static s32  activeMapMsgIdx;
     static s32  displayLengthInc;
     static bool loadAudio;
+
+#ifdef SH_PORT
+    {
+        // Demo cutscenes play without input: X once a page without a voice line has been fully shown,
+        // or a Yes/No prompt is up, for two seconds (src/port/demo_menu.c).
+        if (Port_DemoAutoPress(0, g_SysWork.isMgsStringSet && activeMapMsgIdx == mapMsgIdx &&
+                                      ((rolloutState == NO_VALUE && g_MapMsg_AudioType == MapMsgAudioType_None) ||
+                                       (menuSelection >= MapMsgReturnCode_YesOrNo && menuSelection != FINISH_MAP_MSG))))
+        {
+            g_Controller0->buttonFlags.clicked |= g_GameWorkPtr->config.controllerConfig.enter;
+        }
+    }
+#endif
 
     // Check for user input to skip.
     skip = false;
