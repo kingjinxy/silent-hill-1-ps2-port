@@ -222,6 +222,8 @@ def main():
     # build does (src/port/ps2/agent_ps2.c).
     dump += ["-DSH_PORT_LAYOUT_SHIFT=" + os.environ["SH1_LAYOUT_SHIFT"]] if os.environ.get("SH1_LAYOUT_SHIFT") else []
     dump += ["-DSH_PORT_MSG_DEBUG"] if os.environ.get("SH1_MSG_DEBUG") else []
+    # Fog collapse ceiling test (PS2 Optimizations.md): SH1_FOG_TEST=1 drops the world mesh's fog underlay.
+    dump += ["-DSH_PORT_FOG_TEST"] if os.environ.get("SH1_FOG_TEST") else []
     # The Demo menu's cutscene list (src/port/demo_menu.c), found in the decomp's map code.
     run([sys.executable, "tools/port/cutscene_list.py", "--c", os.path.join(OUT, "demo_cutscenes.c")])
     for src in sorted(glob.glob("src/port/*.c")) + [os.path.join(OUT, "demo_cutscenes.c")]:

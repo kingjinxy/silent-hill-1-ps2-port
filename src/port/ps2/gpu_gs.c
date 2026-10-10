@@ -796,6 +796,8 @@ static int too_big_xy(const s32* x, const s32* y, int a, int b, int c)
            absd(y[a], y[b]) > 511 || absd(y[b], y[c]) > 511 || absd(y[a], y[c]) > 511;
 }
 
+static u32 s_StFogPair[2][4]; /* GpuGs_Stats */
+
 static u32 polygon(const u32* w, s32 n)
 {
     u32  cmd      = w[0] >> 24;
@@ -839,6 +841,21 @@ static u32 polygon(const u32* w, s32 n)
         s_TexPage = tpage; /* textured polygons also set the current texture page */
     }
     p.semiMode = (tpage >> 5) & 3;
+    {
+        /* Fog pairs (PS2 Optimizations.md, option 1): a plain gouraud polygon followed by a
+         * semi-transparent textured one on the same corners, counted by the textured one's blend
+         * mode and whether the plain one was itself semi-transparent. */
+        static s32 px[4], py[4], pnv, pplain, psemi;
+        if (textured && p.semi && pplain && pnv == nv && !memcmp(px, x, nv * 4) && !memcmp(py, y, nv * 4))
+        {
+            s_StFogPair[psemi][p.semiMode]++;
+        }
+        pplain = !textured && gouraud;
+        psemi  = p.semi;
+        pnv    = nv;
+        memcpy(px, x, nv * 4);
+        memcpy(py, y, nv * 4);
+    }
     p.dither   = ((s_TexPage >> 9) & 1) && (gouraud || (textured && !raw));
     if (!textured && !gouraud && !p.dither)
     {
@@ -1117,6 +1134,21 @@ static void settings(u32 w)
     }
 }
 
+#ifdef SH_PORT_FOG_TEST
+/* Fog collapse, ceiling test (PS2 Optimizations.md, option 1): an opaque gouraud quad (GP0 0x38) is
+ * held back; if the next primitive is a semi-transparent textured gouraud quad in additive mode (the
+ * world mesh's fog pair) on the same corners, the held one is dropped (wrong picture: this measures
+ * the most the collapse can save), otherwise drawn first. */
+static u32 s_FogPend[8];
+static s32 s_FogPending;
+
+static int fog_pair(const u32* w, s32 n)
+{
+    return n >= 12 && (w[0] >> 24) == 0x3E && ((w[5] >> 21) & 3) == 1 && w[1] == s_FogPend[1] && w[4] == s_FogPend[3] &&
+           w[7] == s_FogPend[5] && w[10] == s_FogPend[7];
+}
+#endif
+
 /** @brief Executes a stream of GP0 words (one OT packet or DrawPrim). */
 void GpuGs_Commands(const u32* w, s32 n)
 {
@@ -1126,6 +1158,28 @@ void GpuGs_Commands(const u32* w, s32 n)
         u32 cmd  = w[0] >> 24;
         u32 used = 1;
 
+#ifdef SH_PORT_FOG_TEST
+        if (s_FogPending)
+        {
+            s_FogPending = 0;
+            if (fog_pair(w, n))
+            {
+                s_StFogPair[1][1]++; /* dropped */
+            }
+            else
+            {
+                polygon(s_FogPend, 8);
+            }
+        }
+        if (cmd == 0x38 && n >= 8)
+        {
+            memcpy(s_FogPend, w, 32);
+            s_FogPending = 1;
+            w += 8;
+            n -= 8;
+            continue;
+        }
+#endif
         if (cmd >= 0x20 && cmd < 0x40)
         {
             PROF_BEGIN("gs: polygon (incl. state)")
@@ -1332,6 +1386,7 @@ void GpuGs_DisplayCopy(u32 fbp, u32 fbw, u32 psm, s32 x, s32 y, s32 w, s32 h)
 /** Prints and clears the statistics (averaged over `frames`). */
 void GpuGs_Stats(u32 frames)
 {
+    s32 a, m;
     if (!frames)
     {
         return;
@@ -1340,4 +1395,14 @@ void GpuGs_Stats(u32 frames)
            "texturing from VRAM, %u uploads\n", s_StPrims / frames, s_StTex0 / frames, s_StClut / frames,
            s_StDate / frames, s_StRtTex / frames, s_StUploads / frames);
     s_StPrims = s_StTex0 = s_StClut = s_StDate = s_StRtTex = s_StUploads = 0;
+    printf("gs fog pairs per frame (plain opaque/semi x textured mode 0-3): %u %u %u %u / %u %u %u %u\n",
+           s_StFogPair[0][0] / frames, s_StFogPair[0][1] / frames, s_StFogPair[0][2] / frames, s_StFogPair[0][3] / frames,
+           s_StFogPair[1][0] / frames, s_StFogPair[1][1] / frames, s_StFogPair[1][2] / frames, s_StFogPair[1][3] / frames);
+    for (a = 0; a < 2; a++)
+    {
+        for (m = 0; m < 4; m++)
+        {
+            s_StFogPair[a][m] = 0;
+        }
+    }
 }
