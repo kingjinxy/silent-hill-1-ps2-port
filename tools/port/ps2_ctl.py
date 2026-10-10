@@ -8,6 +8,7 @@ sh1agent.irx (src/port/iop/sh1agent, UDP port 62968) and prints its answer.
     python3 tools/port/ps2_ctl.py osd          # exit to the PS2 browser (as RESET does for retail games)
     python3 tools/port/ps2_ctl.py md g_SysWork 0x400 [--out sys.bin]   # read memory (hex in the log)
     python3 tools/port/ps2_ctl.py where        # where the game was at the last 16 vertical blanks
+    python3 tools/port/ps2_ctl.py demo "map3_s00 func_800D0CF8"   # play a Demo menu cutscene (name or number)
 
 md takes an address (hex) or a symbol of the running build (build/port/sh1.elf, e.g. g_WorldMapWork or
 g_WorldMapWork+0x138) and a length (at most 64 KB per command); it waits for the game's "md" lines in
@@ -32,7 +33,8 @@ ELF = os.path.join(HERE, "..", "..", "build", "port", "sh1.elf")
 NM = os.path.join(os.environ.get("PS2DEV", os.path.expanduser("~/ps2dev")), "ee", "bin", "mips64r5900el-ps2-elf-nm")
 
 PORT = 62968
-COMMANDS = {"ping": b"PI", "restart": b"RS", "deploy": b"RS", "osd": b"OS", "md": b"MD", "where": b"WH"}
+COMMANDS = {"ping": b"PI", "restart": b"RS", "deploy": b"RS", "osd": b"OS", "md": b"MD", "where": b"WH",
+            "demo": b"DM"}
 
 
 def address(text):
@@ -115,6 +117,18 @@ def main():
             i = bisect.bisect_right(addrs, pc) - 1
             print("%08x  %s+0x%x" % (pc, syms[i][1], pc - syms[i][0]) if i >= 0 else "%08x" % pc)
         return 0
+    if args.command == "demo":
+        sys.path.insert(0, HERE)
+        import cutscene_list
+        names = [cutscene_list.label(c) for c in cutscene_list.cutscenes()]
+        idx = int(args.addr) if args.addr and args.addr.isdigit() else (
+            names.index(args.addr) if args.addr in names else
+            next((i for i, c in enumerate(cutscene_list.cutscenes()) if c["func"] == args.addr), None))
+        if idx is None:
+            sys.exit("ps2_ctl: no cutscene %r; the list:\n  %s" % (args.addr, "\n  ".join(names)))
+        answer = send(args.ip, "demo", payload=struct.pack("<II", idx, 0), tries=1, timeout=2.0)
+        print("ps2_ctl: %s (%d: %s)" % (answer or "no answer", idx, names[idx]))
+        return 0 if answer else 1
     if args.command == "md":
         a = address(args.addr)
         data = memory(args.ip, a, int(args.length, 0))

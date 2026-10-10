@@ -126,7 +126,12 @@ void SetDispMask(int mask)
 int DrawSync(int mode)
 {
     (void)mode;
-    return 0; /* Everything completes immediately. */
+    if (g_PortGsRenderer)
+    {
+        extern void GpuGs_Sync(void);
+        GpuGs_Sync(); /* the GS renderer sends packets without waiting (src/port/ps2/gpu_gs.c) */
+    }
+    return 0;
 }
 
 int ClearImage(RECT* rect, u_char r, u_char g, u_char b)

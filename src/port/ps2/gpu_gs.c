@@ -75,8 +75,11 @@ extern void Display_EnsureInit(void); /* display_ps2.c */
 /* The packet is a sequence of GIF tags: A+D tags for register writes, and REGLIST tags for runs of
  * primitives of the same shape (PRIM and the vertex registers listed once in the tag, then 64 bits
  * per register: half the data of A+D). */
-#define PKT_WORDS (8192 * 2) /* 64-bit words */
-static u64x s_Pkt[PKT_WORDS] __attribute__((aligned(64)));
+/* Two packet buffers, used in turn (for asynchronous sends; see dma_send_impl). */
+#define PKT_WORDS 8192 /* 64-bit words per buffer */
+static u64x s_PktBuf[2][PKT_WORDS] __attribute__((aligned(64)));
+static u64x* s_Pkt = s_PktBuf[0];
+static int   s_PktCur;
 static int  s_Pos;            /* words used */
 static int  s_TagAt = -1;     /* open tag (word index), -1 = none */
 static u64x s_TagRegs;        /* REGLIST register list of the open tag, 0 = A+D */
@@ -104,6 +107,14 @@ static void dma_send(void* data, u32 qwc)
     PROF_BEGIN("gs: dma_send")
     dma_send_impl(data, qwc);
     PROF_END("gs: dma_send")
+}
+
+/** Kept for the callers that need the GS idle (uploads, readback, display, DrawSync). Sends are
+ * synchronous again: an asynchronous version (starting the GIF DMA channel directly and waiting only
+ * before the next send) worked in PCSX2 but hung a real PS2 at the first frames with interrupts off
+ * (2026-10-09; to investigate). */
+void GpuGs_Sync(void)
+{
 }
 
 static void dma_send_impl(void* data, u32 qwc)
@@ -149,6 +160,9 @@ void GpuGs_Flush(void)
     }
     s_Pkt[s_LastTag] |= 1 << 15; /* EOP */
     dma_send(s_Pkt, (u32)(s_Pos / 2));
+    /* Build the next packet in the other buffer (whose own send finished before this one started). */
+    s_PktCur ^= 1;
+    s_Pkt     = s_PktBuf[s_PktCur];
     s_Pos     = 0;
     s_LastTag = -1;
 }
@@ -303,6 +317,7 @@ static void cache_invalidate(s32 x, s32 y, s32 w, s32 h)
         {
             s_PageMap[s_Slots[i].key] = 0;
             s_Slots[i].key            = -1;
+            s_RegValid[R_TEX0]        = 0; /* prim_state's texture memo: look the page up again */
         }
     }
     for (i = 0; i < CLUT_ROWS; i++)
@@ -319,6 +334,7 @@ static void cache_invalidate(s32 x, s32 y, s32 w, s32 h)
         {
             s_ClutMap[CLUT_MAP(s_Cluts[i].key)] = 0;
             s_Cluts[i].key                      = -1;
+            s_RegValid[R_TEX0]                  = 0;
         }
     }
 }
@@ -344,6 +360,7 @@ static void upload_staged(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s32 h,
 /** Host-to-local image transfer of `bytes` (a multiple of 16) from `src`. */
 static void upload(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s32 h, const void* src, u32 bytes)
 {
+    GpuGs_Sync(); /* s_ImgPkt may still be on its way to the GS */
     memcpy(&s_ImgPkt[2], src, bytes);
     upload_staged(dbp, dbw, psm, x, y, w, h, bytes);
 }
@@ -374,6 +391,7 @@ static u32 cache_get(u32 depth, u32 tpage)
     /* Upload the page's indices: 256 rows of 64 (4-bit) or 128 (8-bit) VRAM words. */
     /* Rows straight into the transfer packet (whole rows with memcpy unless the page wraps). */
     page_rect(key, &x, &y, &w);
+    GpuGs_Sync(); /* s_ImgPkt may still be on its way to the GS */
     for (row = 0; row < 256; row++)
     {
         u16* dst = (u16*)&s_ImgPkt[2] + row * w;
@@ -524,40 +542,93 @@ static void scissor(s32 x1, s32 y1, s32 x2, s32 y2)
 }
 
 /** Per-primitive state; returns the PRIM register bits other than the type. */
-static u64x prim_state_impl(const Prim* p);
-/** GS state for a primitive; consecutive primitives with the same inputs (the usual case) reuse
- * the previous result instead of going through every register again. */
+static u64x state_other(const Prim* p);
+static void tex_state(const Prim* p);
+
+/** GS state for a primitive; returns the PRIM register bits other than the type. Two parts, each
+ * memoized on its own inputs, so a change of texture page or CLUT between neighbouring primitives
+ * (530 a frame in the Kaufmann cutscene) only redoes the texture registers:
+ * - everything but the texture: base state, scissor, test, blending, dither, mask, texture window;
+ * - the texture: TEX0/TEXCLUT (with the texture page and CLUT caches). */
 static u64x prim_state(const Prim* p)
 {
     static u32  memoEpoch = ~0u, memoKey[4];
     static u64x memoPrim;
     u32         key[4];
-    u64x        r;
 
     key[0] = p->textured | (p->raw << 1) | (p->semi << 2) | (p->semiMode << 3) | (p->gouraud << 5) |
-             (p->dither << 6) | (s_SetMask << 7) | (s_CheckMask << 8) | ((p->tpage & 0x1FF) << 9) |
-             (s_TwMaskX << 18) | (s_TwMaskY << 23);
-    key[1] = (p->clut & 0xFFFF) | (s_TwOffX << 16) | (s_TwOffY << 21);
+             (p->dither << 6) | (s_SetMask << 7) | (s_CheckMask << 8) | (s_TwMaskX << 18) | (s_TwMaskY << 23);
+    key[1] = (s_TwOffX << 16) | (s_TwOffY << 21);
     key[2] = (u32)s_AreaX1 | ((u32)s_AreaY1 << 10) | ((u32)s_AreaX2 << 20);
     key[3] = (u32)s_AreaY2;
-    if (memoEpoch == s_Epoch && key[0] == memoKey[0] && key[1] == memoKey[1] && key[2] == memoKey[2] &&
-        key[3] == memoKey[3])
+    if (memoEpoch != s_Epoch || key[0] != memoKey[0] || key[1] != memoKey[1] || key[2] != memoKey[2] ||
+        key[3] != memoKey[3])
     {
-        return memoPrim;
+        PROF_BEGIN("gs: prim_state (other)")
+        memoPrim = state_other(p);
+        PROF_END("gs: prim_state (other)")
+        memoEpoch  = s_Epoch;
+        memoKey[0] = key[0];
+        memoKey[1] = key[1];
+        memoKey[2] = key[2];
+        memoKey[3] = key[3];
     }
-    PROF_BEGIN("gs: prim_state")
-    r = prim_state_impl(p);
-    PROF_END("gs: prim_state")
-    memoEpoch  = s_Epoch;
-    memoKey[0] = key[0];
-    memoKey[1] = key[1];
-    memoKey[2] = key[2];
-    memoKey[3] = key[3];
-    memoPrim   = r;
-    return r;
+    if (p->textured)
+    {
+        static u32 texEpoch = ~0u, texTpage = ~0u, texClut = ~0u, texRaw = ~0u;
+        if (texEpoch != s_Epoch || texTpage != (p->tpage & 0x19F) || texClut != (p->clut & 0xFFFF) ||
+            texRaw != p->raw || !s_RegValid[R_TEX0])
+        {
+            PROF_BEGIN("gs: prim_state (texture)")
+            tex_state(p);
+            PROF_END("gs: prim_state (texture)")
+            texEpoch = s_Epoch;
+            texTpage = p->tpage & 0x19F;
+            texClut  = p->clut & 0xFFFF;
+            texRaw   = p->raw;
+        }
+    }
+    return memoPrim;
 }
 
-static u64x prim_state_impl(const Prim* p)
+/** TEX0/TEXCLUT for a textured primitive (tpage: page and depth; clut; raw). */
+static void tex_state(const Prim* p)
+{
+    u32  depth = (p->tpage >> 7) & 3;
+    u64x tex0;
+    if (depth >= 2)
+    {
+        u32 px = (p->tpage & 15) * 64, py = ((p->tpage >> 4) & 1) * 256;
+        tex0   = (u64x)(VRAM_TBP + ((py / 64) * VRAM_BW + px / 64) * 32) | ((u64x)VRAM_BW << 14) |
+               ((u64x)PSM_CT16 << 20);
+    }
+    else
+    {
+        u32  tbp     = cache_get(depth, p->tpage);
+        u64x texclut = 4 | ((u64x)clut_get(p->clut, depth) << 12); /* CBW 4 (256), COU 0, COV = row */
+        if (!s_RegValid[R_TEXCLUT] || s_Reg[R_TEXCLUT] != texclut)
+        {
+            s_RegValid[R_TEX0] = 0; /* the CLUT is loaded when TEX0 is written */
+        }
+        set(R_TEXCLUT, texclut);
+        tex0 = (u64x)tbp | ((u64x)4 << 14) | ((u64x)(depth == 0 ? PSM_T4 : PSM_T8) << 20) |
+               ((u64x)(CLUT_ADDR / 256) << 37) | ((u64x)PSM_CT16 << 51) | (1ULL << 55) | (1ULL << 61); /* CSM2, CLD */
+    }
+    tex0 |= (8ULL << 26) | (8ULL << 30) | (1ULL << 34) | ((u64x)(p->raw ? 1 : 0) << 35); /* 256x256, TCC, TFX */
+    if (!s_RegValid[R_TEX0] || s_Reg[R_TEX0] != tex0)
+    {
+        ad(R_TEXFLUSH, 0);
+        s_StTex0++;
+        if (depth < 2)
+        {
+            s_StClut++;
+        }
+    }
+    set(R_TEX0, tex0);
+}
+
+/** Everything but the texture registers. */
+static u64x state_other(const Prim* p)
 {
     u64x prim = (u64x)(p->gouraud << 3) | (1 << 8); /* IIP, FST (UV coordinates) */
     u32  test = (1 << 16) | (1 << 17);            /* ZTE on, ZTST always */
@@ -567,38 +638,7 @@ static u64x prim_state_impl(const Prim* p)
 
     if (p->textured)
     {
-        u32 depth = (p->tpage >> 7) & 3;
-        u64x tex0;
         prim |= 1 << 4; /* TME */
-        if (depth >= 2)
-        {
-            u32 px = (p->tpage & 15) * 64, py = ((p->tpage >> 4) & 1) * 256;
-            tex0   = (u64x)(VRAM_TBP + ((py / 64) * VRAM_BW + px / 64) * 32) | ((u64x)VRAM_BW << 14) |
-                   ((u64x)PSM_CT16 << 20);
-        }
-        else
-        {
-            u32 tbp = cache_get(depth, p->tpage);
-            u64x texclut = 4 | ((u64x)clut_get(p->clut, depth) << 12); /* CBW 4 (256), COU 0, COV = row */
-            if (!s_RegValid[R_TEXCLUT] || s_Reg[R_TEXCLUT] != texclut)
-            {
-                s_RegValid[R_TEX0] = 0; /* the CLUT is loaded when TEX0 is written */
-            }
-            set(R_TEXCLUT, texclut);
-            tex0 = (u64x)tbp | ((u64x)4 << 14) | ((u64x)(depth == 0 ? PSM_T4 : PSM_T8) << 20) |
-                   ((u64x)(CLUT_ADDR / 256) << 37) | ((u64x)PSM_CT16 << 51) | (1ULL << 55) | (1ULL << 61); /* CSM2, CLD */
-        }
-        tex0 |= (8ULL << 26) | (8ULL << 30) | (1ULL << 34) | ((u64x)(p->raw ? 1 : 0) << 35); /* 256x256, TCC, TFX */
-        if (!s_RegValid[R_TEX0] || s_Reg[R_TEX0] != tex0)
-        {
-            ad(R_TEXFLUSH, 0);
-            s_StTex0++;
-            if (depth < 2)
-            {
-                s_StClut++;
-            }
-        }
-        set(R_TEX0, tex0);
         set(R_CLAMP, 3 | (3 << 2) | ((u64x)(0xFF & ~(s_TwMaskX * 8)) << 4) | ((u64x)((s_TwOffX & s_TwMaskX) * 8) << 14) |
                          ((u64x)(0xFF & ~(s_TwMaskY * 8)) << 24) | ((u64x)((s_TwOffY & s_TwMaskY) * 8) << 34));
         test |= 1 | (7 << 1); /* alpha test: drop alpha 0 (texel 0x0000) */
@@ -1185,6 +1225,7 @@ static void download_rows(u16 (*dst)[VRAM_W], s32 y, s32 h)
     u32 qwc = (u32)(VRAM_W * 2 * h / 16);
     s32 spins;
     GpuGs_Flush();
+    GpuGs_Sync();
     *GS_CSR = 2; /* clear FINISH, then wait for this transfer's FINISH before turning the bus around */
     ad(R_BITBLTBUF, (u64x)VRAM_TBP | ((u64x)VRAM_BW << 16) | ((u64x)PSM_CT16 << 24));
     ad(R_TRXPOS, (u64x)0 | ((u64x)y << 16));
@@ -1192,6 +1233,7 @@ static void download_rows(u16 (*dst)[VRAM_W], s32 y, s32 h)
     ad(R_FINISH, 0);
     ad(R_TRXDIR, 1);
     GpuGs_Flush();
+    GpuGs_Sync();
 
     /* Real hardware: the bus may only be turned around once the GS has finished drawing (PCSX2
      * doesn't care); doing it earlier sometimes wedged the download forever (attract demo water). */
@@ -1264,6 +1306,7 @@ void GpuGs_DisplayCopy(u32 fbp, u32 fbw, u32 psm, s32 x, s32 y, s32 w, s32 h)
     ad(R_UV, (u64x)((x + w) << 4) | ((u64x)((y + h) << 4) << 16));
     ad(R_XYZ2, (u64x)((2048 + w) << 4) | ((u64x)((2048 + h) << 4) << 16));
     GpuGs_Flush();
+    GpuGs_Sync(); /* drawn before it is shown */
 }
 
 /** Prints and clears the statistics (averaged over `frames`). */

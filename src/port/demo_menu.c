@@ -205,6 +205,44 @@ void Port_DemoTick(void)
     }
 }
 
+static volatile int s_Remote = -1; /* cutscene requested over the network (ps2_ctl.py demo) */
+
+/** From the remote control agent's thread: start cutscene `idx` as soon as the main menu runs; from
+ * anywhere else in the game, soft-reset back to it first. */
+void Port_DemoRemote(int idx)
+{
+    if (idx < 0 || idx >= g_PortCutsceneCount)
+    {
+        printf("demo: no cutscene %d (0-%d)\n", idx, g_PortCutsceneCount - 1);
+        return;
+    }
+    if (s_Remote >= 0 || (s_Chosen >= 0 && s_EventPending))
+    {
+        printf("demo: %s ignored (a cutscene is already being started)\n", g_PortCutscenes[idx].name);
+        return;
+    }
+    printf("demo: %s requested\n", g_PortCutscenes[idx].name);
+    s_Remote = idx;
+    s_Chosen = -1; /* a cutscene still playing doesn't return to the list first */
+    if (g_GameWork.gameState != GameState_MainMenu)
+    {
+        g_SysWork.sysFlags |= SysFlag_DoWarmReset;
+    }
+}
+
+int Port_DemoRemotePending(void)
+{
+    return s_Remote >= 0;
+}
+
+/** The main menu: a cutscene requested over the network, or -1. */
+int Port_DemoRemoteTake(void)
+{
+    int r    = s_Remote;
+    s_Remote = -1;
+    return r;
+}
+
 int Port_DemoReturnToList(void)
 {
     int r          = s_ReturnToList;

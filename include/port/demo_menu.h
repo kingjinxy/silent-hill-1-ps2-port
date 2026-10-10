@@ -20,5 +20,8 @@ void Port_DemoBegin(int idx);
 int  Port_DemoEventStart(void);   /* Event_Update: starts the chosen event; 1 when it did */
 void Port_DemoTick(void);         /* once per frame, after the game state update */
 int  Port_DemoReturnToList(void); /* main menu: open the Demo list (once after a cutscene) */
+void Port_DemoRemote(int idx);    /* network request (agent_ps2.c "DM", tools/port/ps2_ctl.py demo) */
+int  Port_DemoRemoteTake(void);   /* main menu: the requested cutscene, or -1 */
+int  Port_DemoRemotePending(void);
 
 #endif

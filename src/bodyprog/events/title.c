@@ -97,6 +97,15 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
         }
     }
 
+#ifdef SH_PORT
+    if (g_MainMenuState == MainMenuState_Main && Port_DemoRemotePending())
+    {
+        // A cutscene requested over the network: through the Demo list, which starts it.
+        ScreenFade_Reset();
+        g_MainMenuState = MainMenuState_DemoList;
+    }
+#endif
+
     switch (g_MainMenuState)
     {
         case MainMenuState_Start:
@@ -352,7 +361,12 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
 #ifdef SH_PORT
         case MainMenuState_DemoList:
         {
-            s32 chosen = Port_DemoMenuUpdate();
+            s32 chosen = Port_DemoRemoteTake(); /* a request over the network (ps2_ctl.py demo) */
+
+            if (chosen < 0)
+            {
+                chosen = Port_DemoMenuUpdate();
+            }
 
             if (chosen == -1)
             {

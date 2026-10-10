@@ -443,6 +443,7 @@ void SpuSetKey(long on_off, unsigned long voice_bit)
     else
     {
         keys(R_KOFF, voice_bit);
+        Port_SpuFlush(); /* sent now: the driver may wait for the voice's release next */
         s_KeyOn &= ~voice_bit;
     }
 }
@@ -464,7 +465,8 @@ long SpuGetKeyStatus(unsigned long voice_bit)
     for (v = 0; !(voice_bit & (1UL << v)); v++)
     {
     }
-    Port_SpuFlush();
+    /* No flush here: key ons are sent when they're set (SpuSetKey), which is all the status needs;
+     * flushing on every status poll sent a packet each time. */
     sounding = Port_SpuEnvx(v) != 0 || (s32)(Port_SpuDone() - s_Voices[v].konSent) < 0;
     if (s_KeyOn & (1UL << v))
     {

@@ -109,6 +109,11 @@ static void agent(void* arg)
         {
             memory_dump(mailbox()->arg, mailbox()->arg2);
         }
+        else if (cmd == CMD('D', 'M'))
+        {
+            extern void Port_DemoRemote(int idx); /* src/port/demo_menu.c */
+            Port_DemoRemote((int)mailbox()->arg);
+        }
         else if (cmd == CMD('W', 'H'))
         {
             extern unsigned int Port_PcSamples[16], Port_PcSampleCount; /* libetc_ps2.c */

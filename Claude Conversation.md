@@ -11473,3 +11473,439 @@ The three lines still cut in the port (200, 136, 181) all have pages shorter tha
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; make -j8 build < /dev/null > /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d5
 
+## Claude
+
+The early-page race is fixed. In this cutscene (`map3_s00 func_800D0CF8`), every voice line now starts with its own page, as on the PS1. I've only tested it in PCSX2, not on the console yet.
+
+**DuckStation:** it now always runs muted. All the tools that start it set its mute option, and I've saved this as a standing preference. They also leave your software renderer setting alone.
+
+**Your 60 fps test** answered the main question. With DuckStation's "60 FPS" patch and a 300% overclock, the original game still pairs every line with its page. So the game's logic copes with a higher frame rate, and the frame rate wasn't what broke the port.
+
+**Can cutscene timing be independent of frame rate yet identical to the PS1?** For this problem, yes. The real difference was the disc drive:
+- A voice line's text page only starts once its CD read is under way.
+- On a PS1 the read first waits for the drive to seek. That's about 26 vertical blanks (0.43 s) for the first line, which jumps from the map data to the voice area, and 4–7 blanks for later lines, which the game's preload has already brought near.
+- The port finished every disc command instantly, so pages started and ended early.
+- libcd now models the seek in real time: after a seek, the drive reports busy for 4 + 44·√(distance / 200,000) blanks. I calibrated that against the PS1 measurements.
+
+Because the delay is in real time, the timing comes out the same at 30 or 60 fps. The limit: anything else in a cutscene that counts frames will behave like the PS1 running at 60 fps, which is what DuckStation's 60 fps patch gives too.
+
+**Result in PCSX2:**
+- 29 of 32 lines play to the end.
+- The original game cuts the same three lines at nearly the same points (1.52/2.42/2.02 s on the PS1, against 1.60/2.50/2.11 s in the port), and those clips end in silence.
+- Frame counts stay at 44–51 per second throughout, with no spikes.
+
+**The PS1 reference tool** is `tools/port/duckstation_cutscene.py "<Demo list name>"`, with options `--steps N`, `--fps60` and `--overclock 300`. It plays any Demo-list cutscene on the unmodified game:
+- it starts a real New Game through the menu, then warps to the cutscene's map, so the map's characters spawn as they should;
+- gdb pauses the game only at a few moments (menu, movie skip, around each voice line), not every frame;
+- `--steps` adds a pause every frame until that cutscene step, so use it sparingly.
+
+The PS1 build still matches all 50 checksums. The normal build is in `build/port/sh1_ps2.iso`, committed as bcd38950e with the Planning Doc and conversation archive updated. Next I'd check the café cutscene against the PS1 reference, then test this build on the PS2. Should I go ahead?
+
+## User
+
+Yes
+
+## Claude
+
+I'll run the café cutscene on both: first the PS1 reference, then the port with the same logging.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 900 python3 tools/port/duckstation_cutscene.py MapEvent_CafeCutscene --timeout 840 2>&1 | grep "\[cut\] 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' import re L=open('build/port/ps1_cutscene.log').read().splitlines() seq=[]; starts={} for l in L
+
+## Claude
+
+The PS1 café cutscene has 44 voice lines over about 200 seconds. Now the port, with the same logging:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; { echo "20 down"; echo "21 cross"; for i in 0 1 2 3 4 5 6 7 8; do echo "$((23+i)).5 up"; done; echo "33 cross"; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk '/XA start: index 10 /{p=1; print; next} p && /XA stop/{print; p=0}' build/port/ps1_cutscene.log
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/input.txt; source .venv/bin/activate; unset SH1_MSG_DEBUG SH1_EXTRA_CFLAGS; export SH1_FPS=60; 
+
+## Claude
+
+The PS2 isn't answering. I'll check that the disc server and log receiver on this machine are still running.
+
+- tool `Bash`: pgrep -af '^python3 -u tools/port/(udpfs_serve|ps2_log).py' ; pgrep -af "udpfs_serve|ps2_log" | grep -v pgrep | head
+
+## Claude
+
+Both are running, so the console is simply off or back in its browser. I'll watch the log so I see the moment it starts.
+
+- tool `Monitor`: PS2: boots, crashes, sound errors
+
+## Claude
+
+The café cutscene now plays like the original. Running it on both machines with the same logging:
+- **Voice lines:** all 44 start in the same order as on the PS1, each with the same page.
+- **Cut-offs:** 43 lines play to the end. The PS1 cuts the remaining one too (line 10: 3.07 s on the PS1, 3.11 s in the port).
+- **One small difference:** line 12 starts 0.5 s into its page on the PS1 but right at the start in the port. Its page is about 3.5 s long, so the voice still fits.
+- **Frame rate:** no frame spikes while the cutscene ran. The few spikes came during boot, the menu and the map load.
+
+**PS2 test:** the console isn't answering, so it's probably off or back in its browser. The disc server and log receiver are still running here, and the new build is ready in `build/port/sh1_ps2.iso`. Launch Neutrino whenever you like; it will boot this build, and I'll see it start. On the console, try:
+- the café cutscene (`MapEvent-CafeCutscene`),
+- `map3_s00 func_800D0CF8` (the hospital conversation with Kaufmann).
+
+Listen for voices on the right pages, nothing cut mid-word, and no stutter when a line starts.
+
+## User
+
+Ok, now turning our attention to performance. The Kaufmann cutscene we were testing is a good example where performance is consistently below 60 FPS. I'm noticing we're not using the VU at all, according to PCSX2's overlay? Is that true, are there any good ways to use it, and if not, are there any other options for increasing performance. The PS2 runs its CPU almost 10x faster than the PS1, so I have to imagine there's some bottleneck we're hitting here.
+
+## Claude
+
+Yes, the VUs are idle. The port is plain EE C code: the PS1's GTE maths (transforms, lighting) runs as translated scalar instructions on the EE core, and VU0/VU1 never get used. We'd planned to move that work to the vector units earlier but haven't done it yet.
+
+Before choosing a fix, I'll measure where the time goes. The port has a profiling build (`SH1_PROF=1`) with counters around the main loop, the renderer and the GTE wrappers. I'll run the Kaufmann cutscene with it in PCSX2. PCSX2's EE timing isn't exact, but the breakdown between parts should hold.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Prof_Report(" src --include=*.c | head; grep -rn "void Prof_Report" -A30 src/port | head -40
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rhoE 'PROF_BEGIN\("[^"]+"\)|Prof_Begin\("[^"]+"' src build/port/recomp/*.c tools/port/recomp.py 2>/dev/nul
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; { echo "20 down"; echo "21 cross"; for i in 0 1 2 3; do echo "$((23+i)).5 down"; done; echo "28 cross"; } > buil
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; F=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; F=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/p
+
+## Claude
+
+You're right: the VUs are idle, and the EE's 10× clock advantage is being spent on emulating the PS1's other chips.
+
+**Where the time goes** (PCSX2, Kaufmann cutscene, per frame). At 60 fps the EE has about 4,900k cycles per frame. The port uses about 6,700k, which is why the scene runs around 44 fps:
+
+| Work | k-cycles/frame | Share |
+|---|---|---|
+| Converting PS1 GPU packets to GS (`DrawOTag`), ~1,430 primitives | 2,708 | 40% |
+| …of which polygon setup | 1,714 | |
+| …of which per-primitive GS state (530 texture and 530 palette changes per frame) | 643 | |
+| GTE maths (depth cue `DPCS`/`DCPL` ~1,930 calls each, `MVMVA`, `RTPT`, `NCT`, …) | ~1,800 | 27% |
+| The rest of the game logic (animation, cutscene, collision, sound) | ~2,100 | 31% |
+
+**Why a 10× faster CPU still falls short:**
+- **GTE work:** on a PS1 the GTE is a separate chip that does a matrix-vector product in a few cycles. In the port each GTE operation is C code on the EE, roughly 250 cycles per call.
+- **GPU work:** the PS1's GPU drew triangles in parallel with the CPU, for free. In the port the EE converts every primitive to GS commands, about 1,200–1,900 cycles each.
+
+So the EE is doing the work of three chips, and about two thirds of its time goes to emulating the other two.
+
+**Two caveats about the numbers:**
+- PCSX2's EE cycle counts aren't hardware-accurate, and it doesn't model the EE's small caches (8 KB data, no L2). On the real PS2, cache misses probably make things worse than this.
+- I can run the same profile on the console: it prints over the network.
+
+**What would help**, roughly in order of payoff:
+1. **The GS conversion (40%).** Sort and batch primitives so texture and palette changes happen once per material instead of 530 times per frame, and build GS packets in larger blocks. The ambitious version moves primitive conversion to VU1: the EE ships raw PS1 primitives and a VU1 microprogram expands them into GS commands while the EE runs game logic. That's the classic way PS2 games use VU1, and it would take most of that 40% off the EE.
+2. **The GTE maths (27%), exactly, on the EE's 128-bit integer SIMD unit (MMI) rather than the VUs.** You asked earlier for exact results. VU0 works in floating point, which can't reproduce the GTE's 32-bit fixed-point products and saturation bit for bit. MMI instructions like `PMADDH` do signed 16×16→32 multiply-adds four at a time, exactly the GTE's arithmetic. A matrix-vector product becomes a handful of instructions instead of ~250 cycles of C.
+3. **Run the EE and GS in parallel more.** Today `DrawOTag` builds and sends the whole frame on the EE before the next frame's logic starts. Double-buffered packets, or VU1 doing the conversion, would let rendering overlap the game update.
+4. **The game logic (31%).** Smaller wins: hot spots in the translated code and better cache behaviour. That needs per-function profiles from the console.
+
+The first step is the same either way: profile this cutscene on the PS2, to get real costs including cache effects. Then I'd start with (1), the GS batching, since it's the largest share and needs no exactness compromises.
+
+- tool `AskUserQuestion`: 
+
+## Claude
+
+The PS2 just booted the profiling build (22:13:42), the one I built for the PCSX2 run. On the console:
+1. Choose DEMO, then `map3_s00 func_800D0CF8` (the fifth entry).
+2. Let the whole cutscene play out.
+
+The profile prints over the network every 120 frames, and I'll collect it from the log. Tell me when it's finished, or I'll see the return to the menu.
+
+One caution: the profiling counters cost some time themselves, so frame rates will be a bit below normal in this build. The proportions are what matter.
+
+## User
+
+Reset the game remotely
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 20 python3 tools/port/ps2_ctl.py restart
+
+## Claude
+
+The restart command reached the PS2's agent. The game should reboot into the same profiling build in a few seconds; my log watch will show it.
+
+## Claude
+
+The game has restarted on the PS2 (build 22:13:42, the profiling build). When you're ready, run `map3_s00 func_800D0CF8` from the Demo menu.
+
+## User
+
+I ran the demo, but it doesn't look like the PS2 was communicating with the VM
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -5 build/port/ps2_log.out; grep -a "prof: per frame\|map load" build/port/ps2_log.out | tail -3; pgrep -af 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk -F'] ' '$1>"[180901"' build/port/ps2_log.out > /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+- tool `TaskStop`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; wc -l src/port/ps2/gpu_gs.c; grep -n "^static\|^void\|^int\|^u32\|^#define" src/port/ps2/gpu_gs.c | head -120
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 96,215p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 351,450p src/port/ps2/gpu_gs.c; sed -n 527,825p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 215,240p src/port/ps2/gpu_gs.c; sed -n 497,527p src/port/ps2/gpu_gs.c; sed -n 1063,1115p src/port/ps2/gpu
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "DrawSync" -A12 src/port/libgpu_port.c | head -30; grep -rn "GpuGs_" src/port/*.c src/port/ps2/*.c | gre
+
+- tool `Bash`: find / -path /proc -prune -o -name "dmaKit.c" -print 2>/dev/null | head -2; grep -rn "dmaKit_send\b" ~/ps2dev/gsKit/include/*.h 2>/dev/null | head -3; ls ~/ps2d
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/gpu_gs.c'; s=open(p).read() def ed(a,b):     global s; assert a in s,a[:60]; s=s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 355,372p src/port/ps2/gpu_gs.c; grep -n "s_ImgPkt\|s_Staging" src/port/ps2/gpu_gs.c
+
+## Claude
+
+Now the waits, wherever the code depends on the GS being done: before texture data is written into the shared upload packet, in VRAM readback, after the display copy, and in `DrawSync`.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/gpu_gs.c'; s=open(p).read() def ed(a,b,cnt=1):     global s; assert a in s,a[:60
+
+## Claude
+
+The display code uses gsKit, which drives the same GIF DMA channel, so it must never start while one of our sends is still running. I'll check where it does.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "gsKit_\|dmaKit_\|GpuGs_" src/port/ps2/display_ps2.c | head -30
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 52,66p src/port/ps2/display_ps2.c; sed -n 240,250p src/port/ps2/display_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/display_ps2.c'; s=open(p).read() s=s.replace('''extern void GpuGs_StateLost(void
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "s_PageMap\[.*\] *=\|s_ClutMap\[.*\] *=\|->key *= *-1\|\.key *= *-1\|static void cache_invalidate" src/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/gpu_gs.c'; s=open(p).read() i=s.index('static u64x prim_state_impl(const Prim* p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/gpu_gs.c'; s=open(p).read() a='''            s_PageMap[s_Slots[i].key] = 0;     
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+## Claude
+
+I'll rewrite it with literal paths and fresh output folders, so nothing gets deleted through a variable.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; { echo "20 down"; echo "21 cross"; for i in 0 1 2 3; do echo "$((23+i)).5 down"; done; echo "28 cross"; for t in
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; /home/alex/Documents/silent-hill-1-ps2-port/.ve
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/input.txt; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1; (python3 to
+
+## Claude
+
+The profiling build is on its way to the PS2 (restart acknowledged). Please run `map3_s00 func_800D0CF8` from the Demo menu again, and tell me when it's done.
+
+One thing I noticed: my recent quick builds reused the translated-library archive left over from the profiling build, so they still carry its counters. I'll do a full clean rebuild before any build meant for normal play.
+
+## Claude
+
+The new profiling build (22:35:08) has booted on the PS2. Go ahead with the Kaufmann cutscene from the Demo menu.
+
+## User
+
+Is there any way you can start that cutscene remotely?
+
+## Claude
+
+Yes. I'll add it to the remote control: a `demo` command for `ps2_ctl.py` that takes a Demo-list name or number. If the game is in the main menu, the cutscene starts right away. If it's anywhere else, the game first soft-resets to the menu (as after a Demo cutscene), then starts it. Here's how the agent passes commands to the game:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 30,150p src/port/ps2/agent_ps2.c | grep -n "case\|cmd\|0x\|static\|arg" | head -40
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 60,145p src/port/ps2/agent_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:50]); s=s.replace(a,b,1); open(p,'w').w
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:50]); s=s.replace(a,b,1); open(p,'w').w
+
+## Claude
+
+The new build is deploying. Once it boots and reaches the main menu, I'll start the cutscene remotely.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(wc -l < build/port/ps2_log.out); until tail -n +$n build/port/ps2_log.out | grep -aq "gameState 7"; do sleep
+
+## Claude
+
+The new build has the remote-start command and is booting on the PS2. I've queued `ps2_ctl.py demo "map3_s00 func_800D0CF8"` to fire as soon as the log shows the main menu. If you've left the controller alone, it should start on its own.
+
+## Claude
+
+The new build (22:37:04) has booted. The remote start will fire when the main menu comes up.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/bsqhr9wtm.output; cd /home/alex/Documents/silent-hil
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -an "build Oct  9 2026 22:37:04" build/port/ps2_log.out | tail -1 | cut -d: -f1); tail -n +$n build/por
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 10 python3 tools/port/ps2_ctl.py ping
+
+## Claude
+
+The IOP still answers but the EE is stuck. If the EE's agent thread can still run, I can read the game's stack to see where it's stuck.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/gpu_gs.c'; s=open(p).read() a=s[s.index('#define D2_CHCR'):s.index('/** Finishes
+
+- tool `Monitor`: PS2: boots, crashes, demo requests
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(wc -l < build/port/ps2_log.out); until tail -n +$n build/port/ps2_log.out | grep -aq "gameState 7"; do sleep
+
+## Claude
+
+You were right: it's stuck on the Konami logo, and that's my fault. The game froze at the first frames about seven seconds after boot. The EE is wedged with interrupts disabled, so the remote restart can't reach it. Please press RESET on the PS2 and relaunch Neutrino.
+
+**Cause:** my change to make the GS sends asynchronous (driving the GIF DMA channel's registers directly and waiting only before the next send). It ran fine in PCSX2, but on real hardware it hangs, probably by spinning on a transfer that never completes inside a section with interrupts off.
+
+**What I did:** I put back the old synchronous send path. The rebuilt ISO (profiling build) is ready, and Neutrino will load it when you relaunch. It still has two changes:
+- the split state memo, which produced identical frames in PCSX2,
+- the new `ps2_ctl.py demo` remote start.
+
+**After the reboot:** I've queued `ps2_ctl.py demo "map3_s00 func_800D0CF8"` to run as soon as the main menu appears, so the Kaufmann cutscene should start without you touching the controller. Then I'll read the console profile and see how much the memo split saved.
+
+I'll come back to asynchronous sends later, and test that one on the console before relying on it.
+
+## Claude
+
+The PS2 has rebooted into the reverted build (22:39:55). The remote cutscene start fires as soon as the main menu comes up.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/biih91976.output; cd /home/alex/Documents/silent-hil
+
+## Claude
+
+The remote start worked: the PS2 loaded map3_s00 and started the Kaufmann cutscene on its own. My earlier queued request from the hung boot also fired, so a second request arrived just after the first. That will make the game soft-reset once and start the cutscene again; the profile is just as useful either way. I'll read the console profile once the cutscene has run.
+
+## User
+
+The cutscene did not start properly. Just reboot the game and let me do it manually
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 20 python3 tools/port/ps2_ctl.py restart
+
+## Claude
+
+I've restarted the game (restart acknowledged); no further remote requests are queued. Start the Kaufmann cutscene from the Demo menu whenever it's up.
+
+The remote start probably failed because of my mistake: two requests arrived. The second one came during the map load, cancelled the first and triggered a soft reset. I'll fix `demo` so it ignores a request while a cutscene is already starting, and test it in PCSX2 before using it on the console again.
+
+## Claude
+
+The game has restarted (22:39:55). While you run the cutscene, I'll fix the remote start so a second request is ignored while a cutscene is still starting.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/demo_menu.c'; s=open(p).read() a='''    printf("demo: %s requested\\n", g_PortCutsce
+
+## Claude
+
+The fix is in the source but not on the console yet, so it won't disturb your run. Tell me when the cutscene has played; the profile will be in the log.
+
+## Claude
+
+The Kaufmann cutscene's map has loaded. I'll read the profile once it's finished.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+## Claude
+
+The console profile with the split state memo, over the same cutscene:
+
+| Per frame (k-cycles, on hardware) | Before | Now |
+|---|---|---|
+| Drawing (swap and draw) | 3,641 | 3,029 |
+| Polygon conversion | 2,023 | 1,693 |
+| Primitive state | 1,206 | 764 (texture 501 over 543 calls, other 263 over 1,046) |
+
+So about 600k cycles a frame saved, roughly 12% of the 60 fps budget. Frame rate in the cutscene: mostly 40–45 fps, plus the 60 fps stretches.
+
+The same profile shows two more costs:
+1. **Texture state still costs about 920 cycles per change** (543 changes a frame). That's the texture and palette cache lookups, plus a texture cache flush and register write every time. Remembering the last few texture-palette combinations, instead of only the last one, would avoid most of it.
+2. **The sound driver costs 578k cycles a frame on the PS2** (`Sd_TaskPoolExecute`), against 112k in PCSX2. Almost certainly it's my SPU command path: each batch of sound register writes waits for its SIF DMA to finish before returning, and the music volume ramp sends batches every frame. Making those sends not wait should recover most of it, about 10% of the frame.
+
+Neither needs risky hardware changes like the asynchronous GS sends. I'll test each in PCSX2 first and then once on the console before relying on it. I'll start with the sound path, since it's the bigger and simpler win. The remote-start fix is in the source and will ship with that build.
+
+## User
+
+Alright, let's proceed
+
+## Claude
+
+I'll start with the sound command path in [spu_ps2.c](src/port/ps2/spu_ps2.c). Two changes:
+- **Double-buffer the command packets.** Each send queues its SIF DMA and returns. Before a buffer is reused, the code waits for that buffer's own earlier transfer. SIF DMA transfers stay in order, so the IOP still sees commands correctly.
+- **Stop flushing in `SpuGetKeyStatus`.** Key-ons are already sent when the game sets them, which is all the status check depends on. Flushing there sent a separate small packet on almost every status poll.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "s_Packet\|s_WPosOut\|dma_wait()\|s_DmaId" src/port/ps2/spu_ps2.c | head -40
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 66,125p src/port/ps2/spu_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/spu_ps2.c'; s=open(p).read() def ed(a,b):     global s; assert a in s,a[:60]; s=
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/libspu_port.c'; s=open(p).read() a='''        keys(R_KOFF, voice_bit);         s_Key
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^typedef struct" -A6 src/port/ps2/gpu_gs.c | grep -n "Slot\|ClutSlot\|key\|used" | head; grep -n "stati
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/gpu_gs.c'; s=open(p).read() a='''    else     {         u32  tbp     = cache_get
+
+## Claude
+
+It builds. I'll check the output is still identical, using the same frame-dump comparison as before.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; { echo "20 down"; echo "21 cross"; for i in 0 1 2 3; do echo "$((23+i)).5 down"; done; echo "28 cross"; for t in
+
+## Claude
+
+The output still looks the same. Two frames match exactly, and the small differences in the other two (0.04 and 0.12 average) fit the frames being further apart in time: frame 2408 against 2479.
+
+The profiling build with both changes (asynchronous sound sends and the texture-state cache) is ready, and it includes the remote-start fix. I see you're in map1_s01 on the PS2 right now. Shall I deploy it now, which restarts the game, or wait until you're done?
+
+## User
+
+Yes, deploy it and measure performance again
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/input.txt; timeout 20 python3 tools/port/ps2_ctl.py deploy
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(wc -l < build/port/ps2_log.out); until tail -n +$n build/port/ps2_log.out | grep -aq "gameState 7"; do sleep
+
+## Claude
+
+The build is deploying (restart acknowledged). Once the main menu appears I'll start the Kaufmann cutscene remotely, with a single request this time, and read the profile when it finishes. If you'd rather start it yourself, just don't touch the menu for a few seconds after boot.
+
+## Claude
+
+The new build (22:49:20) has booted on the PS2. The cutscene request goes out when the main menu appears.
+
+## User
+
+The game is stuck on a black screen
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -an "build Oct  9 2026 22:49:20" build/port/ps2_log.out | tail -1 | cut -d: -f1); tail -n +$n build/por
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 10 python3 tools/port/ps2_ctl.py ping; timeout 40 python3 tools/port/ps2_ctl.py md s_BufDma 8 2>&1 | tai
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/spu_ps2.c'; s=open(p).read() a='''    s_BufDma[s_Buf] = s_DmaId; /* the last of 
+
+## Claude
+
+The reverted build is ready. Please press RESET and relaunch Neutrino.
+
+My queued remote start is still waiting for the main menu. When the new build boots, it will start the Kaufmann cutscene once (a single request this time), and I'll collect the profile when the cutscene ends.
+
+## Claude
+
+The reverted build (22:54:25) has booted. I'm waiting to see whether it gets past the logo screens this time; the remote start fires at the main menu.
+
+## Claude
+
+The reverted build got past the logos, which confirms the asynchronous sound sends caused that hang. The remote request went through, and the Kaufmann cutscene's map is loading. I'll read the profile when the cutscene ends.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/gpu_gs.c'; s=open(p).read() i=s.index('        /* Recent texture page + CLUT pai
+
+## Claude
+
+Now a full clean build without the profiling counters (rebuilding the translated libraries too), the PS1 checksum check, and a commit.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; unset SH1_PROF SH1_NO_RECOMP SH1_MSG_DEBUG SH1_EXTRA_CFLAGS; export SH1_FPS=60; (bash
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "Planning Doc.md" <<'E'  ## Performance pass 1 (2026-10-09), Kaufmann cutscene (map3_s00 func_800D0CF8) -
+

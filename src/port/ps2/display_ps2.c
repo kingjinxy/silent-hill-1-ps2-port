@@ -32,6 +32,7 @@ static int s_Mode[3] = { -1, -1, -1 }; /* current width, lines, interlaced */
 static int s_TexAllocated;              /* software renderer's upload texture (reset by init) */
 
 extern void GpuGs_StateLost(void);
+extern void GpuGs_Sync(void); /* gpu_gs.c: its GIF sends run in the background; gsKit uses the same channel */
 extern void Port_VBlankReinstall(void); /* libetc_ps2.c */
 extern void GpuGs_DisplayCopy(u32 fbp, u32 fbw, u32 psm, int x, int y, int w, int h);
 extern void GpuGs_StoreAll(void);
@@ -58,6 +59,7 @@ static void init(int w, int h, int interlaced)
 {
     int magh, dw, dh, dx, dy;
 
+    GpuGs_Sync();
     if (s_Gs)
     {
         gsKit_deinit_global(s_Gs);
@@ -241,6 +243,7 @@ void Display_Present(const unsigned short* vram, int x, int y, int w, int h, int
         }
     }
 
+    GpuGs_Sync();
     if (!s_TexAllocated)
     {
         s_Tex.PSM      = GS_PSM_CT16;

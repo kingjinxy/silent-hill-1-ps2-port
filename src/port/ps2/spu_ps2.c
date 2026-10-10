@@ -54,8 +54,14 @@ typedef struct
 
 static status_t s_Status __attribute__((aligned(64)));
 static u8       s_StatusPad[64] __attribute__((aligned(64))); /* keeps other data off its cache lines */
-static u32      s_Packet[(64 + CHUNK) / 4] __attribute__((aligned(64)));
-static u32      s_WPosOut[4] __attribute__((aligned(64)));
+/* Two command buffers used in turn: a send queues its SIF DMA and returns; a buffer is only written
+ * again once its own earlier transfer is done (waiting on every send cost ~0.5 M cycles a frame on a
+ * PS2, with the music's volume ramps sending every frame). SIF DMA transfers complete in order. */
+static u32      s_PacketBuf[2][(64 + CHUNK) / 4] __attribute__((aligned(64)));
+static u32      s_WPosBuf[2][16] __attribute__((aligned(64)));
+static u32*     s_Packet = s_PacketBuf[0];
+static int      s_Buf;
+static int      s_BufDma[2] = { -1, -1 };
 static u32      s_Regs[MAX_REGS];
 static int      s_RegCount;
 static u32      s_Pos;  /* ring offset of the next command */
@@ -69,14 +75,14 @@ static volatile status_t* status(void)
     return (volatile status_t*)((u32)&s_Status | 0x20000000); /* uncached: the IOP writes it */
 }
 
-static void dma_wait(void)
+static void dma_wait_id(int* id)
 {
-    if (s_DmaId >= 0)
+    if (*id >= 0)
     {
-        while (SifDmaStat(s_DmaId) >= 0)
+        while (SifDmaStat(*id) >= 0)
         {
         }
-        s_DmaId = -1;
+        *id = -1;
     }
 }
 
@@ -107,7 +113,6 @@ static void send(u32 n)
     while (size - (s_Sent - st->done) <= tail + n) /* wait for room (never fill the ring completely) */
     {
     }
-    dma_wait();
     if (tail)
     {
         dma(wrap, st->ring + s_Pos, 16);
@@ -117,9 +122,14 @@ static void send(u32 n)
     dma(s_Packet, st->ring + s_Pos, n);
     s_Pos = (s_Pos + n) % size;
     s_Sent += n;
-    s_WPosOut[0] = s_Pos;
-    dma(s_WPosOut, st->wpos, 16);
-    dma_wait(); /* s_Packet and s_WPosOut are reused */
+    s_WPosBuf[s_Buf][0] = s_Pos;
+    dma(s_WPosBuf[s_Buf], st->wpos, 16);
+    s_BufDma[s_Buf] = s_DmaId;
+    /* Wait for this send to finish. Not waiting (and alternating the two buffers) hung a real PS2 at
+     * the first sound bank upload (2026-10-09): sends run with interrupts off, and the kernel seems to
+     * start queued SIF transfers only from its interrupt handler, so SifSetDma spun forever once the
+     * queue was full. Non-blocking sends need a design that never waits with interrupts off. */
+    dma_wait_id(&s_BufDma[s_Buf]);
 #ifdef SH_PORT_MSG_DEBUG
     __asm__ volatile("mfc0 %0, $9" : "=r"(t1));
     if (t1 - t0 > 294912)

@@ -471,3 +471,22 @@ Ideas to try, roughly by expected payoff:
   - libcd now models seek time in real time: after CdlSeekL, CdSync(1) reports busy for 4 + 44·√(distance/200000) vertical blanks (SEEK_* in libcd_ps2.c).
   - Result: map3_s00 func_800D0CF8 pairs every line like the PS1. 29 of 32 lines play to the end; the PS1 cuts the same three at the same points (their clips end in silence).
 - SH_PORT_CUTSCENE_VBLANKS (default 1) is the minimum vertical blanks per cutscene frame in 60 fps mode. Test only.
+
+## Performance pass 1 (2026-10-09), Kaufmann cutscene (map3_s00 func_800D0CF8)
+- Profile on the PS2 (SH1_PROF=1, printed over the network), per frame at a 4,915k-cycle 60 fps budget: about 7,050k-cycles in total.
+  - GS conversion (DrawOTag): 3,270 (polygon setup 2,023, per-primitive state 1,206, DMA sends 327).
+  - GTE: ~1,640.
+  - Rest of the game: ~2,100.
+  - Sound task: 430–580 on hardware against ~110 in PCSX2 (synchronous SPU sends).
+- Done: prim_state is split into a non-texture memo and a texture memo. Texture page/CLUT changes (~540 a frame) only redo the texture registers. State cost went from 1,206 to ~760k-cycles on hardware; frames are unchanged in PCSX2.
+- Remote start: `ps2_ctl.py demo "<Demo list name or number>"` starts a Demo cutscene. From inside the game it soft-resets to the menu first. A second request is ignored while one is being started.
+- Tried and reverted, both of which hung a real PS2 at the logo screens with interrupts off (PCSX2 was fine):
+  - Asynchronous GIF sends: GIF DMA channel registers driven directly, waiting only before the next send.
+  - Asynchronous SPU command sends: double-buffered SIF DMA without waiting. Sends run inside DI(); the kernel seems to start queued SIF transfers only from its interrupt handler, so SifSetDma spun forever once the queue was full.
+  - Both need designs that never wait with interrupts off: for example, a sender thread for SPU commands, and GIF sends checked on hardware first.
+- Tried, no measurable gain on hardware, removed: a 16-entry cache of recent texture page/CLUT pairs. The lookups aren't the cost of a texture change.
+- Next candidates:
+  - Finer profile of the per-texture-change and per-polygon cost on hardware.
+  - SPU sends from a sender thread.
+  - GTE on MMI.
+  - Primitive conversion on VU1.
