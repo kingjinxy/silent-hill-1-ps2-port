@@ -84,6 +84,18 @@ void PadStartCom(void)
     s_Started = 1;
 }
 
+/** Before a restart (crash_ps2.c Port_Restart): the IOP's PADMAN writes the pad data into s_PadArea
+ * by DMA every vertical blank, and keeps doing it until the IOP reboots, which under Neutrino comes
+ * after the next ELF is in memory. A new build has s_PadArea elsewhere: the writes then landed in its
+ * code or data, and the first boot after every few deploys froze at the Konami logo (2026-10-10). */
+void PadStopCom(void);
+
+void Port_PadShutdown(void)
+{
+    PadStopCom();
+    padEnd();
+}
+
 void PadStopCom(void)
 {
     int p;

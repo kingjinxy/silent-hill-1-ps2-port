@@ -104,6 +104,25 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
         ScreenFade_Reset();
         g_MainMenuState = MainMenuState_DemoList;
     }
+    else if (g_MainMenuState == MainMenuState_Main && Port_NewGameRemoteTake())
+    {
+        // A New Game requested over the network (ps2_ctl.py newgame): as New Game, Normal.
+        g_GameWork.gameState = GameState_MainMenu;
+        if (g_GameWork.gameStateSteps[0] != 1)
+        {
+            g_GameWork.gameStateSteps[0] = 1;
+            Fs_QueueReset();
+        }
+        GameBoot_SavegameInitialize(0, 0);
+        GameBoot_WorldInit();
+        g_SysWork.processFlags = ProcessFlag_NewGame;
+        GameBoot_MapLoad(MapIdx_MAP0_S00);
+        GameFs_StreamBinLoad();
+        SD_Call(Sfx_MenuStartGame);
+        ScreenFade_Start(true, false, false);
+        g_MainMenu_SelectedEntry = MainMenuEntry_Start;
+        g_MainMenuState          = MainMenuState_NewGameStart;
+    }
 #endif
 
     switch (g_MainMenuState)

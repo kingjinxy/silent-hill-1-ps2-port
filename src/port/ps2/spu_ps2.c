@@ -37,6 +37,7 @@ extern void Port_EventDeliver(unsigned long cls, unsigned long spec); /* libapi_
 #define OP_WRAP  4
 #define OP_XA    5
 #define OP_XASTOP 6
+#define OP_SHUTDOWN 7
 
 #define CHUNK    16384 /* sample upload per command */
 #define MAX_REGS 512
@@ -181,9 +182,23 @@ static void unlock(void)
     }
 }
 
+/** s_Packet must be the current buffer. On hardware (cutscene sweep, 2026-10-10, map7_s03
+ * func_800E3B6C) something stored 0x1000 over it: the sound thread then crashed, and so did the
+ * restart's shutdown command. Logged and repaired here until the writer is found. */
+static void packet_check(const char* where)
+{
+    if (s_Packet != s_PacketBuf[s_Buf & 1])
+    {
+        printf("spu: s_Packet was %p in %s (buffer %d): repaired\n", (void*)s_Packet, where, s_Buf);
+        s_Buf &= 1;
+        s_Packet = s_PacketBuf[s_Buf];
+    }
+}
+
 static void flush_regs(void)
 {
     u32 n;
+    packet_check("flush_regs");
     if (s_RegCount == 0)
     {
         return;
@@ -240,6 +255,7 @@ void Port_SpuUpload(unsigned int addr, const void* data, unsigned int size)
         unsigned int n = size - done < CHUNK ? size - done : CHUNK;
         lock();
         flush_regs();
+        packet_check("upload");
         s_Packet[0] = OP_WRITE;
         s_Packet[1] = addr + done;
         s_Packet[2] = n;
@@ -297,6 +313,40 @@ void Port_XaStop(void)
     s_Packet[1] = s_Packet[2] = s_Packet[3] = 0;
     send(16);
     unlock();
+}
+
+/** Before a restart (crash_ps2.c Port_Restart): the IOP module stops the stream, the SPU2's DMA and
+ * every voice, and the lock stays held, so nothing is sent after it. Waits up to a second for the
+ * IOP to finish. A restart reboots the IOP but not the SPU2: the sound data input was still running
+ * on every earlier restart (the black-screen boot freezes came on restarts after long sessions). */
+void Port_SpuShutdown(void)
+{
+    volatile status_t* st = status();
+    unsigned int       t0, t;
+    int                i;
+    extern int         VSync(int mode); /* libetc_ps2.c */
+    if (!s_On)
+    {
+        return;
+    }
+    /* The lock, if it comes free within about 100 ms: from the crash reporter, the crashed thread
+     * may hold it for good (then the command goes anyway). */
+    for (i = 0; i < 6 && s_Lock >= 0 && PollSema(s_Lock) < 0; i++)
+    {
+        VSync(0);
+    }
+    flush_regs();
+    s_Packet[0] = OP_SHUTDOWN;
+    s_Packet[1] = s_Packet[2] = s_Packet[3] = 0;
+    send(16);
+    dma_wait_id(&s_BufDma[s_Buf ^ 1]);
+    __asm__ volatile("mfc0 %0, $9" : "=r"(t0));
+    do
+    {
+        __asm__ volatile("mfc0 %0, $9" : "=r"(t));
+    } while (st->done != s_Sent && t - t0 < 294912000u);
+    printf("port: sound shut down%s\n", st->done == s_Sent ? "" : " (the IOP didn't answer in a second)");
+    s_On = 0;
 }
 
 /** Running count of command bytes sent (compare with Port_SpuDone). */

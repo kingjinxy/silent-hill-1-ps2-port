@@ -80,11 +80,64 @@ def ee_object(ps1_obj):
     sys.exit("unknown object kind: " + ps1_obj)
 
 
+_FUNCS = {}
+
+
+def binary_funcs(binary):
+    """PS1 address -> function name for one binary (asm/USA/<binary>: "main", "bodyprog",
+    "maps/map6_s04", ...), from the disassembly's glabels and their first instruction."""
+    if binary not in _FUNCS:
+        funcs = {}
+        for f in glob.glob(os.path.join("asm/USA", binary, "**", "*.s"), recursive=True):
+            if "/data/" in f:
+                continue
+            for m in re.finditer(r"^glabel (\w+)\n\s*/\* [0-9A-F]+ ([0-9A-F]{8}) ", open(f, errors="replace").read(), re.M):
+                funcs.setdefault(int(m.group(2), 16), m.group(1))
+        _FUNCS[binary] = funcs
+    return _FUNCS[binary]
+
+
+def fix_split_pointers(src):
+    """Splat writes data after a label that isn't 4-aligned as .short halves, so a function pointer
+    there becomes two numbers (.short 0x4CA4 / .short 0x8004): fine for the matching build, but the
+    port's link can't relocate it, and the game then called the PS1 address (map6_s04's monster
+    Cybil animation table: a jump to 0x80044B38, Anim_PlaybackLoop). A 4-aligned pair that forms the
+    address of a function of this binary (or bodyprog's or main's) becomes `.word <function>`.
+    Returns the fixed text, or None if nothing changed."""
+    m = re.match(r"asm/USA/(maps/\w+|screens/\w+|bodyprog|main)/", src)
+    if not m:
+        return None
+    lookups = [binary_funcs(b) for b in dict.fromkeys([m.group(1), "bodyprog", "main"])]
+    lines = open(src, errors="replace").read().split("\n")
+    pat = re.compile(r"^(\s*/\* [0-9A-F]+ ([0-9A-F]{8}) \*/) \.short 0x([0-9A-F]{4})\s*$", re.I)
+    out, i, changed = [], 0, 0
+    while i < len(lines):
+        a = pat.match(lines[i])
+        b = pat.match(lines[i + 1]) if a and i + 1 < len(lines) else None
+        if a and b and int(a.group(2), 16) % 4 == 0 and int(b.group(2), 16) == int(a.group(2), 16) + 2:
+            value = int(b.group(3), 16) << 16 | int(a.group(3), 16)
+            name = next((f[value] for f in lookups if value in f), None)
+            if name:
+                out.append("%s .word %s" % (a.group(1), name))
+                i += 2
+                changed += 1
+                continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out) if changed else None
+
+
 def assemble(src_obj_pairs):
     def one(pair):
         src, obj = pair
         os.makedirs(os.path.dirname(obj), exist_ok=True)
-        if not os.path.exists(obj) or os.path.getmtime(obj) < os.path.getmtime(src):
+        if not os.path.exists(obj) or os.path.getmtime(obj) < os.path.getmtime(src) or \
+                os.path.getmtime(obj) < os.path.getmtime(__file__):
+            fixed = fix_split_pointers(src)
+            if fixed is not None:
+                src = os.path.join(OUT, "datafix", src)
+                os.makedirs(os.path.dirname(src), exist_ok=True)
+                open(src, "w").write(fixed)
             run([CC, "-c", "-G0", "-Wa,-Iinclude", "-x", "assembler", src, "-o", obj])
     with ThreadPoolExecutor(os.cpu_count()) as ex:
         list(ex.map(one, src_obj_pairs))
@@ -164,6 +217,10 @@ def main():
     # Debugging: hardware breakpoint on bad stores to GsOUT_PACKET_P (crash_ps2.c): SH1_WATCH_PACKET=1.
     dump += ["-DSH_PORT_WATCH_PACKET"] if os.environ.get("SH1_WATCH_PACKET") else []
     dump += ["-DSH_PORT_WATCH_TEST"] if os.environ.get("SH1_WATCH_TEST") else []
+    # Restart tests on hardware: SH1_LAYOUT_SHIFT=N moves the port's code and data by N bytes (a
+    # multiple of 16), so deploying one variant after another changes the memory layout as a new
+    # build does (src/port/ps2/agent_ps2.c).
+    dump += ["-DSH_PORT_LAYOUT_SHIFT=" + os.environ["SH1_LAYOUT_SHIFT"]] if os.environ.get("SH1_LAYOUT_SHIFT") else []
     dump += ["-DSH_PORT_MSG_DEBUG"] if os.environ.get("SH1_MSG_DEBUG") else []
     # The Demo menu's cutscene list (src/port/demo_menu.c), found in the decomp's map code.
     run([sys.executable, "tools/port/cutscene_list.py", "--c", os.path.join(OUT, "demo_cutscenes.c")])

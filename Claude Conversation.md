@@ -13489,3 +13489,781 @@ PCSX2 boots fine on the console-write path too: EE and sound-module messages are
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/archive_conversation.py ~/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/751df7
 
+- tool `Write`: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/no-pkill-patterns.md
+
+- tool `Bash`: cd /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory; echo "- [No pkill patterns](no-pkill-patterns.md) — pkill -f matching its own
+
+## Claude
+
+I found what was freezing the PS2 and changed how the game logs to avoid it. No freeze since, but it was intermittent before, so this isn't proof yet. It's committed as `b5e1f4f6d`.
+
+**Cause:** Neutrino's network console (ministack's udptty) sometimes stops accepting output for good during disc loads. Every `printf` then waited forever:
+- In the older builds, the game, heartbeat and agent all stopped at once: the black screen.
+- In the build after the first change, the game ran on until the IOP sound module printed as the first voice line started. Its thread blocked, the sound command ring stopped draining, and the game waited for room: the yellow screen.
+
+I couldn't find which thread holds udptty's lock, so I took our output off udptty instead of fixing Neutrino:
+- **Game output** goes into a memory buffer, and a log thread passes it to our IOP agent, which sends it to `ps2_log.py` directly.
+- **Sound module messages** go into a buffer printed by a lowest-priority thread, so a stuck console can't block sound. The console's `vsprintf` printed garbage, so they're formatted with `sprintf`.
+- **Neutrino's own modules** still print through udptty. If it stalls, our log and the game keep going.
+
+**Tested:**
+- About 20 boots with the diagnostic builds (17 restarts plus deploys), including deploys into a session that had run for minutes (the condition of the earlier freezes). None froze.
+- A PCSX2 boot reaches the attract demo with clean output.
+- The PS1 matching build still passes all 50 checksums.
+
+**Stall investigation:**
+- The 190–216 ms GsSwapDispBuff stalls were the profiler's own report blocking on the console, so they weren't real rendering cost. That call now peaks at 3.8 ms.
+- Controller polling was a real cost: 12 mode-info queries to the IOP every frame, about 216k cycles. The pad's mode info is now re-read only when its state changes, plus once a second, which brings it to 15k cycles.
+- The Kaufmann cutscene now runs at **50–55 fps** on the console (profiling build), up from 47.1. Some of that may come from no longer blocking on the console.
+
+**New tools for future hangs:**
+- **`ping`** now reports whether the EE is alive, whether the game thread is stuck, and whether log output is backing up.
+- **A watchdog** turns the TV red (the EE→IOP data transfer is stuck) or yellow (no frame for 10 s). If it stays black, the EE itself stopped.
+
+Both are written up in the Planning Doc and the Running Walkthrough.
+
+The next performance targets are the same as before: polygon conversion (about 2.6M cycles a frame) and game update (about 2.9M).
+
+## Claude
+
+The PS2 is still running normally, cycling through the attract demos. No freezes or watchdog trips so far.
+
+## User
+
+Over the next 20 minutes, test rebooting while the game is running. At random intervals, reboot the game after starting a new game, during a demo, and during a random cutscene. The hope is that rebooting will work every single time.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,60p src/port/demo_menu.c; grep -n "Port_DemoRemote" -A30 src/port/demo_menu.c | head -60
+
+## Claude
+
+To reboot "after starting a new game", I need a way to start one remotely. The agent can currently only start Demo-menu cutscenes, so I'm checking how the main menu handles New Game:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "Port_DemoRemoteTake\|Port_DemoRemotePending\|NewGame\|SH_PORT" src/bodyprog/events/title.c | head -30
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 95,120p src/bodyprog/events/title.c; sed -n 255,440p src/bodyprog/events/title.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat include/port/demo_menu.h | grep -n "Port_Demo"; grep -n "s_Remote" src/port/demo_menu.c | head -3; grep -n "
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/agent_ps2.c'; s=open(p).read() a=''' * main loop), "NG" start a New Game (norm
+
+## Claude
+
+Deployed. Stopping the log monitor (the test will produce many expected boot lines), then trying `newgame` once:
+
+- tool `ToolSearch`: 
+
+- tool `TaskStop`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sleep 25; grep -a "SH1 port: starting" build/port/ps2_log.out | tail -1; timeout 10 python3 tools/port/ps2_ctl.p
+
+## Claude
+
+The command was acknowledged, but I don't see "newgame: requested" in the log. Looking at the full tail:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -n 8 build/port/ps2_log.out | cut -c1-140; grep -a "newgame\|agent: command" build/port/ps2_log.out | tail 
+
+## Claude
+
+It froze again, at boot, before my `newgame` command arrived. It's the same spot as the original black-screen freezes: the title, around frame 300–330. This time the diagnostics caught it:
+
+- The EE status stopped at vertical blank 360, about 4 s after boot, with 0 log bytes pending. So this freeze isn't the console problem.
+- **The IOP's EE→IOP DMA channel (channel 10) is stuck mid-transfer.** Its control register reads 01000701 (start bit set), where every earlier ping showed 00000701 (idle). The SIF control register also changed, from …0142 to …0160.
+
+So the boot freeze is a stalled EE→IOP SIF transfer, a different problem from the console stalls. That one turned out to be real but separate (the yellow screen).
+
+**What colour is the TV right now: black or red?** Red would mean the EE is alive with its DMA stuck. Black would mean the EE stopped completely. The PS2 will need a manual reset afterwards.
+
+## User
+
+It's black right now
+
+## Claude
+
+Black means the watchdog thread never ran either. So the EE stopped completely: interrupts dead, or the CPU itself hung, most likely on a bus access. That's consistent with what the IOP shows: a transfer from the EE stuck halfway.
+
+This is the real boot freeze, and it's separate from the console stalls. Looking back over today's boots, the pattern isn't boots in general:
+
+| Boot type | Froze |
+|---|---|
+| Restarts after a short session (35 s, the loop test) | 0 of 17 |
+| Restarts after a session that ran for minutes (deploys) | 4 of 9 |
+
+My best lead: a restart leaves the IOP's sound hardware running. The SPU2's XA input stream (its audio DMA) keeps running, and in-flight SIF transfers aren't drained. Neutrino reboots the IOP, but the SPU2 isn't reset. The new boot then trips over that state when it starts heavy sound and disc work at the title. I'm checking what the restart does today:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n '/^void Port_Restart/,/^}/p' src/port/ps2/crash_ps2.c; grep -n "OP_\w* *=\|#define OP_" src/port/ps2/spu_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 100,212p src/port/iop/sh1spu/main.c; grep -n "^void xa_\|^int xa_\|sceSdBlockTrans\|s_Stopped" src/port/i
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "void Port_XaStop" -A14 src/port/ps2/spu_ps2.c; sed -n 403,430p src/port/iop/sh1spu/xa.c; grep -n "s_Sen
+
+## Claude
+
+Now the code: the IOP shutdown first, then the EE side.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## Claude
+
+After the shutdown command the IOP module should also stop sending its status to the EE, so nothing is DMA'd into EE memory during the reboot. Then the restart sequence itself:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1; (python3 tools/port/port_link.py && bas
+
+## Claude
+
+`s_Down` is declared after the function that uses it; moving the declaration up:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/iop/sh1spu/main.c'; s=open(p).read() s=s.replace('''static int s_Down; /* OP_SHUTD
+
+## Claude
+
+The new build is ready and being served. The PS2 is still frozen from the 09:51 build. Meanwhile, here's the 20-minute test script:
+
+- tool `Write`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/reboot_test.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; until grep -aq "SH1 port: starting (build Oct 10 2026 10:" build/port/ps2_log.out; do sleep 3; done; grep -a "SH
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; date +%H:%M:%S; strings build/port/sh1.elf | grep -a "Oct 10 2026" | head -2
+
+## Claude
+
+My wait pattern expected a 10:xx build, but this one is 09:55:55. Fixing the wait:
+
+- tool `TaskStop`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; until grep -aq "SH1 port: starting (build Oct 10 2026 09:55:55)" build/port/ps2_log.out; do sleep 3; done; sleep
+
+## Claude
+
+Once you reset the PS2 and the 09:55:55 build boots, the 20-minute reboot test starts on its own. I'll report the results when it finishes, or as soon as a restart fails.
+
+## User
+
+I've reset the PS2. Is the test running?
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -a "SH1 port: starting" build/port/ps2_log.out | tail -2; cat /tmp/claude-1000/-home-alex-Documents-silent-
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -an "build Oct 10 2026 09:55:55" build/port/ps2_log.out | tail -1 | cut -d: -f1); tail -n +$n build/por
+
+- tool `TaskStop`: 
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; python3 - <<'EOF' p='reboot_test.py'; s=open(p)
+
+- tool `Bash`: sleep 5; pgrep -af reboot_test.py | head -3; cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/re
+
+## Claude
+
+The test is running (PID 1276014). I'm also setting a watch that reports when it finishes or a restart fails:
+
+- tool `Bash`: while kill -0 1276014 2>/dev/null; do if grep -q "FAILED" /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scra
+
+## Claude
+
+Yes, the test is running now, with a fix. The first attempt sent New Game during the boot logos, where remote starts aren't handled, so I restarted it. New Game and cutscene requests now wait until the attract demo is running.
+
+It will run for 20 minutes with restarts at random points. I'll report the results when it finishes, or right away if a restart fails. If the screen turns red or yellow, or stays black after a restart, please tell me.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/bv3gt7xr9.output; date +%T
+
+## Claude
+
+All 14 restarts came up. The four New Game cycles, though, never actually started a new game, so those restarts happened in the attract demo instead. Checking why:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -an "newgame: requested" build/port/ps2_log.out | tail -4; n=$(grep -an "newgame: requested" build/port/ps2
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -an "newgame: requested" build/port/ps2_log.out | tail -1 | cut -d: -f1); sed -n "$((n)),$((n+900))p" b
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 40,100p src/bodyprog/events/title.c; grep -n "MainMenuState_\w*" include/bodyprog/*.h | grep "=" | head -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -n 300 build/port/ps2_log.out | grep -a "libgpu" | tail -1 | grep -o "gameState [0-9]* step [0-9]*"; timeou
+
+## Claude
+
+During the attract demo the menu's state is Main, as the handler expects. I'll send a New Game now and watch what the game does with it:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(wc -l < build/port/ps2_log.out); timeout 10 python3 tools/port/ps2_ctl.py newgame; sleep 20; tail -n +$n bui
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1; (bash tools/port/ee_compile_check.sh 2>
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; b=$(strings build/port/sh1.elf | grep -o "build Oct 10 2026 [0-9:]*" | head -1); echo $b; until grep -aq "$b" bu
+
+## User
+
+[Request interrupted by user for tool use]
+
+## User
+
+The PS2 is stuck on a black screne
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -a "SH1 port: starting\|sound shut down\|restarting" build/port/ps2_log.out | tail -4; tail -n 12 build/por
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -a "libcd: SILENT. at DVD sector\|SH1 port: starting" build/port/ps2_log.out | tail -8 | cut -c1-110; comma
+
+- tool `Bash`: cd ~/ps2tools/neutrino-src; grep -rln -i "cache" iop/cdvdman_emu iop/udpfs 2>/dev/null | head; grep -rn -i "sector_cache\|cache_\|CACHE" iop/udpfs/src/*.c | hea
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "GameState_\w* *= *[0-9]*," include/game.h | head -25
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import re L=open('build/port/ps2_log.out',errors='replace').read().splitlines() st=[i for i,l 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "padPortOpen\|padInit\|padEnd\|padPortClose\|s_PadBuf\|s_Started *=" src/port/ps2/libpad_ps2.c | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 86,100p src/port/ps2/libpad_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|#include <sifrpc.h>|#include <sifrpc.h>\n#include <libcdvd.h>|' src/port/ps2/crash_ps2.c; grep -n "EXT
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## Claude
+
+Stringizing doesn't work outside a macro; fixing that with helper macros:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/port_main.c'; s=open(p).read() a='''__asm__(".section .text\\n.space " #SH_PORT_LA
+
+## Claude
+
+`PadStopCom` is defined after my new function; adding a forward declaration:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/libpad_ps2.c'; s=open(p).read() a='''void Port_PadShutdown(void) {''' s=s.repl
+
+## Claude
+
+The fix builds. Building three more layout variants (shifts of 4, 36 and 68 KB) for the deploy test:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1; k=1; for s in 4096 36880 69648; do SH1_
+
+## Claude
+
+The addresses didn't move: the link step reuses compiled objects when the source hasn't changed, and it ignores the new flag. Forcing `port_main.c` to recompile for each variant:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1; k=1; for s in 4096 36880 69648; do touc
+
+## Claude
+
+The build time changes, so `port_main.c` is being recompiled; the define itself must not reach it. Checking which files get those extra flags:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "dump\b\|\*dump\|+ dump\|prof +\|\*prof" tools/port/port_link.py | head
+
+## Claude
+
+Those flags only reach the files under `src/port/ps2/`. Moving the shift into `agent_ps2.c`, the first of them alphabetically, so everything after it moves, including the pad buffer:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/port_main.c'; s=open(p).read() i=s.index('#ifdef SH_PORT_LAYOUT_SHIFT'); j=s.index
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|    # build does (src/port/port_main.c).|    # build does (src/port/ps2/agent_ps2.c).|' tools/port/por
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; python3 - <<'EOF' s=open('reboot_test.py').read
+
+## Claude
+
+Everything is ready. Switching the server to the newest image (variant v3):
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; touch build/port/.udpfs_refresh; sleep 3; tail -c 80 build/port/udpfs_server.log; echo
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; until grep -aq "SH1 port: starting (build Oct 10 2026 10:31:25)" build/port/ps2_log.out; do sleep 3; done; sleep
+
+## Claude
+
+I think I've found the cause of the black screens, and a fix is ready to test.
+
+**Cause:** under Neutrino, a restart loads the next program while the IOP still runs the previous session's modules. The IOP's pad driver keeps writing controller data into the EE's pad buffer every frame, at the *old* build's address. With the same build that address is still the pad buffer, so nothing breaks. A new build has a different memory layout, so those writes land in its code or data, and it froze at the Konami logo.
+
+That fits the evidence:
+- The test's 14 plain restarts all worked.
+- About half of today's deploys froze, all at the Konami logo.
+- Both freezes I examined showed the same stuck transfer.
+
+**Fix:** before restarting, the game now:
+- closes the pad ports and shuts down the pad library;
+- waits for any disc read still in flight;
+- stops the sound hardware's audio DMA and every voice (the SPU2 isn't reset by the IOP reboot);
+- stops its own status and log transfers.
+
+**Test:** plain restarts never froze, so this test deploys a *different* build each cycle. I built four variants of the fix with shifted memory layouts. Each cycle runs New Game, the attract demo or a random cutscene for a random time, then deploys another variant. It checks that the variant boots and keeps running past the Konami logo, for 20 minutes. I also fixed the New Game command, which never reached the build in the earlier test: the game code wasn't being recompiled.
+
+**Please reset the PS2.** It's still frozen, and the reset will load variant v3. The test starts by itself once that boots, and I'll report when it finishes or at the first failure.
+
+## User
+
+I want to run a different test. Play back all of the cutscenes in the order that they're listed in the demo menu. I want to catch any crashes.
+
+## Claude
+
+Stopping the deploy test first, then I'll check what the Demo menu logs when a cutscene ends:
+
+- tool `TaskStop`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "printf" src/port/demo_menu.c; grep -n "^void Port_DemoTick" -A45 src/port/demo_menu.c | head -60
+
+## Claude
+
+I'll add two log lines to the Demo menu, "started" when the cutscene's event actually begins and "done" when it returns to the list, so the test can follow each cutscene precisely:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^int Port_DemoEventStart" -A30 src/port/demo_menu.c | head -40; grep -a "SH1 port: starting" build/port
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## Claude
+
+The build with the new log lines is deploying. Now the sweep script:
+
+- tool `Write`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/cutscene_sweep.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -a "SH1 port: starting" build/port/ps2_log.out | tail -1; timeout 10 python3 tools/port/ps2_ctl.py ping | g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -an "build Oct 10 2026 10:34:46" build/port/ps2_log.out | tail -1 | cut -d: -f1); until tail -n +$n bui
+
+## Claude
+
+The sweep starts when the attract demo begins. I'm also watching its output so I hear about any failure as it happens:
+
+- tool `Monitor`: cutscene sweep: failures and progress
+
+## Claude
+
+I stopped the deploy test, and the cutscene sweep is now running on the PS2.
+
+**What it does:**
+- Plays all 56 Demo-menu cutscenes in list order.
+- For each one, it waits until the game logs that the cutscene started, then that it finished (Harry has control for a second and the game returns to the list). I added both log lines for this test.
+- Every 10 seconds while a cutscene plays, it checks for:
+  - a crash report;
+  - a watchdog trip;
+  - the EE stopping;
+  - no new frame for 30 s.
+- After a crash or hang, it notes the details, restarts the game and continues with the next cutscene. If the EE stops completely, it stops, because the PS2 would need a manual RESET.
+- A cutscene that hasn't returned to gameplay within 8 minutes is recorded as a timeout.
+
+The build under test includes the restart fixes (pad shutdown and the others), so the post-crash restarts exercise those too. The full sweep will probably take 1½–2 hours. I'll report any failure as it happens and give you the full table at the end. If you see anything odd on screen, such as glitches or stuck audio, tell me the time so I can match it to a cutscene.
+
+## User
+
+The PS2 is on a black screen. Let me restart it
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/b6t8
+
+## Claude
+
+Yes, go ahead and reset it. The sweep is still waiting for the game to reach the attract demo, so it will start by itself once the console is back up.
+
+This freeze is the same deploy freeze as before: it happened 4–5 s after boot, at the first boot of the newly deployed build. The pad-shutdown fix is in this build, so **my pad theory was wrong**, or at best incomplete. The IOP shows the identical stuck transfer, into the same IOP address (0x198b0) as both earlier freezes.
+
+The pattern still holds: only the first boot of a newly deployed build freezes, and plain restarts never do. Your sweep doesn't deploy anything, so it shouldn't trigger this. I'll keep investigating the deploy freeze separately and avoid deploying while the sweep runs.
+
+## Claude
+
+The sweep reached its first crash, at cutscene #9 (map4_s01 func_800D2408), 10 s in. It's a write to address 0x1E0, which means a null pointer plus an offset. The game's read-only zero page catches that. The sweep has restarted the game and moved on. Looking up where it happened:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/b6t8
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import subprocess,bisect out=subprocess.run([__import__('os').path.expanduser('~/ps2dev/ee/bin
+
+## Claude
+
+The crash is in `func_80045468`, called from `WorldGfx_CybilMeshSwap`. Reading both:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "WorldGfx_CybilMeshSwap" src --include=*.c | head -5; f=$(grep -rln "^void WorldGfx_CybilMeshSwap\|^[a-
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -rln "func_80045468(s_Skeleton" src --include=*.c | head -3); echo "$f"; for x in $f; do sed -n "/^void
+
+## Claude
+
+The cause is clear. `func_80045468` walks the skeleton's bone hierarchy to show or hide Cybil's mesh variants. For this cutscene, `skel->boneHierarchy` is NULL: bone index 20 × 24 bytes = 0x1E0, which matches the faulting address exactly. So Cybil's mesh is swapped before her model's skeleton is set up.
+
+On a PS1 that write would silently land in low RAM (BIOS data) instead of crashing. This may be a Demo-menu artifact, since jumping straight into the event skips earlier setup, or a latent bug in the original game. I'll check after the sweep. The sweep has restarted the game and continued with #10.
+
+## Claude
+
+A second crash with the identical signature, in another map4_s01 cutscene (func_800D3420): the same Cybil mesh swap with a NULL skeleton. Checking #10, which ran in between:
+
+- tool `Bash`: grep "#10\|#11\|#12" /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/b6t86t2s1.output | cut -c1-120
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for fn in func_800D2408 func_800D3420; do echo "== $fn"; grep -ln "$fn" src/maps/map4_s01/*.c; done; f=$(grep -l
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=src/maps/map4_s01/map4_s01_2.c; sed -n "/^void func_800D2408(void)/,/^}/p" $f | sed -n 20,85p
+
+## Claude
+
+This cutscene spawns Cybil (`Chara_Spawn(Chara_Cybil, …)`) and expects her model to be loaded already. Checking where map4_s01 loads it, and under what condition:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "Chara_Cybil" src/maps/map4_s01/*.c | grep -v "Chara_Spawn" | head; grep -n "Chara_Load\|WorldObject.*In
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 160,190p src/maps/map4_s01/map4_s01_2.c; awk 'NR<180 && /^[a-zA-Z].*\(void\)/ {f=$0} END{}; NR==180{print
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import sys; sys.path.insert(0,'tools/port'); import cutscene_list as c evs=c.events('map4_s01'
+
+## Claude
+
+The list generator only detects a continuation when the earlier part is itself classed as a cutscene. `func_800D1FF0` (ev 7/8) loads Cybil and sets `EventFlag_302`, but it has none of the cutscene markers, so it isn't classed as one. As a result:
+- **#9 (func_800D2408, ev 9)** requires `EventFlag_302`. It's really the second part of `func_800D1FF0`'s scene, but it was listed as a cutscene of its own.
+- **#11 (func_800D3420, ev 17)** doesn't require that flag, but it still assumes Cybil was loaded earlier on the map, which the Demo menu skips.
+
+**Both crashes are Demo-menu artifacts**: the menu starts these cutscenes without the setup the real game always does first. They don't look like port bugs. In the real game the earlier event always runs first.
+
+I won't change anything while the sweep runs, since a rebuild and deploy would interrupt it. Once it's done, two fixes are possible:
+1. The list generator follows flag chains through every event, not just cutscene ones. That would list `func_800D1FF0` and drop #9 as a continuation.
+2. In Demo mode only, spawning a character whose model isn't loaded loads it first. That covers cases like #11.
+
+The sweep is on #12 and continuing.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep "#1[2-9]\|#20" /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e339
+
+## Claude
+
+#12–#19 all passed. #20 (map5_s00 func_800D6B00) crashed with a misaligned store to 0x3E98A9 (an odd address) in `func_800CB25C`, which is map overlay code. Reading it:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "func_800CB25C" src/maps/map5_s00/ src/maps/shared 2>/dev/null | head; grep -rn "func_800CB25C" src/ma
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,200p src/maps/map5_s00/unk_draw_800CB0D8.c
+
+## Claude
+
+The crash is a store to an odd address. Disassembling around the crash address in this overlay function to see which store it is:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ~/ps2dev/ee/bin/mips64r5900el-ps2-elf-objdump -d --start-address=0x2ecb40 --stop-address=0x2ecbb0 build/port/sh1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "i < 25; i += 3" src --include=*.c --include=*.h | head; grep -rn "sp10\[5\]\[5\]\|\[5\]\[5\];" src/map
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/maps/map5_s00/unk_draw_800CB0D8.c
+
+## Claude
+
+Crash #20 (map5_s00 func_800D6B00) is a **real port bug**, unlike the two Cybil crashes:
+- **Cause:** an array overflow in the original game. A loop writes three entries at a time and runs two entries past the end of a 5×5 array. On the PS1 that spills harmlessly into the next array. The PS2 compiler arranges the stack differently, so it overwrote a saved pointer. The crash then came from a store through that corrupted pointer.
+- **Impact:** this would crash in normal play too, whenever that map5_s00 effect draws in its second mode.
+- **Fix:** one spare row in each array, port build only. It's in the source but not built yet; I'll rebuild after the sweep.
+
+The sweep has restarted the game and is continuing.
+
+- tool `Monitor`: cutscene sweep: failures and progress
+
+- tool `Bash`: grep -v requested /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/b6t86t2s1.output | tail -n 12 | cut -c
+
+## Claude
+
+The sweep is at #23 of 56. So far there are three crashes and 20 clean runs:
+- **#9 and #11**: the Cybil model isn't loaded, a Demo-menu artifact.
+- **#20**: the array overflow, a real port bug. It's fixed in source and will be built after the sweep.
+
+I've re-armed the failure watch.
+
+## User
+
+The game has black screened again. Let me restart the PS2, and the script can keep running through the rest of the cutscenes.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -n 4 /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/task
+
+## Claude
+
+Hold on before resetting: this one isn't a freeze. The game is running cutscene #25 (map7_s02 func_800DA248):
+- Frames are still advancing (13,234 → 13,311).
+- It's drawing about 373 primitives a frame.
+- The EE, IOP and log are all healthy.
+
+So it's either a dark or faded scene, or a display problem specific to this cutscene. Is the screen fully black (no letterbox, no subtitles), and is any audio playing? If you'd rather not wait, a reset is fine: the sweep will notice the reboot and move on. Otherwise, it gives up on this cutscene after 8 minutes (as a timeout) and continues by itself.
+
+## User
+
+It's definitely a black screen with no sound
+
+## Claude
+
+The game is running but showing black with no sound, so it's probably waiting on something with the screen faded out. Looking at what this cutscene does and what the log shows since it started:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -an "demo: map7_s02 func_800DA248 requested" build/port/ps2_log.out | tail -1 | cut -d: -f1); tail -n +
+
+## Claude
+
+The cutscene event started and the game has sat in sysState 10 ever since, drawing a full scene each frame. Reading the cutscene's code and that state:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "SysState_\w* *= *10\b\|SysState_\w* *= *10," include -r | head -3; f=$(grep -ln "^void func_800DA248(vo
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "void Bgm_CrossfadeToTrack\|void Bgm_SongChange" src --include=*.c | head; f=$(grep -rln "^void Bgm_Cro
+
+## Claude
+
+It waits in three places: on `Sd_AudioStreamingCheck()` (an XA/streaming state left over), on file chunk loads, or for the MIDI channel task to clear. Reading the game state from memory to see which:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "sysStateSteps\|sysState;" include/bodyprog/*.h include/*.h | head -5; grep -rn "Sd_AudioStreamingCheck(
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 177,190p src/bodyprog/sound/sd_call.c; timeout 20 python3 tools/port/ps2_ctl.py md g_SysWork 0x20; timeou
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "xaAudioIdx" src/bodyprog/sound/*.c | head -30
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1295,1340p src/bodyprog/sound/sd_call.c; sed -n 1140,1160p src/bodyprog/sound/sd_call.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1580,1625p src/bodyprog/sound/sd_call.c; sed -n 1765,1790p src/bodyprog/sound/sd_call.c
+
+## Claude
+
+`xaAudioIdx` is only cleared by the XA stop task (task 2), so either that task never ran or it's stuck. Reading the sound task pool and streaming state:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for s in g_Sd_TaskPool g_Sd_CurrentTask g_Sd_AudioStreamingStates g_Sd_XaAudioPlayTracking g_Sd_XaTaskPending; d
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "^void Sd_TaskPoolExecute" src/bodyprog/sound/sd_call.c | cut -d: -f1); sed -n "$n,$((n+75))p" src/b
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "^static void Sd_BgmStop(void)\|^void Sd_BgmStop(void)" src/bodyprog/sound/sd_call.c | cut -d: -f1);
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Sd_TaskPoolExecute()" src --include=*.c | head; n=$(grep -n "Sd_TaskPoolExecute();" src/bodyprog/sys/g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "_ChannelsVolumeController" -A18 include/bodyprog/sound/sound_system.h | head -20; timeout 20 python3 to
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for i in 1 2 3 4 5 6 7 8; do timeout 20 python3 tools/port/ps2_ctl.py md gSDVolConfig 0x10 | head -1 | cut -c11-
+
+## Claude
+
+The volume cycles: it drops to 0, jumps back to 40, then drops again. Something keeps restarting the music and queueing another stop. Line 737 sets it to 40; reading that function:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 700,742p src/bodyprog/sound/sd_call.c; grep -rn "Sd_BgmSongSet\b\|Sd_MidiChannelTaskGet" src/bodyprog/sou
+
+## Claude
+
+I've traced the black screen. It isn't a crash or a hang in the port's code; the game's music logic is caught in a loop:
+- The cutscene's first step changes the music and waits for the crossfade to finish before fading the screen in.
+- Meanwhile the sound task queue alternates between "stop the music" (task 8, volume ramps down to 0) and "start the music channels" (task 7, volume back to 40). I sampled the volume dropping to 0, then jumping back to 40, over and over.
+- The crossfade waits for the queue to go idle, which never happens, so the screen stays black and silent. The game is otherwise running normally at full frame rate.
+
+My guess is another Demo-menu artifact: the music state left over from the previous cutscene plus the soft reset, which normal play wouldn't produce. I haven't confirmed that, though. To be sure, I'd start this cutscene the same way in the DuckStation reference and see whether the PS1 game also loops.
+
+No reset is needed. The sweep gives this cutscene 8 minutes, which runs out about now, and then moves on by itself. The next request soft-resets the game.
+
+## Claude
+
+Cutscene #25 timed out as expected (the music loop), and the sweep moved on to #26.
+
+## Claude
+
+Crash #37 (map6_s04 func_800E1D50) jumped to a raw PS1 address: pc = 0x80044B38. Some code called a PS1 function address directly, which doesn't exist in the port. Finding the caller and the target:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import subprocess,bisect,os out=subprocess.run([os.path.expanduser('~/ps2dev/ee/bin/mips64r590
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -ln "func_800D99E4" src/maps/map6_s04/*.c | head -3); echo "$f"; for x in $f; do grep -n "func_800D99E4
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "func_800D99E4" src/maps include/maps 2>/dev/null | head; grep -rn "func_800D99E4" asm/USA/maps/map6_s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n "/func_800D99E4(/,/^}/p" src/maps/characters/monster_cybil.c | head -50; grep -n "Anim_PlaybackLoop\|0x80
+
+## Claude
+
+The function looks up `MONSTER_CYBIL_ANIM_INFOS[status]` and calls its `playbackFunc`. Checking how that table is defined:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "MONSTER_CYBIL_ANIM_INFOS" include src --include=*.h --include=*.c | head -5; sed -n 40,60p include/map
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "MONSTER_CYBIL_ANIM_INFOS" asm/USA/maps/map6_s04 configs 2>/dev/null | head -5; ls tools/port | head -5
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "MONSTER_CYBIL_ANIM_INFOS\|800EA718\|0x800EA7" configs/USA/*.txt configs/USA/*.ld 2>/dev/null | head; g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "MONSTER_CYBIL_ANIM_INFOS" -A8 asm/USA/maps/map6_s04/data/1EAF0.data.s | head -12; grep -rn "\.word Anim
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; NM=~/ps2dev/ee/bin/mips64r5900el-ps2-elf-nm; $NM build/port/sh1.elf | grep -w "MONSTER_CYBIL_ANIM_INFOS\|Anim_Pl
+
+## Claude
+
+Another failure came in: #38 (map6_s04 func_800E2950, also map6_s04) stopped producing frames, and the watchdog caught it. Checking the table's contents in the ELF first:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ~/ps2dev/ee/bin/mips64r5900el-ps2-elf-objdump -s --start-address=0x519e60 --stop-address=0x519ea0 build/port/sh1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ~/ps2dev/ee/bin/mips64r5900el-ps2-elf-objdump -s --start-address=0x51a0e0 --stop-address=0x51a110 build/port/sh1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import re,glob,collections funcs={} for f in glob.glob('configs/USA/sym*.txt'):     for l in o
+
+## Claude
+
+No raw addresses in the data files at all, so the raw values come from somewhere else. Looking at the data file right after the split point:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "dlabel D_800EA776" asm/USA/maps/map6_s04/data/1EAF0.data.s | cut -d: -f1); sed -n "$((n-3)),$((n+20
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "D_800EA776" asm/USA/maps/map6_s04/data/1EAF0.data.s; sed -n 2780,2800p asm/USA/maps/map6_s04/data/1EAF0
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 190,215p tools/port/port_link.py
+
+## Claude
+
+That's the recompiler's data. The game's own data files are assembled in `ee_compile_check.sh`; checking how:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "data\|\.s\b\|as \|AS=" tools/port/ee_compile_check.sh | head -30
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; wc -l tools/port/ee_compile_check.sh; cat tools/port/ee_compile_check.sh | head -60; grep -rn "\.data\.s\|data/\
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "splat data\|data_asm\|asm/USA\|def .*data" tools/port/port_link.py | head -20
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 100,150p tools/port/port_link.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "^def assemble" tools/port/port_link.py | cut -d: -f1); sed -n "$n,$((n+30))p" tools/port/port_link.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls configs/USA/ | head -30; ls build/USA/*.elf 2>/dev/null | head; ls build/USA | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls configs/USA/maps | head -5; ls configs/USA/maps/*map6_s04* 2>/dev/null; ls build/USA/out | head; grep -c "typ
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn -m1 -A3 "glabel func_800D99E4" asm/USA/maps/map6_s04/matchings/Chara_MonsterCybil/func_800D99E4.s; grep
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import sys,re,difflib import importlib.util spec=importlib.util.spec_from_file_location('pl','
+
+- tool `Bash`: grep -v requested /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/b6t86t2s1.output | tail -n 16 | cut -c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep "#39" /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tas
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -rln "Parasite_Update(" src --include=*.c | head -1); echo $f; sed -n "/Parasite_Update(.*)\s*\/\//,/^}
+
+## Claude
+
+#39: `Parasite_Update` passes a NULL `boneCoords` to `Math_MatrixTransform`, so a parasite was spawned without its bone data. That fits the same pattern as the Cybil crashes: setup normally done by an earlier part of the CybilDeath sequence is missing when the Demo menu jumps in. #38's watchdog trip (no frame for 10 s) is on the same map and needs a closer look; I'll do that after the sweep.
+
+Here's where things stand at #39 of 56:
+
+| # | Cutscene | Result | Diagnosis |
+|---|---|---|---|
+| 9, 11 | map4_s01 | crash | Demo artifact: Cybil's model is loaded by an earlier event |
+| 20 | map5_s00 func_800D6B00 | crash | **Port bug**: array overflow corrupts the stack (fixed in source) |
+| 25 | map7_s02 func_800DA248 | black screen | music stop/start loop; probably a Demo artifact, not confirmed |
+| 37 | map6_s04 func_800E1D50 | crash | **Port bug**: function pointers stored as split 16-bit halves were never translated (108 of them in 6 data files; fixed in the build tool) |
+| 38 | map6_s04 func_800E2950 | no frames for 10 s | not yet diagnosed |
+| 39 | map6_s04 func_800E3244 | crash | parasite spawned without bone data; probably a Demo artifact |
+
+The remaining 30 completed normally. Neither port fix is built yet. I'll build them after the sweep finishes, then rerun the failed cutscenes.
+
+## Claude
+
+That's the #39 crash I just covered (the parasite spawned without bone data). The sweep is continuing with #40.
+
+- tool `Bash`: sed -n '/summary:/,$p' /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/b6t86t2s1.output | cut -c1-150; g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import subprocess,bisect,os nm=os.path.expanduser('~/ps2dev/ee/bin/mips64r5900el-ps2-elf-nm') 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n '/^void Port_SpuFlush/,/^}/p' src/port/ps2/spu_ps2.c; sed -n '/^static void flush_regs/,/^}/p' src/port/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "s_Packet\b\|s_Packet =\|s_PacketBuf\|s_Buf\b" src/port/ps2/spu_ps2.c | head -20; ~/ps2dev/ee/bin/mips64
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ~/ps2dev/ee/bin/mips64r5900el-ps2-elf-nm -n -S build/port/sh1.elf | grep -w "s_Status\|s_WPosBuf\|s_PacketBuf\|s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import re,glob,collections def labels(binary):     d={}     for f in glob.glob('asm/USA/%s/**/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## Claude
+
+Building everything: the array-overflow fix (game code), the split-pointer fix (data), and the packet guard:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1; unset SH1_LAYOUT_SHIFT; touch src/port/
+
+## Claude
+
+Five data files were rewritten. `player_control` wasn't among them, which confirms the port doesn't link that data. Checking entry 41 of the monster Cybil table, which held the PS1 address before:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ~/ps2dev/ee/bin/mips64r5900el-ps2-elf-objdump -s --start-address=0x519e60 --stop-address=0x519e90 build/port/sh1
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; python3 - <<'EOF' p='cutscene_sweep.py'; s=open
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; until grep -aq "SH1 port: starting (build Oct 10 2026 11:31:50)" build/port/ps2_log.out; do sleep 3; done; n=$(g
+
+## Claude
+
+The sweep finished all 56 cutscenes: 47 played through, 8 failed, and #41's crash knocked out its own restart, which is why the PS2 needs a reset. I've built fixes for the three port bugs it found, and the rerun of the failures starts by itself when you reset.
+
+| # | Cutscene | What happened | Cause |
+|---|---|---|---|
+| 9, 11 | map4_s01 | crash | Demo-menu artifact: an earlier event on the map loads Cybil's model, and the menu skips it |
+| 20 | map5_s00 func_800D6B00 | crash | **Port bug**: an array overflow in the original game. Harmless on the PS1, but on the PS2 it overwrites a saved pointer |
+| 25 | map7_s02 func_800DA248 | black screen, no sound | music stop/start loop that never settles. Probably a Demo artifact, not confirmed |
+| 37 | map6_s04 func_800E1D50 | crash | **Port bug**: 108 function pointers in data tables were stored as two loose 16-bit halves, so they kept their PS1 addresses. Includes monster Cybil's animation table |
+| 38 | map6_s04 func_800E2950 | no frames for 10 s | not diagnosed yet; same map as #37, may share its cause |
+| 39 | map6_s04 func_800E3244 | crash | a parasite spawned without bone data. Probably a Demo artifact |
+| 41 | map7_s03 func_800E3B6C | crash in the sound thread | **Port bug** of unknown origin: something wrote 0x1000 over the sound command pointer |
+
+**Fixes built (build 11:31:50):**
+- **#20:** a spare row in each array, port build only.
+- **#37:** the build tool now rewrites those split halves as proper function references. The table entry that crashed now points to the port's function.
+- **#41:** the sound code checks and repairs that pointer and logs when it happens. So it can't crash the sound thread or a restart again, and a recurrence will show in the log. I still need to find what's overwriting it.
+
+The PS1 build is unaffected: all three code fixes are port-only, and the data rewrite happens only in the port's build tool.
+
+**Please reset the PS2.** Once build 11:31:50 boots, the sweep reruns the failed cutscenes in this order: #20, 37, 38, 39, 41, 9, 11, 25. I expect #20 and #37 to pass now. #9, #11 and #25 should still fail, since those are Demo-menu problems I haven't touched yet. Fixing those means following event chains in the Demo list, which I can do next.
+
+**Still open: the deploy freeze.** Shutting down pad polling before a restart didn't fix it: the first boot after deploying a different build can still freeze at the Konami logo. Plain restarts and manual resets work. This rerun boots through a manual reset, so it isn't affected.
+
+- tool `Monitor`: cutscene rerun: results
+
+## Claude
+
+The old watch expired, so I've started a new one on the rerun. The rerun begins when you reset the PS2 and build 11:31:50 boots.
+
+## Claude
+
+#20 (map5_s00) now plays through to gameplay, so the array-overflow fix works. Next up is #37.
+
+## Claude
+
+#37 (map6_s04 monster Cybil) now passes, so the split-pointer fix works. Next is #38.
+
+## Claude
+
+#38 still trips the watchdog (no frame for 10 s), so it has a different cause from #37. Looking at the log for that run:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -an "demo: map6_s04 func_800E2950 requested" build/port/ps2_log.out | tail -1 | cut -d: -f1); sed -n "$
+
+## Claude
+
+#38 is an infinite loop in game code. About 1.7 s after the cutscene started, the game thread stopped presenting frames but kept the CPU at 100% (idle 0%), while sound carried on. So it's a busy loop, not a crash or a wait. To find it I'll need the game thread's stack while it's stuck. The sweep restarts immediately, so I'll rerun #38 by itself after this batch and read the stack over the network.
+
+## Claude
+
+#39 crashed the same way as before: the parasite has no bone data. That's expected, since this looks like a Demo-menu setup problem that none of the fixes touch. Next is #41, the sound pointer corruption.
+
+## Claude
+
+#41 crashed differently this time: the game thread loaded through a garbage pointer (0xC663AE1B) just 9 s in. That points to memory corruption in this cutscene, with different victims on each run. Checking where, and whether the sound-pointer guard caught anything:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import subprocess,bisect,os out=subprocess.run([os.path.expanduser('~/ps2dev/ee/bin/mips64r590
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -ln "^void func_800E3B6C(void)" src/maps/map7_s03/*.c); echo $f; sed -n "/^void func_800E3B6C(void)/,/^
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "EventFlag_578\b" src/maps/map7_s03/ | head -5
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 3820,3845p src/maps/map7_s03/map7_s03_3.c; awk 'NR<3828 && /^[a-zA-Z].*\(.*\).*\/\/ 0x/ {f=$0} NR==3828{p
+
+## Claude
+
+`EventFlag_578` is never set in C. It must be set by code still in assembly, or through a generic flag helper, so the list generator can't see the chain. Two general Demo-menu fixes would cover this whole group:
+1. **List generation:** treat a cutscene as a continuation if it uses camera data (DMS) without loading the file itself (covers #41), or if its required flag is the completion flag of *any* event on the map (covers #9).
+2. **Demo mode only:** when a cutscene spawns a character whose model isn't loaded, load it first (covers #9, #11, #39).
+
+The rerun still has #9, #11 and #25 to go. I'll summarise when it's done.
+
+## Claude
+
+#9 crashed the same way as before, as expected (Cybil's model never gets loaded). #11 and #25 remain.
+
+## Claude
+
+#11 crashed differently this time, through a garbage pointer again. Checking whether it's the same camera-data problem:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import subprocess,bisect,os out=subprocess.run([os.path.expanduser('~/ps2dev/ee/bin/mips64r590
+
+## Claude
+
+Same pattern: #11 reads camera and character tracks from `FS_BUFFER_11` without loading that file. #9 loads it, so #11 is effectively a later part of #9's scene. The "uses DMS without loading it" rule would exclude it. Waiting for #25, the last one in the rerun.
+
+- tool `Bash`: sed -n '/summary:/,$p' /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/b7nvosc7a.output | cut -c1-110; g
+
+## Claude
+
+The rerun is done: #20, #37 and #25 now pass. Every post-crash restart worked, thanks to the packet guard.
+
+Before reporting, I'll check that the PS1 build still matches and commit the fixes:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; make -j8 build < /dev/null 2>&1 | grep -c ": OK"; git status --short | head -30
+
+## Claude
+
+All 50 checksums pass. Adding the findings to the docs, then committing:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "Planning Doc.md" <<'EOF'  ## Restart tests and the Demo cutscene sweep (2026-10-10) - Restarts: before L
+

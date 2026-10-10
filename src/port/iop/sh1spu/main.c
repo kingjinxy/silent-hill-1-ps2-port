@@ -28,6 +28,7 @@ IRX_ID("sh1spu", 1, 0);
 #define OP_WRAP  4 /* continue at the start of the ring */
 #define OP_XA    5 /* a: DVD sector of HILL., b: PS1 sector in it, c: file | channel << 8 (xa.c) */
 #define OP_XASTOP 6
+#define OP_SHUTDOWN 7 /* the game is about to restart: stop every transfer and voice */
 
 void xa_init(void);
 void xa_start(u32 hillLsn, u32 index, u32 file, u32 chan);
@@ -111,6 +112,8 @@ static void key_gap(void)
     }
 }
 
+static int s_Down; /* OP_SHUTDOWN done: nothing more is sent to the EE */
+
 /** Runs one command at ring offset pos; returns its size in the ring. */
 static u32 run(u32 pos)
 {
@@ -151,6 +154,18 @@ static u32 run(u32 pos)
         case OP_XASTOP:
             xa_stop();
             return 16;
+        case OP_SHUTDOWN:
+        {
+            extern void xa_shutdown(void); /* xa.c */
+            xa_shutdown();
+            REG(0x1A4) = 0xFFFF; /* core 0 KOFF: every voice */
+            REG(0x1A6) = 0x00FF;
+            REG(0x188) = REG(0x18A) = REG(0x190) = REG(0x192) = 0; /* no voice mixed in */
+            sceSdVoiceTransStatus(1, 1); /* no sample upload left running (they're waited for anyway) */
+            printf("sh1spu: shut down for a restart\n");
+            s_Down = 1;
+            return 16;
+        }
         case OP_WRAP:
             return RING_SIZE - pos;
     }
@@ -175,6 +190,10 @@ static void loop(void* arg)
             }
             send_status();
             idle = 0;
+            while (s_Down) /* the last status went out: no more DMA into EE memory until the reboot */
+            {
+                DelayThread(100000);
+            }
             continue;
         }
         if (++idle >= 4)

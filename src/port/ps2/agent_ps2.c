@@ -10,7 +10,8 @@
  * VM), "OS" exit to the PS2 browser (rom0:OSDSYS), "MD" print memory (address, length) to the log as
  * hex ("md ..." lines: tools/port/ps2_ctl.py md collects them), "PI" ping (answered by the IOP
  * module itself), "WH" print where the interrupted code was at the last 16 vertical blanks (a hung
- * main loop). Commands run in the agent thread, so they also work in a kept crashed state.
+ * main loop), "NG" start a New Game (normal difficulty). Commands run in the agent thread, so they
+ * also work in a kept crashed state.
  * In PCSX2 there's no ministack, so the module doesn't load; the agent thread runs anyway, for the
  * in-game reset combo (libpad_ps2.c: Port_AgentRequest).
  */
@@ -21,6 +22,16 @@
 #include <sifrpc.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifdef SH_PORT_LAYOUT_SHIFT
+/* Restart tests (tools/port/port_link.py SH1_LAYOUT_SHIFT): the code, data and zeroed data of
+ * src/port/ps2/ after this file (the first of them) move by this many bytes. */
+#define LAYOUT_STR2(x) #x
+#define LAYOUT_STR(x)  LAYOUT_STR2(x)
+__asm__(".section .text\n.space " LAYOUT_STR(SH_PORT_LAYOUT_SHIFT) "\n.section .data\n.space "
+        LAYOUT_STR(SH_PORT_LAYOUT_SHIFT) "\n.previous");
+static char s_LayoutShift[SH_PORT_LAYOUT_SHIFT] __attribute__((used));
+#endif
 
 extern unsigned char sh1agent_irx[];
 extern unsigned int  size_sh1agent_irx;
@@ -124,6 +135,11 @@ static void agent(void* arg)
             extern void Port_DemoRemote(int idx); /* src/port/demo_menu.c */
             Port_DemoRemote((int)mailbox()->arg);
         }
+        else if (cmd == CMD('N', 'G'))
+        {
+            extern void Port_NewGameRemote(void); /* src/port/demo_menu.c */
+            Port_NewGameRemote();
+        }
         else if (cmd == CMD('W', 'H'))
         {
             extern unsigned int Port_PcSamples[16], Port_PcSampleCount; /* libetc_ps2.c */
@@ -146,6 +162,12 @@ unsigned int Port_AgentLogBuffer(void)
 unsigned int Port_AgentLogAck(void)
 {
     return mailbox()->pad[2];
+}
+
+/** Before a restart: no more status sends to the IOP agent from the vertical blank interrupt. */
+void Port_AgentQuiesce(void)
+{
+    s_MailboxOn = 0;
 }
 
 /** A command from the game itself (thread context), e.g. the in-game reset combo: "OS". */

@@ -52,8 +52,17 @@ bool func_800CB25C(POLY_FT4** poly, s32 idx) // 0x800CB25C
         s32             field_160;
     } s_func_800CB25C;
 
+#ifdef SH_PORT
+    /* The loop below stores three entries at a time up to index 26 of these 25: on the PS1 the
+     * overflow lands in the other array, but GCC's frame for the PS2 put a saved pointer there
+     * (the Demo cutscene map5_s00 func_800D6B00 crashed with a store to an odd address). A spare
+     * row takes it. */
+    DVECTOR          sp10[6][5];
+    s32              sp78[6][5];
+#else
     DVECTOR          sp10[5][5];
     s32              sp78[5][5];
+#endif
     s32              j;
     s32              i;
     s32              var_v0_4;

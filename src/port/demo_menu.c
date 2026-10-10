@@ -121,6 +121,7 @@ int Port_DemoEventStart(void)
     s_EventPending = 0;
     s_Started      = 1;
     ev             = &g_MapOverlayHdr.mapEvents[g_PortCutscenes[s_Chosen].event];
+    printf("demo: %s started\n", g_PortCutscenes[s_Chosen].name);
     if (ev->requiredEventFlag != EventFlag_None)
     {
         Savegame_EventFlagSet(ev->requiredEventFlag);
@@ -198,6 +199,7 @@ void Port_DemoTick(void)
     }
     if (s_ControlFrames >= 60)
     {
+        printf("demo: %s done (gameplay), back to the list\n", g_PortCutscenes[s_Chosen].name);
         s_Chosen      = -1;
         s_Started     = 0;
         s_ReturnToList = 1;
@@ -228,6 +230,29 @@ void Port_DemoRemote(int idx)
     {
         g_SysWork.sysFlags |= SysFlag_DoWarmReset;
     }
+}
+
+/** A New Game (normal difficulty) requested over the network, for hardware tests: as the main menu's
+ * New Game. From elsewhere in the game it soft-resets to the main menu first. */
+static volatile int s_RemoteNewGame;
+
+void Port_NewGameRemote(void)
+{
+    printf("newgame: requested\n");
+    s_RemoteNewGame = 1;
+    s_Remote        = -1;
+    s_Chosen        = -1;
+    if (g_GameWork.gameState != GameState_MainMenu)
+    {
+        g_SysWork.sysFlags |= SysFlag_DoWarmReset;
+    }
+}
+
+int Port_NewGameRemoteTake(void)
+{
+    int r           = s_RemoteNewGame;
+    s_RemoteNewGame = 0;
+    return r;
 }
 
 int Port_DemoRemotePending(void)

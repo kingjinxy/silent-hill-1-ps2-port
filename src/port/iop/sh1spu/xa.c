@@ -423,6 +423,16 @@ void xa_stop(void)
     s_FifoOut = s_FifoIn;
 }
 
+/** Before the game restarts (OP_SHUTDOWN): no stream, the sound data input (core 0's DMA) stopped,
+ * and no disc read of ours left running. A restart reboots the IOP but not the SPU2. */
+void xa_shutdown(void)
+{
+    xa_stop();
+    s_Stopped = 1;
+    sceSdBlockTrans(0, SD_TRANS_STOP, NULL, 0);
+    sceCdSync(0);
+}
+
 /** Sets up the threads and starts core 0's sound data input, playing silence. Channel 0's DMA then
  * stays with it: sample uploads use channel 1 (sh1spu main.c). */
 void xa_init(void)

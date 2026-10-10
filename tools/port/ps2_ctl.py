@@ -9,6 +9,7 @@ sh1agent.irx (src/port/iop/sh1agent, UDP port 62968) and prints its answer.
     python3 tools/port/ps2_ctl.py md g_SysWork 0x400 [--out sys.bin]   # read memory (hex in the log)
     python3 tools/port/ps2_ctl.py where        # where the game was at the last 16 vertical blanks
     python3 tools/port/ps2_ctl.py demo "map3_s00 func_800D0CF8"   # play a Demo menu cutscene (name or number)
+    python3 tools/port/ps2_ctl.py newgame      # start a New Game (normal difficulty), from anywhere
 
 md takes an address (hex) or a symbol of the running build (build/port/sh1.elf, e.g. g_WorldMapWork or
 g_WorldMapWork+0x138) and a length (at most 64 KB per command); it waits for the game's "md" lines in
@@ -34,7 +35,7 @@ NM = os.path.join(os.environ.get("PS2DEV", os.path.expanduser("~/ps2dev")), "ee"
 
 PORT = 62968
 COMMANDS = {"ping": b"PI", "restart": b"RS", "deploy": b"RS", "osd": b"OS", "md": b"MD", "where": b"WH",
-            "demo": b"DM"}
+            "demo": b"DM", "newgame": b"NG"}
 
 
 def address(text):

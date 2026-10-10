@@ -23,5 +23,7 @@ int  Port_DemoReturnToList(void); /* main menu: open the Demo list (once after a
 void Port_DemoRemote(int idx);    /* network request (agent_ps2.c "DM", tools/port/ps2_ctl.py demo) */
 int  Port_DemoRemoteTake(void);   /* main menu: the requested cutscene, or -1 */
 int  Port_DemoRemotePending(void);
+void Port_NewGameRemote(void);    /* network request (agent_ps2.c "NG", tools/port/ps2_ctl.py newgame) */
+int  Port_NewGameRemoteTake(void); /* main menu: 1 once after a request */
 
 #endif

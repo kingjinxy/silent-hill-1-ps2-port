@@ -525,3 +525,29 @@ Ideas to try, roughly by expected payoff:
 - The long single-call stalls in the profile (GsSwapDispBuff up to 216 ms, the sound task's VSync up to 29 ms) were the profiler's own report and other printfs blocking on udptty. GsSwapDispBuff's longest call is now 3.8 ms (the report).
 - Pad polling: padInfoMode ×12 (IOP RPCs) every frame cost ~210k cycles a frame on hardware. The mode info is now read only when the pad's state changes, plus once a second: Pad_Poll 216k → 15k cycles a frame.
 - Kaufmann cutscene, profiling build 09:44: 50–55 fps through the cutscene (47.1 mean at the last measurement).
+
+## Restart tests and the Demo cutscene sweep (2026-10-10)
+- Restarts: before LoadExecPS2 the game now:
+  - closes the pad ports and ends libpad (PADMAN writes pad data into EE memory every vertical blank until the IOP reboots, which under Neutrino comes after the next ELF is loaded);
+  - waits for a disc read in flight;
+  - sends OP_SHUTDOWN to sh1spu (stops the XA stream, the SPU2's sound data input and every voice, and its status DMAs);
+  - stops the agent's status sends and waits for the EE-to-IOP SIF DMA to go idle.
+- Restart test (14 restarts at random points of a New Game, the attract demo, and random Demo cutscenes): all came up.
+- Still open: the first boot after deploying a *different* build can freeze at the Konami logo. It happened on 6 of about 12 deploys; plain restarts of the same build never froze. Symptoms:
+  - EE completely stopped (no watchdog colour);
+  - the IOP's SIF1 channel (ch10) stuck mid-transfer at IOP 0x198b0 every time.
+  - Closing the pads didn't fix it. Prebuilt layout variants (port_link.py SH1_LAYOUT_SHIFT, build/port/variants) are ready for testing deploys.
+- `ps2_ctl.py newgame`: a New Game (normal), like the main menu's (from gameplay or the menu; not during the boot logos).
+- Demo cutscene sweep (all 56, list order, crashes and hangs watched): 47 played through. Results:
+  - **Port bugs, fixed:**
+    - map5_s00 func_800CB25C writes three GTE results at a time past the end of 5×5 stack arrays. Harmless on the PS1; in GCC's frame it overwrote a saved pointer. The arrays have a spare row under SH_PORT.
+    - Data after a label that isn't 4-aligned is written by splat as .short halves, so function pointers there were two numbers the port's link couldn't relocate. 108 of them, all anim-info playback functions, in 5 linked overlay data files (map6_s04's monster Cybil table among them: a jump to 0x80044B38). port_link.py fix_split_pointers rewrites a 4-aligned pair that forms a function address of that binary (or bodyprog's/main's) as `.word <function>`.
+  - **Demo-menu artifacts** (later parts of a scene started on their own, so they miss what an earlier event set up):
+    - map4_s01 func_800D2408 / func_800D3420: Cybil's model is loaded by func_800D1FF0 (not detected as a cutscene), and func_800D3420 uses the DMS that func_800D2408 loads.
+    - map7_s03 func_800E3B6C: uses the DMS loaded by func_800E3390. The garbage keyframes made wild stores, one of which hit spu_ps2.c's s_Packet (now checked and repaired, logged as "spu: s_Packet was ...").
+    - map6_s04 func_800E3244: a parasite without bone coordinates.
+    - map7_s02 func_800DA248 hung in a music stop/start loop right after map7_s01 func_800D9C9C; started after a restart, it played through.
+  - **Not yet diagnosed:** map6_s04 func_800E2950 (first part of the CybilDeath sequence) busy-loops about 1.7 s after starting (no frames, 0% idle), on both runs.
+- Next for the Demo menu:
+  - The list should treat a cutscene as a continuation when it reads DMS data it doesn't load, or when its required flag is the completion flag of any event on the map (listing that event instead).
+  - In Demo mode, spawning a character whose model isn't loaded could load it.

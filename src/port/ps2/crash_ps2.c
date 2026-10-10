@@ -15,6 +15,7 @@
 #include <kernel.h>
 #include <ee_debug.h>
 #include <sifrpc.h>
+#include <libcdvd.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -52,9 +53,30 @@ static void stay(void)
  * fails. The TV background shows the step reached (stage_color). */
 void Port_Restart(void)
 {
+    extern void Port_SpuShutdown(void);   /* spu_ps2.c */
+    extern void Port_AgentQuiesce(void);  /* agent_ps2.c */
+    extern void Port_PadShutdown(void);   /* libpad_ps2.c */
+    unsigned int t0, t;
+    int          i;
     printf("port: restarting %s\n", RELAUNCH_ELF);
-    VSync(0); /* let the message go out before the network modules go away */
+    /* Quiet first. Under Neutrino the next ELF is loaded before the IOP reboots, so anything on the
+     * IOP still writing into EE memory (PADMAN's pad data every vertical blank, a disc read, sound
+     * status) writes into the new program; with a new build, into its code or data (the boot freezes
+     * after deploys). And the SPU2 isn't reset by the IOP reboot: its sound data input is stopped. */
+    Port_PadShutdown();
+    for (i = 0; i < 60 && sceCdSync(1); i++) /* a disc read in flight (up to a second) */
+    {
+        VSync(0);
+    }
+    Port_SpuShutdown();
+    VSync(0); /* let the messages go out before the network modules go away */
     VSync(0);
+    Port_AgentQuiesce();
+    __asm__ volatile("mfc0 %0, $9" : "=r"(t0));
+    do /* the EE-to-IOP SIF DMA idle (up to 100 ms) */
+    {
+        __asm__ volatile("mfc0 %0, $9" : "=r"(t));
+    } while ((*(volatile unsigned int*)0x1000C400 & 0x100) && t - t0 < 29491200u);
     stage_color(0xC00000); /* blue: restarting */
     LoadExecPS2(RELAUNCH_ELF, 0, NULL);
     stage_color(0xC000C0); /* magenta: LoadExecPS2 returned */
