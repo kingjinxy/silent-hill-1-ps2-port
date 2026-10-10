@@ -38,6 +38,7 @@ void Gte_CmdNclip(void); /* 0x1400006 */
 void Gte_CmdDpcs(void);  /* 0x0780010 */
 /** Batched exact RTPS over `count` vertices in place (see gte.c); 0 when it can't (use the GTE). */
 int Gte_RtpBatch(unsigned int* xy, short* z, int count);
+int Gte_NcBatch(const short* v, unsigned int* out, int count);
 #if !defined(GTE_IMPLEMENTATION) && !defined(SH_PORT_PROF)
 static inline void Gte_CommandDirect(unsigned int cmd)
 {

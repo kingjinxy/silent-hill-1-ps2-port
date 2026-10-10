@@ -59,7 +59,7 @@ Frame rate:
 Ranked by expected gain relative to risk. Each must keep output identical to the PS1, or prove its differences invisible, using the frame comparisons against DuckStation and the deterministic benchmark (tools/port/bench_frames.sh, compare_dumps.py).
 
 1. **Collapse the fog double polygons.** The GS's per-vertex fog (FOG in the vertex data, FOGCOL, FGE in PRIM) blends toward a fog colour, as DPCS does. One fogged, textured polygon instead of a textured one plus a fog overlay would roughly halve world primitives and end the state alternation. Accuracy question: the GS interpolates fog per pixel and rounds differently from the PS1's blend of the overlay. The plan is to measure, then compare frames.
-2. **Native C for libgs's model renderer.** `GsSortObject4J` and the `GsTMDfast*` family (per-vertex transform, light and fog; every character) still run as recompiled MIPS (build/port/recomp/libgs_*.c, libgte_g3/g4.c), through wrappers, without our inline GTE paths. Rewriting them in C from the decomp lets GCC optimise them and lets them use the exact inline GTE helpers. This is PsyZ's central idea.
+2. **Exact batched GTE work in the game's own mesh code.** (First written as "native C for libgs's model renderer". That was wrong: the game calls `GsSortObject4J`/`GsTMDfast*` only from the item screens. Characters and world are drawn by its own C code, Gfx_MeshDrawPort and helpers; see the 2026-10-10 log entry.) Replace per-command GTE emulation in the hot loops with exact batch functions (Gte_RtpBatch, Gte_NcBatch), the last command of each loop still on the GTE so its registers end up as on the PS1. Verified with SH_PORT_CHECK_BATCH builds.
 3. **Scratchpad on the EE's SPR.** `g_PsxScratch` is ordinary cached RAM today (0x8a2f40). At 0x70000000 every access is single-cycle and nothing is evicted. Watch out for any DMA straight from scratchpad memory: SPR needs its own DMA channel.
 4. **Texture page and CLUT cache.** Largely in place already: gpu_gs.c caches 4/8-bit pages (28 slots, PSMT4/PSMT8 uploaded from g_PortVram) and CLUTs (128 rows, CSM2). What's left: ~540 TEX0 changes and as many CLUT loads per frame in the Kaufmann cutscene. A CLUT load is skipped only when the GS still holds the same CLUT, so alternating textures reload every time. Possible: order or batch by texture within an OT bucket (not allowed: draw order is visible with semi-transparency), or make a reload cheaper. (PsyZ's PSP backend uses the same page/CLUT cache design.)
 5. **CPU/GS overlap with a double display list.** Build frame N+1's GIF packets while frame N's DMA runs, waiting only for the previous frame (PsyZ's PSP model). Async GIF sends were tried and reverted on 2026-10-09; those freezes were probably the ResetCallback bug. Retry on hardware.
@@ -161,3 +161,33 @@ Performance, PCSX2, Kaufmann cutscene, profiling build, averaged over the scene:
 −562k cycles a frame (−19% of DrawOTag), +10% fps: 82% of what dropping the underlays saved, with the picture unchanged.
 
 Next: the remaining ~2.4M in DrawOTag (per-primitive parsing and packing, ~540 TEX0/CLUT changes), and option 2 (native libgs renderer) for the 2.8M game update.
+
+### 2026-10-10: character meshes, exact batches (option 2): kept
+
+Where the game update goes. Kaufmann cutscene, PCSX2, GTE command call sites ("gtesites" lines, matched against the build that produced them):
+
+| call site | command | calls a frame |
+|---|---|---|
+| Vw_MultiplyAndTransformMatrix | MVMVA | 318 (bone matrices) |
+| func_8005A900 | RTPT | 221 (character vertices, 3 each) |
+| func_8005AA08 | NCT | 220 (character vertex lighting, 3 each) |
+| Particle_SnowDraw | RTPS | 117 |
+| func_8006B318, WorldEnv_LightTransform | MVMVA, GPF | 94, 82, 41 |
+
+Costs per command through the general GTE emulator: RTPT ~1,400 cycles, NCT ~840, MVMVA ~360, RTPS ~600.
+
+An -finstrument-functions profile also lists Port_DepthCue/Dcpl/Dpcs (the fog colours, ~3,400 calls a frame) high, but that build turns inline functions into real calls with a hook each, so small functions are much inflated there.
+
+Done:
+- func_8005A900 (port version): all vertex triples but the last through Gte_RtpBatch, as func_80057B7C already did for the world mesh. Before the last RTPT, SZ3 is set to the batch's last depth, so the FIFO push leaves SZ0 as the PS1 loop does.
+- func_8005AA08: new Gte_NcBatch (gte.c: NC with sf = 1, lm = 1, as NCT 0x0D80420 computes each vertex; the arithmetic of normal_color_small mode 0). All normal triples but the last go through it. The last runs through the original code: scratch fields, ldv3c, NCT, strgb3.
+- Check build (SH1_EXTRA_CFLAGS=-DSH_PORT_CHECK_BATCH), Kaufmann cutscene: **0 mismatches** over 2,162,691 character vertices and 2,146,305 normals (world batch and NCLIP checks also 0).
+
+PCSX2, Kaufmann cutscene, profiling build:
+
+| | game update | GTE RTPT | GTE NCT | fps |
+|---|---|---|---|---|
+| before | 2,849 | 379 | 185 | 55.3 |
+| after | 2,621 | 109 | 29 | 57.3 |
+
+Next in the game update: MVMVA (178k, bone matrices in Vw_MultiplyAndTransformMatrix), RTPS (115k, mostly snow particles), the remaining ~1.9M of game C code (to profile with PROF sections, since the instrumented build distorts small functions).

@@ -3655,6 +3655,88 @@ void func_8005A838(s_GteScratchData* scratchData, q19_12 scale) // 0x8005A838
                  Q12_MULT(g_WorldEnvWork.field_24.b, scale));
 }
 
+#ifdef SH_PORT
+/** Port version (PS2 Optimizations.md, character meshes): the same results, with all vertex triples
+ * but the last transformed in one batch (`Gte_RtpBatch`, exact); the last goes through the GTE as
+ * before. Its SZ3 is first set to the batch's last depth, so RTPT's FIFO push leaves SZ0 as the PS1
+ * loop does (the GTE registers end up the same). */
+void func_8005A900(s_MeshHeader* meshHdr, s32 offset, s_GteScratchData* scratchData, MATRIX* viewMat) // 0x8005A900
+{
+    DVECTOR* inXy;
+    u16*     inZ;
+    DVECTOR* outXy;
+    u16*     outZ;
+    s32      n, done, i;
+
+    if (meshHdr->vertexCount == 0)
+    {
+        return;
+    }
+
+    SetRotMatrix(viewMat);
+    SetTransMatrix(viewMat);
+
+    outXy = &scratchData->screenXy_0[offset];
+    outZ  = &scratchData->screenZ_168[offset];
+    inXy  = meshHdr->verticesXy;
+    inZ   = meshHdr->verticesZ;
+    n     = (meshHdr->vertexCount + 2) / 3 * 3; // as the PS1 loop: whole triples
+    done  = 0;
+
+#ifdef SH_PORT_CHECK_BATCH
+    // Check build: the batch into a copy, then the GTE for every triple (done = 0), compared.
+    static u32 chkXy[512];
+    static s16 chkZ[512];
+    s32        chk = n > 3 && n - 3 <= 512;
+    if (chk)
+    {
+        memcpy(chkXy, inXy, (n - 3) * 4);
+        memcpy(chkZ, inZ, (n - 3) * 2);
+        chk = Gte_RtpBatch(chkXy, chkZ, n - 3);
+    }
+#else
+    if (n > 3)
+    {
+        memcpy(outXy, inXy, (n - 3) * 4);
+        memcpy(outZ, inZ, (n - 3) * 2);
+        if (Gte_RtpBatch((u32*)outXy, (s16*)outZ, n - 3))
+        {
+            done = n - 3;
+            Gte_DataWrite(19, outZ[n - 4]); // SZ3: becomes SZ0 with the last RTPT, as on the PS1
+        }
+    }
+#endif
+
+    for (i = done; i < n; i += 3)
+    {
+        gte_LoadVector0_1_2_XYZ(&inXy[i], &inZ[i]);
+        gte_rtpt();
+        gte_FetchScreen0_1_2_XYZ(&outXy[i], &outZ[i]);
+    }
+#ifdef SH_PORT_CHECK_BATCH
+    if (chk)
+    {
+        static s32 checks, mismatches;
+        for (i = 0; i < n - 3; i++)
+        {
+            checks++;
+            if (chkXy[i] != *(u32*)&outXy[i] || (u16)chkZ[i] != outZ[i])
+            {
+                if (mismatches++ < 20)
+                {
+                    printf("chara rtpt check: vertex %d: batch %08x z %d, GTE %08x z %d\n", i, chkXy[i], (u16)chkZ[i],
+                           *(u32*)&outXy[i], outZ[i]);
+                }
+            }
+        }
+        if ((checks & 0x3FFF) < n - 3)
+        {
+            printf("chara rtpt check: %d vertices, %d mismatches\n", checks, mismatches);
+        }
+    }
+#endif
+}
+#else
 void func_8005A900(s_MeshHeader* meshHdr, s32 offset, s_GteScratchData* scratchData, MATRIX* viewMat) // 0x8005A900
 {
     DVECTOR* inXy;  // Model-space XY input
@@ -3689,7 +3771,12 @@ void func_8005A900(s_MeshHeader* meshHdr, s32 offset, s_GteScratchData* scratchD
         inZ   += 3;
     }
 }
+#endif
 
+#ifdef SH_PORT_CHECK_BATCH
+static s32  s_PortNcCheckCount; /* func_8005AA08's check: normals the batch did, and its colours */
+static u32* s_PortNcCheckRgb;
+#endif
 u8 func_8005AA08(s_MeshHeader* meshHdr, s32 arg1, s_GteScratchData2* scratchData) // 0x8005AA08
 {
     // Same as `gte_strgb3`, but takes `VECTOR3` pointer to store results.
@@ -3721,6 +3808,50 @@ u8 func_8005AA08(s_MeshHeader* meshHdr, s32 arg1, s_GteScratchData2* scratchData
 
     color.cd = 0;
     gte_ldrgb(&color);
+#ifdef SH_PORT
+    {
+        // Port (PS2 Optimizations.md, character meshes): all normal triples but the last lit in one
+        // batch (`Gte_NcBatch`, exact, as NCT computes them); the last goes through the code below
+        // as before, so the GTE registers and the scratch fields end up as on the PS1.
+        static s16 vbuf[3 * 3 * 256];
+        s32        triples = meshHdr->normalCount <= 3 ? 1 : (meshHdr->normalCount + 2) / 3, i;
+        if (triples > 1 && triples - 1 <= 256)
+        {
+            s_Normal* nrm = meshHdr->normals;
+            for (i = 0; i < (triples - 1) * 3; i++)
+            {
+                vbuf[i * 3]     = nrm[i].nx << 5;
+                vbuf[i * 3 + 1] = nrm[i].ny << 5;
+                vbuf[i * 3 + 2] = nrm[i].nz << 5;
+            }
+#ifdef SH_PORT_CHECK_BATCH
+            // Check build: the batch into a copy; the PS1 code below lights every triple; compared there.
+            static u32 chkRgb[3 * 256];
+            s_PortNcCheckCount = Gte_NcBatch(vbuf, chkRgb, (triples - 1) * 3) ? (triples - 1) * 3 : 0;
+            s_PortNcCheckRgb   = chkRgb;
+            if (0)
+#else
+            if (Gte_NcBatch(vbuf, (u32*)&scratchData->field_21C[arg1], (triples - 1) * 3))
+#endif
+            {
+                // The last triple, as the PS1 code's final iteration.
+                normals = &nrm[(triples - 1) * 3];
+                points  = &scratchData->field_21C[arg1 + triples - 1];
+                for (i = 0; i < 3; i++)
+                {
+                    *(u32*)&scratchData->u.normal.field_3DC = *(u32*)&normals[i];
+                    scratchData->u.normal.field_3E0[i].vx = scratchData->u.normal.field_3DC.nx << 5;
+                    scratchData->u.normal.field_3E0[i].vy = scratchData->u.normal.field_3DC.ny << 5;
+                    scratchData->u.normal.field_3E0[i].vz = scratchData->u.normal.field_3DC.nz << 5;
+                }
+                gte_ldv3c(scratchData->u.normal.field_3E0);
+                gte_nct();
+                gte_strgb3(&points->vx, &points->vy, &points->vz);
+                return;
+            }
+        }
+    }
+#endif
 
     normals = meshHdr->normals;
     *(u32*)&scratchData->u.normal.field_3DC = *(u32*)&normals[0];
@@ -3769,6 +3900,27 @@ u8 func_8005AA08(s_MeshHeader* meshHdr, s32 arg1, s_GteScratchData2* scratchData
     }
 
     gte_strgb3(&points->vx, &points->vy, &points->vz); // Store result from final `gte_nct`.
+#ifdef SH_PORT_CHECK_BATCH
+    if (s_PortNcCheckCount)
+    {
+        static s32 checks, mismatches;
+        u32*       gte = (u32*)&scratchData->field_21C[arg1];
+        s32        i;
+        for (i = 0; i < s_PortNcCheckCount; i++)
+        {
+            checks++;
+            if (s_PortNcCheckRgb[i] != gte[i] && mismatches++ < 20)
+            {
+                printf("chara nc check: normal %d: batch %08x, GTE %08x\n", i, s_PortNcCheckRgb[i], gte[i]);
+            }
+        }
+        if ((checks & 0x3FFF) < s_PortNcCheckCount)
+        {
+            printf("chara nc check: %d normals, %d mismatches\n", checks, mismatches);
+        }
+        s_PortNcCheckCount = 0;
+    }
+#endif
 }
 
 void func_8005AC50(s_MeshHeader* meshHdr, s_GteScratchData2* scratchData, GsOT_TAG* ot, bool otShift) // 0x8005AC50

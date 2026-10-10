@@ -1434,3 +1434,42 @@ int Gte_RtpBatch(u32* xy, s16* z, int count)
     }
     return 1;
 }
+
+/** Batched NC (normal colour) with sf = 1, lm = 1, as NCT 0x0D80420 computes each of its three
+ * vertices: `v` holds `count` normals (VX, VY, VZ triplets), out[i] the colour the command pushes
+ * (R | G << 8 | B << 16 | RGBC's code byte << 24), from the current LLM, LCM and BK. The same
+ * arithmetic as normal_color_small (mode 0). GTE registers and FLAG are left untouched (callers run
+ * their last command through the GTE itself). Returns 0, doing nothing, outside the fast path's
+ * range. (Character mesh lighting, func_8005AA08: ~220 NCT a frame in the Kaufmann cutscene.) */
+int Gte_NcBatch(const short* v, unsigned int* out, int count)
+{
+    u32 code;
+    s32 i, k;
+    if (g_GteCtrlDirty)
+    {
+        ctrl_refresh();
+    }
+    if (!s_Small)
+    {
+        return 0;
+    }
+    code = d[D_RGBC] & 0xFF000000u;
+    for (i = 0; i < count; i++)
+    {
+        s32 vx = v[i * 3], vy = v[i * 3 + 1], vz = v[i * 3 + 2], ir[3];
+        u32 rgb = code;
+        for (k = 0; k < 3; k++)
+        {
+            s32 mac = (s32)(((s64)(m_llm[k * 3] * vx) + (s64)(m_llm[k * 3 + 1] * vy) + (s64)(m_llm[k * 3 + 2] * vz)) >> 12);
+            ir[k]   = mac < 0 ? 0 : mac > 0x7FFF ? 0x7FFF : mac;
+        }
+        for (k = 0; k < 3; k++)
+        {
+            s32 mac = (s32)((((s64)(s32)c[C_RBK + k] << 12) + (s64)(m_lcm[k * 3] * ir[0]) + (s64)(m_lcm[k * 3 + 1] * ir[1]) +
+                             (s64)(m_lcm[k * 3 + 2] * ir[2])) >> 12) >> 4;
+            rgb |= (u32)(mac < 0 ? 0 : mac > 0xFF ? 0xFF : mac) << (k * 8);
+        }
+        out[i] = rgb;
+    }
+    return 1;
+}
