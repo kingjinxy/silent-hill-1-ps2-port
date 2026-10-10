@@ -154,6 +154,12 @@ def funcs(mp):
 
 EXCLUDED = []  # (cutscene, reason): later parts left out by needs_setup
 
+# Later parts the rules above don't see, found by playing the list on the PS2 (2026-10-10).
+KNOWN_PARTS = {
+    ("map6_s04", "func_800E2950"): "waits on monster Cybil's animation in npcs[0], spawned by an earlier part",
+    ("map6_s04", "func_800E3244"): "its parasite has no bone coordinates without the earlier parts",
+}
+
 
 def cutscenes():
     found = []
@@ -194,7 +200,8 @@ def cutscenes():
     # their required flag listed instead, if it starts by itself and needs no setup either.
     kept = []
     for c in found:
-        why = None if "glabel" in c["body"] else needs_setup(c["body"], c["map"])
+        why = KNOWN_PARTS.get((c["map"], c["func"])) or \
+            (None if "glabel" in c["body"] else needs_setup(c["body"], c["map"]))
         if not why:
             kept.append(c)
             continue

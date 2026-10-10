@@ -553,4 +553,9 @@ Ideas to try, roughly by expected payoff:
   - a character it spawns that only another event loads. The map's own characters are its charaGroupIds and those its non-event code loads (map0_s01's Map_WorldObjectsInit loads the Air Screamer).
   - When such a part's required flag is set by an event of the map that starts by itself, that event is listed instead.
   - Result: map4_s01 func_800D2408, func_800D3420 and map7_s03 func_800E3B6C left out; map4_s01 func_800D1FF0 added (it loads Cybil, and played on through the next part, 270 s, on the PS2). 54 entries.
-  - Not covered: map6_s04 func_800E2950 (busy loop) and func_800E3244 (parasite without bone coordinates), both inside the CybilDeath sequence.
+  - map6_s04 func_800E2950 and func_800E3244 (inside the CybilDeath sequence) are left out by name (KNOWN_PARTS): they use monster Cybil in npcs[0] and a parasite set up by earlier parts. 52 entries.
+- The map6_s04 func_800E2950 hang was a port bug in itself:
+  - The cutscene waits on npcs[0]'s animation; with no character there, Chara_AnimPlaybackStateGet reads its anim info through NULL (0 on the PS1).
+  - GCC turned that provable NULL dereference into `lw 0(zero); teq zero, zero`, and the unhandled trap left the game thread spinning. 15 such traps were in the build (Chara_AnimPlaybackStateGet and Chara_AnimStartKeyframeIdxGet in the overlays, Vw_CoordHierarchyMatrixCompute). Found from the -finstrument-functions shadow stack read over the network (prof_fn.c s_StackFn/s_Top).
+  - Game code is now compiled with -fno-delete-null-pointer-checks -fno-isolate-erroneous-paths-dereference: no traps left.
+  - The crash reporter also handles bus errors, reserved instructions, overflow and traps.

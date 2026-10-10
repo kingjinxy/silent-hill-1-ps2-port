@@ -14267,3 +14267,280 @@ All 50 checksums pass. Adding the findings to the docs, then committing:
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "Planning Doc.md" <<'EOF'  ## Restart tests and the Demo cutscene sweep (2026-10-10) - Restarts: before L
 
+## Claude
+
+The sweep found two real port bugs, both now fixed and confirmed on the PS2. Most of the other failures come from how the Demo menu starts cutscenes, not from the port. It's committed as `70d372559` with the docs updated, and the PS1 build still passes all 50 checksums.
+
+**Port bugs, fixed and confirmed on a rerun:**
+- **#20, map5_s00:** an array overflow in the original game. It's harmless on the PS1 but overwrote a saved pointer on the PS2.
+- **#37, map6_s04 (monster Cybil):** 108 function pointers in map data tables were stored as two loose 16-bit halves, so they kept their PS1 addresses. The build now rewrites them as proper pointers. This would also have crashed in normal play.
+
+**Demo-menu artifacts:** these cutscenes are later parts of a scene, and the menu starts them without what an earlier event sets up:
+
+| # | Cutscene | What's missing |
+|---|---|---|
+| 9 | map4_s01 func_800D2408 | Cybil's model, loaded by an earlier event |
+| 11 | map4_s01 func_800D3420 | camera data loaded by #9 |
+| 41 | map7_s03 func_800E3B6C | camera data loaded by #40 |
+| 39 | map6_s04 func_800E3244 | a parasite's bone data |
+
+#41's garbage camera data also caused the stray write that crashed the sound thread in the first sweep. The sound code now detects that corruption and repairs it, so a restart afterwards works.
+
+**#25, map7_s02:** the music loop was left over from the previous cutscene. Started after a restart, it played through.
+
+**Not yet diagnosed:**
+- **#38, map6_s04 func_800E2950** (start of the CybilDeath sequence): the game thread busy-loops about 1.7 s in, with no frames, on both runs. I'd rerun it alone and read the stack while it's stuck.
+- **The deploy freeze:** the first boot after deploying a different build can still freeze at the Konami logo. Plain restarts and manual resets were fine in every test, including all the post-crash restarts in this rerun.
+
+**Suggested next steps:**
+1. Fix the Demo list:
+   - treat a cutscene as a continuation if it uses camera data it doesn't load itself, or if its required flag is set by any earlier event on the map;
+   - in Demo mode, load a character's model if a cutscene spawns it unloaded.
+
+   That should clear #9, #11, #39 and #41 without changing game behaviour.
+2. Diagnose #38.
+3. Return to the deploy freeze.
+
+Which would you like first?
+
+## User
+
+Let's go with #1 first
+
+## Claude
+
+I'll start with the list generator. A cutscene counts as a continuation when its own code depends on setup it doesn't do:
+- it reads camera data (DMS) without loading a DMS file itself, or
+- it spawns a character without loading that character's model.
+
+Then, if its required flag is set by another event on the same map, that event (the scene's real start) goes in the list instead. Checking #39 against those rules first:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -ln "^void func_800E3244(void)" src/maps/map6_s04/*.c); sed -n "/^void func_800E3244(void)/,/^}/p" $f |
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import sys,re; sys.path.insert(0,'tools/port'); import cutscene_list as c for mp in ('map6_s04
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "chara\|Chara" src/maps/map4_s01/map4_s01_header.c | head; grep -n "charaGroupIds\|charaIds\|e_CharaId.*
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "Group\|group\|charaGroup\|= {\|Chara_" src/maps/map4_s01/map4_s01_header.c | head -30
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## Claude
+
+Now the filter step itself:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "charaGroupIds" -A3 src/maps/map0_s01/map0_s01_header.c; sed -n "/^void func_800E3B6C(void)/,/^}/p" src/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n "/^void func_800E3B6C(void)/,/^}/p" src/maps/map7_s03/map7_s03_3.c | head -60; grep -rn "Chara_AirScreame
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; find src/maps/map0_s01 src/maps/map4_s01 -name "chara_spawns.h" | xargs grep -l "" ; grep -o "Chara_\w*" src/map
+
+## Claude
+
+The spawn table has no character names either, so map0_s01 must load the Air Screamer in code. Finding where:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Chara_Load(.*Chara_AirScreamer\|Chara_AirScreamer," src/maps/map0_s01/*.c | head -5; for l in $(grep -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## Claude
+
+Now two false positives: the Kaufmann cutscene (map3_s00 func_800D0CF8) and #20 (map5_s00), both of which played fine in the sweep. Checking where those characters get loaded:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for p in "map3_s00 Chara_Kaufmann" "map5_s00 Chara_HangedScratcher"; do set -- $p; grep -rn "Chara_Load(.*$2" sr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Chara_Kaufmann" src/maps/map3_s00/ | head; grep -rn "Chara_HangedScratcher" src/maps/map5_s00/*.c | he
+
+## Claude
+
+Both are in their map's default group (`.charaGroupIds = { Chara_Kaufmann }`). My rewrite of Rule 2 dropped the header check. Restoring it:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## Claude
+
+#9 and #11 are now handled, with `func_800D1FF0` listed in their place. #41 still isn't caught, though. Checking what its helper does:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import sys,re; sys.path.insert(0,'tools/port'); import cutscene_list as c f=c.map_functions('m
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import sys,re; sys.path.insert(0,'tools/port'); import cutscene_list as c b=c.map_functions('m
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1; (python3 tools/port/port_link.py && bas
+
+## Claude
+
+The new entry is #10 in the list. Deploying. This is a new build, so the boot could hit the deploy freeze; if it does, I'll ask you to reset.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 40 python3 tools/port/ps2_ctl.py deploy; until grep -aq "SH1 port: starting (build Oct 10 2026 11:47:19)
+
+## Claude
+
+The new build booted without freezing. Running the new entry (#10, map4_s01 func_800D1FF0), plus the three list neighbours around it:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -an "build Oct 10 2026 11:47:19" build/port/ps2_log.out | tail -1 | cut -d: -f1); until tail -n +$n bui
+
+## Claude
+
+I picked the wrong number: the list shifted after the change. Those four were neighbours, and all passed. Getting the actual index:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -o '{ "[^"]*"' build/port/demo_cutscenes.c | nl -v0 | sed -n 5,12p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 -u /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scr
+
+## Claude
+
+Off by one again; it's #8:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 -u /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='Planning Doc.md'; s=open(p).read() s=s.replace('''- Next for the Demo menu:   - The list sh
+
+## Claude
+
+The Demo-list fix is done and verified on the PS2, and committed as `2ce8c8484`.
+
+**What changed in the list generator:**
+- A cutscene is now left out when it depends on setup it doesn't do itself:
+  - **Camera data:** it reads camera data from a buffer it never loads a camera file into. This also checks the map's helper functions it calls, three levels deep.
+  - **Characters:** it spawns a character that only another event loads. Characters the map loads on its own don't count, so the Kaufmann cutscene and the Air Screamer one are unaffected.
+- When an excluded cutscene's required flag is set by another event on the map that can start by itself, that event is listed instead.
+
+**Result: 56 → 54 entries.**
+- **Removed:**
+  - #9 (map4_s01 func_800D2408): spawns Cybil, whom only an earlier event loads.
+  - #11 (map4_s01 func_800D3420): uses camera data loaded by #9.
+  - #41 (map7_s03 func_800E3B6C): uses camera data loaded by #40.
+- **Added:** map4_s01 func_800D1FF0, the real start of the Cybil scene. On the PS2 it played for 270 s with no crash, most likely running on through the part that used to crash, as the real game does.
+- No other entries changed. The neighbouring entries I reran all still pass.
+
+**Not covered:** #38 and #39 (map6_s04, inside the CybilDeath sequence). They load their own data, so they depend on some runtime state these rules can't detect. #38 is the busy loop, so it's next. I'll rerun it alone and read the game thread's stack over the network while it's stuck.
+
+## User
+
+Alright, let's try #38
+
+## Claude
+
+Starting #38 by name, waiting until it's stuck, then reading the game thread's stack:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(wc -l < build/port/ps2_log.out); timeout 20 python3 tools/port/ps2_ctl.py demo "map6_s04 func_800E2950"; for
+
+## Claude
+
+It's stuck (frame 28164 isn't advancing). Dumping the top 8 KB of the game thread's stack and resolving anything that looks like a return address:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 120 python3 tools/port/ps2_ctl.py md 0x1FFE000 0x2000 --out /tmp/claude-1000/-home-alex-Documents-silent
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -rln "^void Event_CharaAnimCmdExecute\|^bool Event_CharaAnimCmdExecute\|^s32 Event_CharaAnimCmdExecute"
+
+## Claude
+
+It only dispatches to the map's character functions through the overlay header, so the loop is in one of those, a leaf function that doesn't save its return address. Finding which call sits at +0xd4:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; a=$(~/ps2dev/ee/bin/mips64r5900el-ps2-elf-nm build/port/sh1.elf | grep -w "T Event_CharaAnimCmdExecute" | cut -c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Chara_AnimPlaybackStateGet" src/maps/shared include/maps -r | head -3; f=$(grep -rln "Chara_AnimPlayba
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "^s32 Chara_AnimPlaybackStateGet" src include --include=*.c --include=*.h | head -3; f=$(grep -rln "^s3
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "s32 Chara_AnimPlaybackStateGet\|Chara_AnimPlaybackStateGet" include/maps/shared/*.h include/maps/*.h sr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "Chara_AnimPlaybackStateGet(s_SubCharacter\* chara)" src include asm/USA/maps/map6_s04 2>/dev/null | g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,70p src/port/prof_fn.c
+
+## Claude
+
+The sound thread also runs instrumented game code (the sound driver), so the shadow stack may be slightly mixed, but the game thread's chain should still be readable. Building with instrumentation:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1 SH1_EXTRA_CFLAGS=-finstrument-functions;
+
+## Claude
+
+Built (12:00:02); the shadow stack is at 0x75aba0 and its depth counter at 0x75b7a0. Deploying, then running #38 again:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 40 python3 tools/port/ps2_ctl.py deploy; for i in $(seq 60); do grep -aq "SH1 port: starting (build Oct 
+
+## Claude
+
+The vblank count reads 270 a full 25 s after boot. That looks like the deploy freeze again. Confirming with a second ping:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sleep 3; timeout 10 python3 tools/port/ps2_ctl.py ping | cut -c1-140
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; c=$(grep -ac "SH1 port: starting (build Oct 10 2026 12:00:02)" build/port/ps2_log.out); until [ $(grep -ac "SH1 
+
+## Claude
+
+I haven't found #38's loop yet. The instrumented build froze on its first boot (the deploy freeze again), so the PS2 needs a reset.
+
+**What I know so far:** about 1.7 s into the cutscene, the game stops drawing frames and spins at 100% CPU. A dump of the game thread's stack points at `Event_CharaAnimCmdExecute`, which calls the map's character-animation functions. But old return addresses linger on the stack, and the function at the top has no loop, so that's not conclusive.
+
+**Next:** this build records every function entry and exit in a call stack held in memory. While the game is stuck I can read that stack over the network and get the exact function that's looping.
+
+**Please reset the PS2.** Once the new build reaches the attract demo, a script will start #38, wait for it to hang, and dump that call stack. Nothing else needed from you.
+
+## Claude
+
+That was just the old rerun monitor expiring; nothing new happened. The #38 capture is still waiting for you to reset the PS2.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/bydq
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ~/ps2dev/ee/bin/mips64r5900el-ps2-elf-objdump -d --start-address=0x415628 --stop-address=0x415700 build/port/sh1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ~/ps2dev/ee/bin/mips64r5900el-ps2-elf-objdump -d --start-address=0x4157a0 --stop-address=0x4157d0 build/port/sh1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ~/ps2dev/ee/bin/mips64r5900el-ps2-elf-objdump -d build/port/sh1.elf | awk '/^[0-9a-f]+ <.*>:$/ {fn=$2} /teq\tzer
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ~/ps2dev/ee/bin/mips64r5900el-ps2-elf-objdump -d build/port/sh1.elf | awk '/^[0-9a-f]+ <.*>:$/ {fn=$2} /teq\tzer
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "CAUSE\[\]\|static const char\* CAUSE" -A3 src/port/ps2/crash_ps2.c | head -6
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## Claude
+
+No traps left anywhere in the build (15 → 0). Deploying build 12:04:42 and rerunning #38, plus #39 from the same scene:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 40 python3 tools/port/ps2_ctl.py deploy; for i in $(seq 60); do grep -aq "SH1 port: starting (build Oct 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; c=$(grep -ac "SH1 port: starting (build Oct 10 2026 12:04:42)" build/port/ps2_log.out); until [ $(grep -ac "SH1 
+
+## Claude
+
+Found #38: GCC had turned a NULL read in the map's animation code into a trap instruction. The fix is built (12:04:42) but not yet confirmed on the PS2, because that deploy froze. **Please reset it** to load the build.
+
+**The cause:**
+- In the Demo start, the NPC that the cutscene waits on has a character ID that the map's animation code doesn't know, so the code reads its animation info through NULL.
+- On the PS1 that reads 0 and returns "invalid".
+- GCC instead compiled that path into `lw 0(zero)` + `teq zero,zero`, a deliberate trap. The crash reporter didn't handle trap exceptions, so the game thread spun on it forever. The function-call stack I read over the network pointed straight at it (`func_800E2950` → `Event_CharaAnimCmdExecute` → `Chara_AnimPlaybackStateGet`).
+
+**Fixes, port only:**
+- Game code is now compiled with `-fno-delete-null-pointer-checks -fno-isolate-erroneous-paths-dereference`, so NULL reads behave as on the PS1 (address 0 reads zeros in the port). There were 15 such traps in the build, in three functions shared across the maps; now there are none.
+- The crash reporter also catches traps, bus errors, reserved instructions and overflows, so anything similar shows up as a crash report instead of a silent hang.
+
+**Once it boots:** the sweep reruns #38 (now numbered 37 in the shorter list) and #39 (now 38). It runs automatically once the attract demo starts.
+
+**The deploy freeze is getting worse:** three of the last four deploys froze. It's now the main thing slowing testing, so I'd like to tackle it next.
+
+## User
+
+We've frozen again in that cutscene
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/tasks/bq5w
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(grep -ln "^void func_800E2950(void)" src/maps/map6_s04/*.c); sed -n "/^void func_800E2950(void)/,/^}/p" $f |
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "charaGroupIds" src/maps/map6_s04/map6_s04_header.c; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:60]); s=s.replace(a,b,1); open(p,'w')
+
+## Claude
+
+The list now has 52 entries: just #38 and #39 removed, nothing else changed. Building and committing (none of this touches the PS1 build):
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1; (python3 tools/port/port_link.py && bas
+

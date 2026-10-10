@@ -131,9 +131,10 @@ static void crash_report(void)
     }
 #endif
     static const char* const CAUSE[] = { "int", "TLB mod", "TLB load", "TLB store", "addr load", "addr store",
-                                         "bus ifetch", "bus data", "syscall", "break" };
+                                         "bus ifetch", "bus data", "syscall", "break", "reserved instruction",
+                                         "coprocessor unusable", "overflow", "trap" };
     int code = (s_Frame.cause >> 2) & 31;
-    printf("CRASH: %s at pc=%08X badvaddr=%08X ra=%08X sp=%08X\n", code < 10 ? CAUSE[code] : "?", s_Frame.epc,
+    printf("CRASH: %s at pc=%08X badvaddr=%08X ra=%08X sp=%08X\n", code < 14 ? CAUSE[code] : "?", s_Frame.epc,
            s_Frame.badvaddr, s_Frame.ra[0], s_Frame.sp[0]);
     printf("CRASH: a0=%08X a1=%08X a2=%08X a3=%08X v0=%08X v1=%08X\n", s_Frame.a0[0], s_Frame.a1[0], s_Frame.a2[0],
            s_Frame.a3[0], s_Frame.v0[0], s_Frame.v1[0]);
@@ -339,8 +340,14 @@ void Crash_Install(void)
 #else
     ee_dbg_install(1);
 #endif
-    for (cause = 1; cause <= 5; cause++)
+    /* TLB and address errors, bus errors, reserved instruction, overflow, and traps: GCC turns a
+     * provable NULL dereference into `teq zero, zero`, and an unhandled trap left the game thread
+     * spinning in the kernel (Demo cutscene map6_s04 func_800E2950). */
+    for (cause = 1; cause <= 13; cause++)
     {
-        ee_dbg_set_level1_handler(cause, crash_handler);
+        if (cause != 8 && cause != 9 && cause != 11) /* not syscall, break or coprocessor unusable */
+        {
+            ee_dbg_set_level1_handler(cause, crash_handler);
+        }
     }
 }
