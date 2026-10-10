@@ -505,3 +505,8 @@ Ideas to try, roughly by expected payoff:
   - Asynchronous SPU sends, bounded to one queued send (the next send waits for the previous one), are also in this build, waiting for the console test.
 - Deterministic renderer comparison: tools/port/bench_frames.sh OUTDIR builds a benchmark build. The attract demo runs uncapped with its own timing and dumps frames at demo playback steps 100…1000 (g_Demo_DemoStep, so load-wait frames don't shift it). tools/port/compare_dumps.py compares two runs pixel by pixel. Two runs of one build come out identical.
 - Tried: a polygon fast path skipping prim_state when command, texture page, CLUT and settings were unchanged. Its output was identical, but there was no gain. Neighbouring polygons almost always differ: the world mesh draws each face as a semi-transparent untextured fog polygon plus a textured polygon, so state alternates every polygon (prim_state's non-texture part recomputed for 1,047 of 1,448 polygons). Reverted. A real saving needs the alternating states to collapse to the same GS registers, which would need care around alpha/STP semantics (an untextured A of 0x80 would set the mask bit in VRAM).
+- Console measurement (2026-10-10, Kaufmann cutscene, profiling build 08:35):
+  - Mean rate over the stretches below 60 fps: 47.1 fps, from 43.5.
+  - Per frame (k-cycles): game update 3,248 → 2,801 (MVMVA 419 → 195 from the light dot product in C); polygon conversion 1,676 → 1,588; DrawOTag 2,819 → 2,641 (UCAB packets and OT prefetch).
+  - Sound task 410 → 442: overlapping the SPU sends didn't help, so its cost is elsewhere (to profile).
+  - The build boots cleanly after remote restarts; voice lines behave as before.

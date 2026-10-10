@@ -12172,3 +12172,316 @@ I've deployed the fixed build (restart acknowledged). This is exactly the case t
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; make -j8 build < /dev/null > /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d5
 
+## Claude
+
+The freeze at the Konami logo is fixed. The first piece of GTE work is also on the console and verified exact, but the gain is small: the Kaufmann cutscene's usual rate went from 40–43 to 44–46 fps.
+
+**The logo freeze:**
+- **Cause:** the port's `ResetCallback` cleared the game's vertical-blank callback every time it was called. Sony's translated `ResetGraph` calls it again during boot on some paths. The logo then waits forever for a counter that's never incremented.
+- **Fix:** I checked the original in the PS1 binary: it does its work only on the first call and ignores later ones. The port now does the same. A remote restart of the profiling build, the case that froze before, now boots and reaches the cutscene.
+- **What this means for earlier results:** the two earlier logo freezes that I blamed on asynchronous GS and sound sends were probably this same bug, since they came and went with the boot path. So those two ideas aren't ruled out after all.
+
+**The GTE work:**
+- **Where the calls came from:** a new call-site profile showed most `DPCS`/`DCPL` calls came from one place, the lit-and-fogged mesh path: surfaces lit by your flashlight, about 4,400 GTE calls a frame. Each corner did one `DPCS` and one `DCPL` through the GTE registers.
+- **The change:** they're now short exact inline functions using the GTE's own formulas, and the fog/light memo now lasts across meshes instead of resetting for each one.
+- **Verified exact:** the mesh check mode compared the packets with the original GTE routine and found no mismatches over 475,000 meshes in the cutscene, town and school demos.
+- **Result on the PS2:** `DPCS`/`DCPL` are gone from the profile, and the game update dropped from 3,494k to 3,248k cycles a frame.
+
+**Where the PS2 time goes now** (k-cycles per frame, budget 4,915):
+
+| | k-cycles |
+|---|---|
+| Game update | 3,248 |
+| Drawing | 3,188 |
+| …polygon conversion | 1,676 |
+| …texture state | 405 |
+| …other state | 285 |
+| …DMA sends | 312 |
+| GTE `MVMVA` | 419 |
+| GTE `RTPT` | 368 |
+| Sound task | 410 |
+
+Committed as 86c3930e7; the PS1 build still matches all 50 checksums.
+
+**Next steps, in order of payoff:**
+1. **The remaining GTE sites, the same way:** one `MVMVA` site (587 calls a frame), the `NCLIP`s in `func_8005AC50`, and the character `RTPT`/`NCT`.
+2. **Retry the asynchronous GS and sound sends,** now that their freezes are probably explained. Each would get a boot test on the console first. The sound one alone could save about 0.4M cycles.
+3. **VU1 primitive conversion,** the big one for drawing.
+
+I'd do 1 and 2 next, since they're quick to verify, then start VU1.
+
+## User
+
+Let's proceed with 1 and 2
+
+## Claude
+
+I'll start with the remaining GTE sites, first the `MVMVA` in `func_80057A3C` and the `NCLIP`s in `func_8005AC50`, in the game source.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "func_80057A3C\|func_8005AC50\|func_8005A900\|func_8005AA08" src --include=*.c | grep "//\|^.*(.*)$" | 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 461,560p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "define gte_ll()\|define gte_ll " include/port/*.h include/psyq/inline_c.h | head; grep -rn "define gte
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/bodyprog/gfx/bodyprog_80056D8C.c'; s=open(p).read() a='''        gte_ldv0(&scratchData->f
+
+## Claude
+
+Next, the `NCLIP`s in `func_8005AC50`, about 970 calls a frame. `NCLIP` is the back-face test: a 2D cross product of three screen points. I'll read how this function uses it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "^void func_8005AC50" src/bodyprog/gfx/bodyprog_80056D8C.c | cut -d: -f1); sed -n "$n,$((n+400))p" s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "^void func_8005AC50" src/bodyprog/gfx/bodyprog_80056D8C.c | cut -d: -f1); sed -n "$((n+40)),$((n+11
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/bodyprog/gfx/bodyprog_80056D8C.c'; s=open(p).read() i=s.index('void func_8005AC50(s_MeshH
+
+## Claude
+
+Both `NCLIP` patterns are switched over. I'll build the check version and run the cutscene plus the attract demos, comparing the new light dot products and `NCLIP`s against the GTE.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cp /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/
+
+## User
+
+[Request interrupted by user for tool use]
+
+## User
+
+I will say, checking the frame rate in the attract demos seems pointless when we're limiting them to 20 FPS, unlike the cutscenes. Is there anything we can do to unlock the frame rate in the demos without desyncing the simulated player inputs?
+
+## Claude
+
+Quick clarification first: those attract-demo runs were only for the exactness checks (comparing the new C code with the GTE over the town and school). I wasn't using them to measure frame rate, and you're right that their rate tells us nothing.
+
+A true 60 fps demo isn't possible without desyncing. The demos replay recorded controller input one entry per game frame, and the game's simulation step is tied to the original ~20 fps. Each demo frame advances the world by a fixed 3 vertical blanks of time (`g_Demo_VideoPresentInterval`). Running the same inputs at 60 game frames per second would apply each input to a step a third as long, so Harry walks somewhere else and the demo drifts off.
+
+What we can do, and what's more useful for performance work, is an uncapped benchmark mode. It keeps the demo's fixed simulation step and inputs exactly as they are, but stops waiting for vertical blanks, so each frame starts as soon as the last one is done. The demo then plays out frame for frame identically, just faster than real time, and the achieved frames per second shows how much headroom we have. It's also deterministic, so I could compare frame dumps between builds exactly, which beats what I've been doing.
+
+The port already has a stub of this (`SH1_BENCH=1`), but it's marked "desyncs". The cause is that some counters still advance per real vertical blank: the demo's frame counter and the game-state timers, both incremented in the vertical-blank callback. In benchmark mode they'd instead advance by the demo's 3 blanks per game frame, in the main loop. Then the run is deterministic.
+
+I'd fix that first and use it as the performance yardstick: same demo, same frames, with the time per frame and the profile breakdown. Then continue with the GTE sites and the asynchronous sends. Should I go ahead?
+
+## User
+
+Yes
+
+## Claude
+
+I'll make the benchmark mode deterministic. While a demo plays in that mode:
+- The game's vertical-blank callback won't run from the interrupt. The main loop runs it once per simulated blank instead, three times per demo frame, so the demo frame counter and the state timers follow simulated time.
+- The main loop won't wait for vertical blanks at all, so frames run as fast as the PS2 allows.
+
+Outside demos, everything stays as it is.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "SH_PORT_BENCH\|SH1_BENCH" -r tools/port src include --include=*.py --include=*.c --include=*.h --includ
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' def ed(p,a,b):     s=open(p).read(); assert a in s,(p,a[:50]); s=s.replace(a,b,1); open(p,'w').w
+
+## Claude
+
+Outside demos the interrupt must call the callback again. I'll switch manual mode off in the non-demo branch of the main loop.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 290,300p src/bodyprog/sys/game_main.c; python3 - <<'P' p='/home/alex/Documents/silent-hill-1-ps2-port/src
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='/home/alex/Documents/silent-hill-1-ps2-port/src/bodyprog/sys/game_main.c'; s=open(p).read() a
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cp /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/input.txt; cat >> "Planning Doc.md" <<'E' - GTE pass 2: func_80057A3C's per-normal light dot pr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/spu_ps2.c'; s=open(p).read() a='''    while (size - (s_Sent - st->done) <= tail 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; unset SH1_EXTRA_CFLAGS SH1_NO_RECOMP SH1_BENCH; export SH1_FPS=60 SH1_PROF=1; (bash t
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(wc -l < build/port/ps2_log.out); end=$((SECONDS+120)); until tail -n +$n build/port/ps2_log.out | grep -aq "
+
+## Claude
+
+The PS2 isn't answering, so it's probably off or in its browser, and the deploy didn't reach it. My waiting job will give up after two minutes.
+
+The build is ready (profiling build with the asynchronous sound sends and the new GTE code). When you relaunch Neutrino it will boot this build. Tell me once it's on and I'll run the remote Kaufmann cutscene and read the profile. If you start it yourself instead: DEMO, then `map3_s00 func_800D0CF8`.
+
+## User
+
+Let's table the console test for now and just test in the emulator. I will come back to that later. Let's move on to the next step in optimization
+
+## Claude
+
+The next step is the big one: converting PS1 primitives to GS commands on VU1. The EE would pass raw PS1 primitives to VU1, which builds the GS packets and sends them straight to the GS while the EE carries on with game logic. Since we're testing in PCSX2 for now, that suits this step: PCSX2 emulates VU1 and the VIF closely.
+
+First, the VU1 toolchain:
+
+- tool `Bash`: ls ~/ps2dev/dvp/bin 2>/dev/null; ls ~/ps2dev/ee/bin | grep -i "dvp\|vcl\|vu" ; find ~/ps2dev -name "*.vsm" -o -name "*.vcl" 2>/dev/null | head -5; ls ~/ps2dev/p
+
+## Claude
+
+Before I write VU1 code, this is a large job, so here's the design and the catch.
+
+**What VU1 would take over.** Today the EE does three things for each of the ~1,430 polygons per frame:
+1. walks the PS1 ordering table and reads each primitive;
+2. decides the GS state (texture, palette, blending);
+3. builds the GS packet: unpacks coordinates, colours and texture coordinates, applies the draw offset, splits quads, rejects oversize triangles, and writes the GS register words.
+
+VU1 can take over step 3. Steps 1 and 2 stay on the EE: the walk is pointer-chasing through PS1 memory, which VU1 can't do, and the state decisions need the texture cache.
+
+**The data flow:**
+- The EE sorts each run of same-state polygons into three streams: colours, coordinates and texture words. That's plain word copies.
+- VIF1 `UNPACK` spreads those into VU1 memory: bytes become 32-bit colour lanes, 16-bit pairs become signed x/y lanes. This does in hardware the bit-unpacking VU1 is bad at (its integer unit is only 16 bits wide).
+- A VU1 microprogram adds the draw offset, scales to the GS's fixed point, handles flat versus Gouraud, quads, raw-texture colour and the oversize test, then builds the GS packet and sends it straight to the GS (`XGKICK`).
+- State changes go through the same VIF1 stream as small direct GS writes, with `FLUSH` commands to keep the PS1 draw order. That order matters for transparency.
+
+**The catch: the gain is uncertain.** On the PS2, each polygon costs about 1,200 EE cycles. I suspect a large part of that is cache misses, both reading PS1 primitives from scattered addresses and streaming out the 128 KB packet buffer, rather than arithmetic. VU1 removes the packet building and the packet-buffer writes, but the EE still has to read every primitive. A realistic estimate is 30–60% off the polygon conversion, so roughly 0.5–1.0M cycles a frame of the 1.7M. It's also several days of work: a new VIF/VU1 path, ordering against texture uploads, and per-type microcode.
+
+**An alternative to try first, cheaper and on the EE:**
+- write the packet buffer through the EE's uncached-accelerated memory window, so packet stores no longer pull cache lines in;
+- add prefetch hints for the next primitives in the ordering table.
+
+Both are small changes that PCSX2 can verify for correctness, but only the console can measure them, since PCSX2 doesn't model the caches.
+
+Which way?
+
+- tool `AskUserQuestion`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "s_Pkt\b\|s_Pkt\[" src/port/ps2/gpu_gs.c | head -30
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/gpu_gs.c'; s=open(p).read() def ed(a,b):     global s; assert a in s,a[:50]; s=s
+
+## Claude
+
+Now the ordering-table walk in `DrawOTag`, to add prefetch:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 214,300p src/port/libgpu_port.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/libgpu_port.c'; s=open(p).read() a='''        prim = (const u32*)ptr24(addr);       
+
+## Claude
+
+The build failed: a static initialiser can't use the address-conversion macro, so that run tested the old build and doesn't count. I'll set the pointer in the renderer's `init()` instead.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/gpu_gs.c'; s=open(p).read() s=s.replace('''static u64x* s_Pkt = UCAB(s_PktBuf[0]
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/gpu_gs.c'; s=open(p).read() a='''static void init(void) {     if (!s_Pkt)     { 
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; /home/alex/Documents/silent-hill-1-ps2-port/.ve
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/pair.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/input.txt; cat >> "Planning Doc.md" <<'E' - EE cache changes (2026-10-09), correct in PCSX2 but
+
+- tool `Bash`: ls ~/ps2dev/ps2sdk/samples/draw/vu1/; sed -n 1,80p ~/ps2dev/ps2sdk/samples/draw/vu1/draw_3D.vsm
+
+- tool `Bash`: sed -n 1,200p ~/ps2dev/ps2sdk/samples/draw/vu1/main.c | grep -n "packet2\|vu1\|VU1\|vif\|dma_channel\|upload\|micro" | head -40; cat ~/ps2dev/ps2sdk/samples/dra
+
+## Claude
+
+Before writing microcode I went through the data path in detail, and the gain from VU1 looks much smaller than I first estimated. I'd rather tell you now than after several days.
+
+**What VU1 would actually do here.** The PS1 primitives the game builds are already-projected 2D primitives, so there's no transform or lighting for VU1 to take over. The EE still has to touch every vertex word before VU1 can use it:
+- **Coordinates:** they're 11-bit signed values packed into 16-bit fields. VIF unpacking would sign-extend from bit 15, so the EE has to sign-extend and offset each one (`sext11`), as it does now.
+- **Colours:** flat-shading replication, the raw-texture colour, 5-bit quantisation and the alpha byte are per-primitive decisions on the EE.
+- **State:** texture and blend state has to be decided on the EE anyway; it owns the texture cache.
+
+Once the EE has done that, what's left for VU1 is copying words into GS layout, which VIF unpacking alone could largely do. So VU1 would mainly save the EE's GS tag bookkeeping and some packet writing. The cost of reading the PS1 primitives, likely the bulk of the ~1,200 cycles per polygon on hardware, would stay on the EE.
+
+**What I'd do instead:**
+1. **Measure the two cache changes on the console first.** They target exactly the suspected costs: misses while reading primitives, and the packet-buffer traffic. If they help a lot, that confirms where the time goes.
+2. **Streamline the EE polygon converter directly.** Specialised converters per primitive type (flat/Gouraud × textured × 3/4 vertices) that write GS words straight from the PS1 words, without the intermediate structs and per-polygon state lookups. It's cheap to build and verifiable in PCSX2 by frame comparison.
+3. **Use VU1 where it does real work:** moving 3D work the game does itself on the GTE. For example, the character skinning and world transforms (`RTPT`/`NCT`/`MVMVA`, ~1M+ cycles) could run as whole-mesh VU1 batches. That would need bit-exact integer behaviour, so VU1's floating point needs careful validation. It's a better fit for VU1, but a bigger job, so later.
+
+Shall I switch to step 2, the streamlined EE converter, keeping the measurement for when you're back on the console?
+
+- tool `AskUserQuestion`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "void Display_RequestDump\|host:frame_" src/port/ps2/display_ps2.c | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/bodyprog/sys/game_main.c'; s=open(p).read() a='''                if (++demoFrames % 60 ==
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n '/^static void settings(u32 w)/,/^}/p' src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/gpu_gs.c'; s=open(p).read() def ed(a,b):     global s; assert a in s,a[:60]; s=s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'P' p='src/port/ps2/gpu_gs.c'; s=open(p).read() def ed(a,b):     global s; assert a in s,a[:60]; s=s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^void Demo_Update\|^bool Demo_Update\|^s32 Demo_Update" -A30 src/bodyprog/*.c src/bodyprog/*/*.c | head
+
+## Claude
+
+The demo's playback position is `g_Demo_DemoStep`, the index of the recorded input in use. Dumps and trace lines will now trigger at fixed values of it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "g_Demo_DemoStep" include/bodyprog/*.h | head -2; python3 - <<'P' p='src/bodyprog/sys/game_main.c'; s=op
+
+## Claude
+
+Now a fresh baseline with the old converter, then the new one, both using the new dump trigger:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cp /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/input.txt; git checkout src/port/ps2/gpu_gs.c; git status --short | head; cat >> "Planning Doc.
+
+## Claude
+
+The deterministic comparison tool is committed (640600dc4). Here's where the optimisation work stands.
+
+**On the PS2** (Kaufmann cutscene, profiling build): the cutscene's most common frame rate went from 40–43 to 44–46 fps. The changes behind that:
+- the split GS state memo;
+- the flashlight fog/lighting maths moved from the GTE to exact C (about 4,400 GTE calls a frame removed);
+- the boot freeze at the logo fixed.
+
+**Done and checked in PCSX2, still to be measured on the console:**
+- packet writes that bypass the data cache;
+- prefetching the next primitive while walking the ordering table;
+- overlapped sound sends (at most one send in flight);
+- the light dot product and `NCLIP` moved from the GTE into C, verified exact.
+
+The cache changes can only show a gain on real hardware.
+
+**Tried and dropped:**
+- a texture-state cache: no gain;
+- a polygon fast path: identical output, no gain.
+
+The fast path showed why the drawing cost is stubborn: the world mesh draws every face as two polygons with different GS state (a fogged untextured one and a textured one), so state changes on nearly every polygon. That's the PS1's draw order and has to be preserved.
+
+**Tooling added:** a deterministic benchmark mode with frame dumps at fixed demo positions. Any renderer change can now be checked for bit-identical output, and the demo's uncapped frame rate gives a repeatable speed figure.
+
+**What's left that can make a real difference:**
+1. **Measure the pending changes on the console.** This is quick, and it decides whether the cache theory holds.
+2. **Collapse the alternating GS states.** Make the fog and textured polygons of a face share as much GS state as possible, so a face costs one state change instead of two. It's tricky: the alpha and mask-bit behaviour has to stay exactly as on the PS1. The deterministic dumps make that safely testable.
+3. **VU1 for the 3D work.** Move the character and world transforms (`RTPT`/`NCT`/`MVMVA` per mesh, about 1M cycles) into VU1 batches. It's the biggest remaining structural gain on the game-update side, but it needs an exactness study first.
+
+My recommendation: run 1 whenever you're back at the console. Meanwhile I can start on 2, since it's verifiable in PCSX2 with the new tool. Shall I go ahead with 2?
+
+## User
+
+Ok, let's measure these changes on console. Start serving the game file again
+
+## Claude
+
+I'll check the disc server and log receiver, and rebuild the profiling ISO from the current source. The last ISO I built still had the polygon fast path that I've since reverted.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; pgrep -af '^python3 -u tools/port/(udpfs_serve|ps2_log).py'; source .venv/bin/activate; unset SH1_BENCH SH1_EXTR
+
+- tool `Monitor`: PS2: boots, crashes, demo requests
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(wc -l < build/port/ps2_log.out); until tail -n +$n build/port/ps2_log.out | grep -aq "gameState 7"; do sleep
+
+## Claude
+
+The game is being served: the disc server and log receiver are running, and the freshly built profiling ISO is in place (built 08:35). It has all the pending changes: cache-bypassing packet writes, ordering-table prefetch, overlapped sound sends, and the new C maths for the light dot product and `NCLIP`.
+
+Launch Neutrino whenever you're ready. Once the main menu is up, the Kaufmann cutscene starts remotely, so leave the controller alone for a few seconds after boot. I'll read the profile when it finishes and compare it with the last console run.
+
+## Claude
+
+The profiling build (08:35:37) has booted on the PS2. Waiting for the main menu to start the cutscene remotely.
+
+## Claude
+
+It got past the logos and reached the menu, and the remote start went through: the Kaufmann cutscene is loading. The overlapped sound sends haven't caused any boot trouble so far. I'll read the profile when the cutscene finishes.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/751df70d-0d37-47f8-9d55-709e3395228e/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "Planning Doc.md" <<'E' - Console measurement (2026-10-10, Kaufmann cutscene, profiling build 08:35):   -
+
