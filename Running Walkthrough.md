@@ -1093,6 +1093,11 @@ per frame (instrumented), the vertex pass func_80057B7C ~1.06M, snow ~0.6M.
   copies in and out of VU memory: little or nothing to gain over the EE batch, so not done.
 - Not helped: map6_s00 (4-7% idle; other drawing paths, func_8005A900/func_8005AC50); map5_s00 and
   map0_s00 drop frames with 30-50% idle, so something other than EE time limits them.
+- `Vw_MultiplyAndTransformMatrix` (vw_calc.c): character bone matrices transformed via EE MMI
+  (`PHMADH` SIMD) with a portable scalar C fallback. Eliminated all 318 MVMVA calls/frame from this site.
+  Tested with `-DSH_PORT_CHECK_BATCH` (0 mismatches across >540,000 checks) and `bench_cutscene.sh`
+  (zero pixel diffs).
+
 
 ### Playing to the cafe: four port bugs
 

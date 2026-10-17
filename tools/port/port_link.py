@@ -202,8 +202,6 @@ def main():
 
     # Port runtime sources, and Sony/Konami library code recompiled by tools/port/recomp_all.sh.
     port_objs = []
-    # Renderer: SH1_GPU=gs (default), soft, or compare (both; debug dumps compare them).
-    gpu = {"soft": 0, "gs": 1, "compare": 2}[os.environ.get("SH1_GPU", "gs")]
     # Profiling counters (include/port/prof.h): SH1_PROF=1.
     prof = ["-DSH_PORT_PROF"] if os.environ.get("SH1_PROF") else []
     # Benchmark builds (SH1_BENCH=1, as tools/port/ee_compile_check.sh): the Demo menu's frame dumps.
@@ -228,6 +226,13 @@ def main():
     dump += ["-DSH_PORT_FOG_TEST"] if os.environ.get("SH1_FOG_TEST") else []
     # SH1_NO_FOG_PAIRS=1: fog pairs drawn as two separate polygons (the reference for pair fusion).
     dump += ["-DSH_PORT_NO_FOG_PAIRS"] if os.environ.get("SH1_NO_FOG_PAIRS") else []
+    # Video mode switch method (src/port/ps2/display_ps2.c): SH1_MODESWITCH=0 gsKit's full setup (GS
+    # reset + SetGsCrt, the default), 1 SetGsCrt without the reset, 2 only SMODE2 and the display window.
+    dump += ["-DSH_PORT_MODESWITCH=" + os.environ["SH1_MODESWITCH"]] if os.environ.get("SH1_MODESWITCH") else []
+    # Single-buffered interlaced screens drawn one field at a time as on the PS1 (SCANMSK) and shown
+    # straight from VRAM, instead of a snapshot copy (src/port/ps2/gpu_gs.c): SH1_INTERLACE_FIELDS=1.
+    # Broken in PCSX2 (2026-10-17); to test on hardware.
+    dump += ["-DSH_PORT_INTERLACE_FIELDS"] if os.environ.get("SH1_INTERLACE_FIELDS") else []
     # The Demo menu's cutscene list (src/port/demo_menu.c), found in the decomp's map code.
     run([sys.executable, "tools/port/cutscene_list.py", "--c", os.path.join(OUT, "demo_cutscenes.c")])
     for src in sorted(glob.glob("src/port/*.c")) + [os.path.join(OUT, "demo_cutscenes.c")]:
@@ -237,7 +242,7 @@ def main():
         solo = ["-DSH_PORT_XA_SOLO"] if os.environ.get("SH1_XA_SOLO") else []
         # Voiced text timer test (src/port/demo_menu.c): SH1_MSG_DEBUG=1.
         solo += ["-DSH_PORT_MSG_DEBUG"] if os.environ.get("SH1_MSG_DEBUG") else []
-        run([CC, "-c", *PORT_CFLAGS, *prof, *solo, *bench, "-DSH_PORT_GPU=%d" % gpu, src, "-o", obj])
+        run([CC, "-c", *PORT_CFLAGS, *prof, *solo, *bench, src, "-o", obj])
         port_objs.append(obj)
     # PS2-side HAL code (src/port/ps2/): compiled against ps2sdk's headers, not the game's.
     for src in sorted(glob.glob("src/port/ps2/*.c")):

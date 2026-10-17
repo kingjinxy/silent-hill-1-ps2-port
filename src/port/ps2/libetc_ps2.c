@@ -112,6 +112,12 @@ int Port_VBlanks(unsigned int* cycles)
 unsigned int Port_PcSamples[16];
 unsigned int Port_PcSampleCount;
 
+/* Longest interval between two vertical blank interrupts (CPU cycles) since the last reset to 0:
+ * display_ps2.c measures video mode switches with it (a stopped video signal stops the interrupts). */
+volatile unsigned int g_PortVBlankMaxGap;
+/* Vertical blanks so far (gpu_gs.c: the interlaced field changes at each). */
+volatile unsigned int g_PortVBlankSeq;
+
 static int vblank_handler(int cause)
 {
     unsigned int now, epc;
@@ -119,7 +125,12 @@ static int vblank_handler(int cause)
     __asm__ volatile("mfc0 %0, $14" : "=r"(epc));
     Port_PcSamples[Port_PcSampleCount++ & 15] = epc;
     __asm__ volatile("mfc0 %0, $9" : "=r"(now));
+    if (now - s_VBlankCycles > g_PortVBlankMaxGap)
+    {
+        g_PortVBlankMaxGap = now - s_VBlankCycles;
+    }
     s_VBlankCycles = now;
+    g_PortVBlankSeq++;
     s_VBlanks++;
     if (s_VBlanks % 60 == 0)
     {

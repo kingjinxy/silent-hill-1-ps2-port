@@ -118,12 +118,12 @@ static inline void Gte_CtrlWriteInline(unsigned int reg, unsigned int value)
             break;
         case 4: case 12: case 20: /* RT33, LLM33, LCM33: signed 16-bit */
             g_GteCtrl[reg] = (unsigned int)(int)(short)value;
-            g_GteCtrlDirty = 1;
+            g_GteCtrlDirty |= 1u << reg;
             break;
         case 0: case 1: case 2: case 3: case 5: case 6: case 7: case 8: case 9: case 10: case 11:
         case 13: case 14: case 15: case 16: case 17: case 18: case 19: case 21: case 22: case 23:
             g_GteCtrl[reg] = value; /* matrices, TR, BK, FC */
-            g_GteCtrlDirty = 1;
+            g_GteCtrlDirty |= 1u << reg;
             break;
         default: /* FLAG */
             (Gte_CtrlWrite)(reg, value);

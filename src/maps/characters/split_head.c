@@ -1360,7 +1360,12 @@ void sharedFunc_800D2D74_1_s05(s_SubCharacter* splitHead)
     }
 
     splitHead->collision.box.top = FP_FROM((sp20[0].vy * (Q12(1.0f) - sp90[unkIdx])) + (sp20[unkIdx].vy * sp90[unkIdx]), Q12_SHIFT);
+#ifdef SH_PORT
+    // The original reaches sp50 through sp20 and the PS1 stack layout; GCC lays locals out differently.
+    splitHead->collision.box.height = FP_FROM((sp50[0].vy * (Q12(1.0f) - sp90[unkIdx])) + (sp50[unkIdx].vy * sp90[unkIdx]), Q12_SHIFT);
+#else
     splitHead->collision.box.height = FP_FROM((sp50[0].vy * (Q12(1.0f) - sp90[unkIdx])) + (sp20[unkIdx + 4].vy * sp90[unkIdx]), Q12_SHIFT);
+#endif
     splitHead->collision.box.offsetY = (splitHead->collision.box.top + splitHead->collision.box.height) >> 1;
 
     if (unkIdx == 3)
@@ -1435,8 +1440,14 @@ void sharedFunc_800D3388_1_s05(s_SubCharacter* splitHead, q19_12* offsetX, q19_1
                          (sp38[i].field_E == 8 ? sharedData_800D5AAE_1_s05 : sp38[i].field_E + 1) == sp38[(i + 1) % temp_s7].field_E) ||
                         (j == 2 && sp38[i].field_D != 0))
                     {
+#ifdef SH_PORT
+                        // The original reaches sp38 through sp18 and the PS1 stack layout; GCC lays locals out differently.
+                        ptr0 = &sp38[i];
+                        ptr1 = &sp38[k];
+#else
                         ptr0 = &sp18[i * 16] + 32;
                         ptr1 = &sp18[k * 16] + 32;
+#endif
 
                         ptr1->field_0 = ptr0->field_0;
                         ptr1->field_4 = ptr0->field_4;
@@ -1515,8 +1526,14 @@ void sharedFunc_800D3388_1_s05(s_SubCharacter* splitHead, q19_12* offsetX, q19_1
                         (j == 4 && sharedData_800D5CF8_1_s05[sp38[i].field_E] != 2 &&
                          (sharedData_800D5D08_1_s05[sp38[i].field_E] != 0 || sharedData_800D5D08_1_s05[new_var] != 0)))
                     {
+#ifdef SH_PORT
+                        // The original reaches sp38 through sp18 and the PS1 stack layout; GCC lays locals out differently.
+                        ptr0 = &sp38[i];
+                        ptr1 = &sp38[k];
+#else
                         ptr0 = &sp18[i * 16] + 32;
                         ptr1 = &sp18[k * 16] + 32;
+#endif
 
                         ptr1->field_0 = ptr0->field_0;
                         ptr1->field_4 = ptr0->field_4;

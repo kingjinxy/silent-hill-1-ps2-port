@@ -3,12 +3,10 @@
  * ...) are recompiled (tools/port/recomp_all.sh); this file replaces the parts that drive the GPU.
  *
  * GPU command packets (from ordering tables, DrawPrim, draw environments) go to Gpu_Submit(), then to
- * one of two renderers:
- *  - GS (default, src/port/ps2/gpu_gs.c): draws with the GS into an image of VRAM in GS memory.
- *    g_PortVram is the EE's copy, updated by CPU uploads (LoadImage, ClearImage) and read back from
- *    the GS by StoreImage; the GS renderer builds 4/8-bit texture pages from it.
- *  - Software (gpu_soft.c, g_PortGsRenderer = 0): draws into g_PortVram; the reference renderer.
- * PutDispEnv shows the display area (display_ps2.c).
+ * the GS renderer (src/port/ps2/gpu_gs.c), which draws into an image of the PS1's VRAM in GS memory:
+ * the only copy of VRAM (LoadImage uploads to it, StoreImage reads it back). PutDispEnv shows the
+ * display area (display_ps2.c). (The software renderer, gpu_soft.c, was retired on 2026-10-17:
+ * comparisons are against DuckStation.)
  *
  * Ordering tables and packets use 24-bit addresses, as on the PS1. That's valid on the EE as long as
  * all drawing memory is below 16 MiB (the whole program currently ends below 8 MiB).
@@ -28,23 +26,11 @@
 #define OT_END 0x00FFFFFF
 
 extern int printf(const char* fmt, ...);
-extern void GpuSoft_Commands(const u32* words, s32 count);      /* src/port/gpu_soft.c */
-extern void Display_Present(const u16* vram, s32 x, s32 y, s32 w, s32 h, s32 rgb24, s32 isinter); /* src/port/ps2/display_ps2.c */
 extern void Display_PresentGs(s32 x, s32 y, s32 w, s32 h, s32 rgb24, s32 isinter);
 extern void GpuGs_Commands(const u32* words, s32 count); /* src/port/ps2/gpu_gs.c */
-extern void GpuGs_LoadImage(s32 x, s32 y, s32 w, s32 h);
+extern void GpuGs_LoadImage(s32 x, s32 y, s32 w, s32 h, const u16* src, s32 stride);
+extern void GpuGs_StoreImage(s32 x, s32 y, s32 w, s32 h, u16* dst);
 extern void GpuGs_ClearImage(s32 x, s32 y, s32 w, s32 h, u32 rgb);
-extern void GpuGs_StoreAll(void);
-
-/** 1: GS renderer, 0: software renderer, 2: both (compare mode: the software renderer owns
- * g_PortVram, the GS output is shown, and the debug dumps compare the two; see display_ps2.c).
- * Chosen at build time: SH1_GPU=gs|soft|compare for tools/port/port_link.py. */
-#ifndef SH_PORT_GPU
-#define SH_PORT_GPU 1
-#endif
-s32 g_PortGsRenderer = SH_PORT_GPU;
-
-u16 g_PortVram[VRAM_H][VRAM_W] __attribute__((aligned(64)));
 
 static DRAWENV s_DrawEnv;
 static DISPENV s_DispEnv;
@@ -61,7 +47,7 @@ static void* ptr24(u32 addr)
 }
 
 extern void Capture_Packet(int step, const unsigned int* words, int count); /* src/port/ps2/capture_ps2.c */
-extern void Capture_Display(const unsigned short* vram, int x, int y, int w, int h, const void* state, int stateSize,
+extern void Capture_Display(int x, int y, int w, int h, const void* state, int stateSize,
                             const void* state2, int state2Size, int deltaTime);
 extern int  Capture_Pending(void);
 
@@ -82,14 +68,7 @@ static void Gpu_Submit(const u32* words, s32 count)
             Capture_Packet(g_Demo_DemoStep, words, count);
         }
     }
-    if (g_PortGsRenderer)
-    {
-        GpuGs_Commands(words, count);
-    }
-    if (g_PortGsRenderer != 1)
-    {
-        GpuSoft_Commands(words, count);
-    }
+    GpuGs_Commands(words, count);
     s_FramePackets++;
     s_FrameWords += count;
 }
@@ -125,30 +104,15 @@ void SetDispMask(int mask)
 
 int DrawSync(int mode)
 {
+    extern void GpuGs_Sync(void);
     (void)mode;
-    if (g_PortGsRenderer)
-    {
-        extern void GpuGs_Sync(void);
-        GpuGs_Sync(); /* the GS renderer sends packets without waiting (src/port/ps2/gpu_gs.c) */
-    }
+    GpuGs_Sync();
     return 0;
 }
 
 int ClearImage(RECT* rect, u_char r, u_char g, u_char b)
 {
-    u16 c = (u16)(((b >> 3) << 10) | ((g >> 3) << 5) | (r >> 3));
-    s32 x, y;
-    for (y = 0; y < rect->h; y++)
-    {
-        for (x = 0; x < rect->w; x++)
-        {
-            g_PortVram[(rect->y + y) & (VRAM_H - 1)][(rect->x + x) & (VRAM_W - 1)] = c;
-        }
-    }
-    if (g_PortGsRenderer)
-    {
-        GpuGs_ClearImage(rect->x, rect->y, rect->w, rect->h, r | (g << 8) | (b << 16));
-    }
+    GpuGs_ClearImage(rect->x, rect->y, rect->w, rect->h, r | (g << 8) | (b << 16));
     return 0;
 }
 
@@ -159,37 +123,13 @@ int ClearImage2(RECT* rect, u_char r, u_char g, u_char b)
 
 int LoadImage(RECT* rect, u_long* p)
 {
-    const u16* src = (const u16*)p;
-    s32 x, y;
-    for (y = 0; y < rect->h; y++)
-    {
-        for (x = 0; x < rect->w; x++)
-        {
-            g_PortVram[(rect->y + y) & (VRAM_H - 1)][(rect->x + x) & (VRAM_W - 1)] = *src++;
-        }
-    }
-    if (g_PortGsRenderer)
-    {
-        GpuGs_LoadImage(rect->x, rect->y, rect->w, rect->h);
-    }
+    GpuGs_LoadImage(rect->x, rect->y, rect->w, rect->h, (const u16*)p, rect->w);
     return 0;
 }
 
 int StoreImage(RECT* rect, u_long* p)
 {
-    u16* dst = (u16*)p;
-    s32 x, y;
-    if (g_PortGsRenderer == 1)
-    {
-        GpuGs_StoreAll(); /* the GS holds the current VRAM */
-    }
-    for (y = 0; y < rect->h; y++)
-    {
-        for (x = 0; x < rect->w; x++)
-        {
-            *dst++ = g_PortVram[(rect->y + y) & (VRAM_H - 1)][(rect->x + x) & (VRAM_W - 1)];
-        }
-    }
+    GpuGs_StoreImage(rect->x, rect->y, rect->w, rect->h, (u16*)p);
     return 0;
 }
 
@@ -287,7 +227,6 @@ static void DrawOTagImpl(u_long* p)
                 stuckTicks = 0;
             }
         }
-        if (g_PortGsRenderer)
         {
             extern void GpuGs_Stats(u32 frames);
             GpuGs_Stats(30); /* 60 DrawOTag calls: two per frame */
@@ -317,11 +256,7 @@ DISPENV* PutDispEnv(DISPENV* env)
 {
     if (Capture_Pending())
     {
-        if (g_PortGsRenderer == 1)
-        {
-            GpuGs_StoreAll();
-        }
-        Capture_Display(&g_PortVram[0][0], env->disp.x, env->disp.y, env->disp.w, env->disp.h, &g_SysWork,
+        Capture_Display(env->disp.x, env->disp.y, env->disp.w, env->disp.h, &g_SysWork,
                         (int)sizeof(g_SysWork), &g_GameWork, (int)sizeof(g_GameWork), g_DeltaTime);
     }
 #ifdef SH_PORT_PROF
@@ -348,16 +283,9 @@ DISPENV* PutDispEnv(DISPENV* env)
     /* The game swaps display buffers with PutDispEnv once per frame: present the new display area. */
     if (s_DispMask)
     {
-        if (g_PortGsRenderer)
-        {
-            PROF_BEGIN("gs: Display_PresentGs")
-            Display_PresentGs(env->disp.x, env->disp.y, env->disp.w, env->disp.h, env->isrgb24, env->isinter);
-            PROF_END("gs: Display_PresentGs")
-        }
-        else
-        {
-            Display_Present(&g_PortVram[0][0], env->disp.x, env->disp.y, env->disp.w, env->disp.h, env->isrgb24, env->isinter);
-        }
+        PROF_BEGIN("gs: Display_PresentGs")
+        Display_PresentGs(env->disp.x, env->disp.y, env->disp.w, env->disp.h, env->isrgb24, env->isinter);
+        PROF_END("gs: Display_PresentGs")
     }
     return env;
 }

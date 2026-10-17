@@ -55,7 +55,7 @@ enum
 
 u32 g_GteData[32];
 u32 g_GteCtrl[32];
-u32 g_GteCtrlDirty = 1;
+u32 g_GteCtrlDirty = ~0u; /* a bit per control register written since the last refresh */
 #define d g_GteData
 #define c g_GteCtrl
 
@@ -104,22 +104,36 @@ static int small30(u32 v)
 }
 
 /** Brings the unpacked matrices and s_Small up to date after control register writes (once per
- * command at most: g_GteCtrlDirty). */
+ * command at most). g_GteCtrlDirty has a bit per written register, so only the matrices (and
+ * range checks) whose registers changed are redone. */
 static void ctrl_refresh(void)
 {
-    unpack_matrix(C_RT0, m_rt);
-    unpack_matrix(C_LLM0, m_llm);
-    unpack_matrix(C_LCM0, m_lcm);
+    u32 dirty = g_GteCtrlDirty;
+    if (dirty & 0x1Fu) /* RT */
+    {
+        unpack_matrix(C_RT0, m_rt);
 #ifdef _EE
-    m_rt_mmi[0] = (s16)m_rt[0]; m_rt_mmi[1] = (s16)m_rt[1]; m_rt_mmi[2]  = (s16)m_rt[2];
-    m_rt_mmi[4] = (s16)m_rt[3]; m_rt_mmi[5] = (s16)m_rt[4]; m_rt_mmi[6]  = (s16)m_rt[5];
-    m_rt_mmi[8] = (s16)m_rt[6]; m_rt_mmi[9] = (s16)m_rt[7]; m_rt_mmi[10] = (s16)m_rt[8];
+        m_rt_mmi[0] = (s16)m_rt[0]; m_rt_mmi[1] = (s16)m_rt[1]; m_rt_mmi[2]  = (s16)m_rt[2];
+        m_rt_mmi[4] = (s16)m_rt[3]; m_rt_mmi[5] = (s16)m_rt[4]; m_rt_mmi[6]  = (s16)m_rt[5];
+        m_rt_mmi[8] = (s16)m_rt[6]; m_rt_mmi[9] = (s16)m_rt[7]; m_rt_mmi[10] = (s16)m_rt[8];
 #endif
-    s_Small = small30(c[C_TRX]) && small30(c[C_TRY]) && small30(c[C_TRZ]) && small30(c[C_RBK]) &&
-              small30(c[C_GBK]) && small30(c[C_BBK]) && small30(c[C_RFC]) && small30(c[C_GFC]) &&
-              small30(c[C_BFC]);
-    s_FcTiny = (u32)(c[C_RFC] + 0x40000) < 0x80000 && (u32)(c[C_GFC] + 0x40000) < 0x80000 &&
-               (u32)(c[C_BFC] + 0x40000) < 0x80000;
+    }
+    if (dirty & 0x1F00u) /* LLM */
+    {
+        unpack_matrix(C_LLM0, m_llm);
+    }
+    if (dirty & 0x1F0000u) /* LCM */
+    {
+        unpack_matrix(C_LCM0, m_lcm);
+    }
+    if (dirty & 0xE0E0E0u) /* TR, BK, FC */
+    {
+        s_Small = small30(c[C_TRX]) && small30(c[C_TRY]) && small30(c[C_TRZ]) && small30(c[C_RBK]) &&
+                  small30(c[C_GBK]) && small30(c[C_BBK]) && small30(c[C_RFC]) && small30(c[C_GFC]) &&
+                  small30(c[C_BFC]);
+        s_FcTiny = (u32)(c[C_RFC] + 0x40000) < 0x80000 && (u32)(c[C_GFC] + 0x40000) < 0x80000 &&
+                   (u32)(c[C_BFC] + 0x40000) < 0x80000;
+    }
     g_GteCtrlDirty = 0;
 }
 
@@ -131,7 +145,7 @@ void Gte_Reset(void)
         d[i] = 0;
         c[i] = 0;
     }
-    g_GteCtrlDirty = 1;
+    g_GteCtrlDirty = ~0u;
 }
 
 /* ----------------------------------------------------------------------------------------------
@@ -258,7 +272,7 @@ void Gte_CtrlWrite(unsigned int reg, unsigned int value)
             c[reg] = value;
             break;
     }
-    g_GteCtrlDirty = 1;
+    g_GteCtrlDirty |= 1u << reg;
 }
 
 unsigned int Gte_CtrlRead(unsigned int reg)

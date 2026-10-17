@@ -87,7 +87,9 @@ void Capture_Packet(int step, const unsigned int* words, int count)
 }
 
 /** At PutDispEnv: finishes a frame whose packets were captured (its VRAM is now complete). */
-void Capture_Display(const unsigned short* vram, int x, int y, int w, int h, const void* state, int stateSize,
+extern void GpuGs_StoreImage(int x, int y, int w, int h, unsigned short* dst); /* gpu_gs.c */
+
+void Capture_Display(int x, int y, int w, int h, const void* state, int stateSize,
                      const void* state2, int state2Size, int deltaTime)
 {
     char  name[64];
@@ -105,7 +107,14 @@ void Capture_Display(const unsigned short* vram, int x, int y, int w, int h, con
     sprintf(name, "host:cap/ps2_%d_vram.bin", s_Open);
     if ((f = fopen(name, "wb")))
     {
-        fwrite(vram, 2, 1024 * 512, f);
+        /* The GS's VRAM, read back in bands (no full copy is kept). */
+        static unsigned short band[32 * 1024] __attribute__((aligned(64)));
+        int row;
+        for (row = 0; row < 512; row += 32)
+        {
+            GpuGs_StoreImage(0, row, 1024, 32, band);
+            fwrite(band, 2, 32 * 1024, f);
+        }
         fclose(f);
     }
     sprintf(name, "host:cap/ps2_%d_syswork.bin", s_Open);

@@ -6,14 +6,17 @@
  * buffer. PSMCT16 has the PS1's pixel layout (5:5:5, bit 15 = alpha MSB = PS1 mask bit). Below it,
  * CACHE_ADDR holds 4/8-bit texture pages; gsKit's display frame buffer is at the bottom.
  *
- * Mapping (written from psx-spx and the GS User's Manual; gpu_soft.c is the reference):
+ * The VRAM buffer is the only copy of the PS1's VRAM (no EE copy since 2026-10-17): uploads go
+ * straight to it, StoreImage reads it back.
+ *
+ * Mapping (written from psx-spx and the GS User's Manual; compared against DuckStation):
  *  - Textures: 15-bit pages are read straight from the VRAM buffer (so render-to-texture works).
- *    4/8-bit pages are uploaded as PSMT4/PSMT8 from the EE copy of VRAM (g_PortVram, kept up to date
- *    by CPU uploads), which packs indices the same way, and cached per page. Their CLUTs are copied
- *    from g_PortVram to a CLUT cache (one row each, loaded with CSM2): loading CLUTs from the VRAM
+ *    4/8-bit pages are read back from the VRAM buffer on a cache miss (download_rect) and uploaded
+ *    as PSMT4/PSMT8, which packs indices the same way, and cached per page. Their CLUTs are read back
+ *    the same way into a CLUT cache (one row each, loaded with CSM2): loading CLUTs from the VRAM
  *    buffer itself (the render target) made PCSX2's hardware renderer read the target back for each of
- *    the ~330 CLUT loads per frame (99% host GPU in-game). GP0 fills and VRAM copies also update
- *    g_PortVram, so it holds everything but what polygons draw.
+ *    the ~330 CLUT loads per frame (99% host GPU in-game). Uploads, fills and VRAM copies that touch a
+ *    cached page or CLUT drop it (cache_invalidate).
  *  - Texel 0x0000 is transparent: TEXA AEM gives it alpha 0, dropped by the alpha test. Other texels
  *    get alpha TA0 = 0x40 (bit 15 clear) or TA1 = 0x80 (bit 15 set), so PABE blends only texels with
  *    bit 15 set (PS1 semi-transparency) and the frame buffer write stores bit 15 from the texel.
@@ -44,8 +47,11 @@ typedef unsigned long long u64x;
 #define VRAM_BW    (VRAM_W / 64)
 #define CACHE_ADDR 0x200000
 #define CACHE_SLOT 0x10000
-#define CACHE_SLOTS 28 /* 15 at CACHE_ADDR, 13 more from CACHE2_ADDR */
-#define CACHE2_ADDR 0x130000 /* above gsKit's largest display buffer (640x480x4 = 0x12C000) */
+#define CACHE_SLOTS 37 /* 15 at CACHE_ADDR, 22 more from CACHE2_ADDR */
+#define CACHE2_ADDR 0xA0000 /* above SNAP_ADDR's 640x480x2 = 0x96000 */
+/* Snapshot of single-buffered interlaced screens (GpuGs_DisplayShow), 640 wide, 16-bit; shared with
+ * gsKit's frame buffer, which only its setup uses. */
+#define SNAP_ADDR  0
 /* CLUT cache: one 256-pixel PSMCT16 row per CLUT (256x128, the last 64 KiB of the page cache area). */
 #define CLUT_ADDR  0x2F0000
 #define CLUT_ROWS  128
@@ -60,14 +66,12 @@ enum
 {
     R_PRIM = 0x00, R_RGBAQ = 0x01, R_UV = 0x03, R_XYZ2 = 0x05, R_TEX0 = 0x06, R_CLAMP = 0x08,
     R_TEX1 = 0x14, R_XYOFFSET = 0x18, R_PRMODECONT = 0x1A, R_TEXCLUT = 0x1C, R_TEXA = 0x3B,
-    R_TEXFLUSH = 0x3F, R_SCISSOR = 0x40, R_ALPHA = 0x42, R_DIMX = 0x44, R_DTHE = 0x45,
+    R_TEXFLUSH = 0x3F, R_SCISSOR = 0x40, R_SCANMSK = 0x22, R_ALPHA = 0x42, R_DIMX = 0x44, R_DTHE = 0x45,
     R_COLCLAMP = 0x46, R_TEST = 0x47, R_PABE = 0x49, R_FBA = 0x4A, R_FRAME = 0x4C, R_ZBUF = 0x4E,
     R_BITBLTBUF = 0x50, R_TRXPOS = 0x51, R_TRXREG = 0x52, R_TRXDIR = 0x53, R_FINISH = 0x61,
     REG_COUNT = 0x62
 };
 
-extern u16  g_PortVram[VRAM_H][VRAM_W];
-extern s32  g_PortGsRenderer; /* libgpu_port.c: 1 = GS only (g_PortVram is then this file's copy) */
 extern void Display_EnsureInit(void); /* display_ps2.c */
 
 /* --- GIF packets ------------------------------------------------------------------------------*/
@@ -98,8 +102,23 @@ static u64x s_Reg[REG_COUNT];
 static u32  s_Epoch;
 /* Per-frame statistics (GpuGs_Stats): primitives, texture (TEX0) changes, CLUT loads, primitives
  * with destination alpha test (check mask), primitives sampling the VRAM buffer (15-bit pages). */
-static u32 s_StPrims, s_StTex0, s_StClut, s_StDate, s_StRtTex, s_StUploads;
+static u32 s_StPrims, s_StTex0, s_StClut, s_StDate, s_StRtTex, s_StUploads, s_StReadbacks;
 static u8   s_RegValid[REG_COUNT];
+
+/* Interlaced 480-line display with drawing to the display area off (GP0 E1 bit 10, DFE = 0): the
+ * game draws into the area on screen (single-buffered: title, inventory). On the PS1 (Mednafen's
+ * LineSkipTest), nothing is drawn on the VRAM lines of the field being scanned out, so the screen
+ * only ever shows complete fields.
+ * - Default: the GS draws every line, and each frame is shown as a snapshot (display_copy into
+ *   SNAP_ADDR), so the half-redrawn area is never on screen.
+ * - SH_PORT_INTERLACE_FIELDS: as on the PS1, SCANMSK masks the lines of the field being scanned out
+ *   (CSR.FIELD, looked at again after each vertical blank and after DFE or mode changes), and the
+ *   area is shown straight from VRAM. Broken in PCSX2 (menu text missing in its output although
+ *   VRAM holds it at every swap, 2026-10-17); to test on hardware. */
+static s32 s_Interlace480, s_DispY;
+static s32 s_MaskDirty = 1;
+static u32 s_MaskSeq;
+extern volatile unsigned int g_PortVBlankSeq; /* libetc_ps2.c: vertical blanks */
 
 static u64x giftag(u32 nloop, u32 eop, u32 flg, u32 nreg)
 {
@@ -240,6 +259,7 @@ void GpuGs_StateLost(void)
 {
     pend_flush();
     s_Epoch++;
+    s_MaskDirty = 1; /* SCANMSK sent again */
     memset(s_RegValid, 0, sizeof(s_RegValid));
 }
 
@@ -270,6 +290,8 @@ static s32 sext11(u32 v)
 }
 
 /* --- Texture page cache (4/8-bit pages as PSMT4/PSMT8) ----------------------------------------*/
+
+static void download_rect(s32 x, s32 y, s32 w, s32 h, u16* dst, s32 stride); /* VRAM readback, below */
 
 typedef struct
 {
@@ -310,6 +332,7 @@ static void page_rect(s32 key, s32* x, s32* y, s32* w)
     *y       = (page >> 4) * 256;
     *w       = (key >> 5) == 0 ? 64 : 128;
 }
+
 
 /** Drops cached pages overlapping a VRAM rectangle that changed. */
 static void cache_invalidate(s32 x, s32 y, s32 w, s32 h)
@@ -384,6 +407,87 @@ static void upload(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s32 h, const 
     upload_staged(dbp, dbw, psm, x, y, w, h, bytes);
 }
 
+/** A fill of the 16-bit value `c` over (x, y, w, h) (fill_rect). Cached pages and CLUTs it touches get
+ * the same value written into their cached copy instead of being dropped: 4/8-bit indices pack into
+ * the same bytes as the 16-bit words, so the copy stays equal to VRAM with no readback. (The game's
+ * screen clear covers rows of an 8-bit page whose textures sit above the frame buffer: 2-4 re-reads
+ * a frame otherwise, each waiting for the GS.) Pages that wrap at the right edge are dropped. */
+static void cache_fill(s32 x, s32 y, s32 w, s32 h, u16 c)
+{
+    s32 i, k;
+#ifdef SH_PORT_INTERLACE_FIELDS
+    if (s_Reg[R_SCANMSK])
+    {
+        cache_invalidate(x, y, w, h); /* masked fills skip every other line */
+        return;
+    }
+#endif
+    for (i = 0; i < CACHE_SLOTS; i++)
+    {
+        s32 px, py, pw, x0, x1, y0, y1, depth, scale;
+        if (s_Slots[i].key < 0)
+        {
+            continue;
+        }
+        page_rect(s_Slots[i].key, &px, &py, &pw);
+        if (!(x < px + pw && px < x + w && y < py + 256 && py < y + h))
+        {
+            continue;
+        }
+        if (px + pw > VRAM_W)
+        {
+            s_PageMap[s_Slots[i].key] = 0;
+            s_Slots[i].key            = -1;
+            s_RegValid[R_TEX0]        = 0;
+            continue;
+        }
+        x0    = x > px ? x : px;
+        x1    = x + w < px + pw ? x + w : px + pw;
+        y0    = y > py ? y : py;
+        y1    = y + h < py + 256 ? y + h : py + 256;
+        depth = s_Slots[i].key >> 5;
+        scale = depth == 0 ? 4 : 2; /* indices per VRAM word */
+        GpuGs_Sync();               /* s_ImgPkt may still be on its way to the GS */
+        for (k = 0; k < (x1 - x0) * (y1 - y0); k++)
+        {
+            ((u16*)&s_ImgPkt[2])[k] = c;
+        }
+        upload_staged(slot_tbp(i), 4, depth == 0 ? PSM_T4 : PSM_T8, (x0 - px) * scale, y0 - py, (x1 - x0) * scale,
+                      y1 - y0, (u32)(((x1 - x0) * (y1 - y0) * 2 + 15) & ~15));
+    }
+    for (i = 0; i < CLUT_ROWS; i++)
+    {
+        s32 cx, cy, cw, x0, x1;
+        u16 row[256] __attribute__((aligned(16)));
+        if (s_Cluts[i].key < 0)
+        {
+            continue;
+        }
+        cx = (s_Cluts[i].key & 0x3F) * 16;
+        cy = (s_Cluts[i].key >> 6) & 0x1FF;
+        cw = (s_Cluts[i].key >> 16) == 0 ? 16 : 256;
+        if (!(x < cx + cw && cx < x + w && y <= cy && cy < y + h))
+        {
+            continue;
+        }
+        if (cx + cw > VRAM_W)
+        {
+            s_ClutMap[CLUT_MAP(s_Cluts[i].key)] = 0;
+            s_Cluts[i].key                      = -1;
+            s_RegValid[R_TEX0]                  = 0;
+            continue;
+        }
+        x0 = x > cx ? x : cx;
+        x1 = x + w < cx + cw ? x + w : cx + cw;
+        for (k = 0; k < x1 - x0; k++)
+        {
+            row[k] = c;
+        }
+        upload(CLUT_ADDR / 256, 4, PSM_CT16, x0 - cx, i, x1 - x0, 1, row, (u32)(((x1 - x0) * 2 + 15) & ~15));
+        s_RegValid[R_TEX0] = 0; /* this row's contents changed: load it again */
+    }
+}
+
 static u32 cache_get(u32 depth, u32 tpage)
 {
     s32 key = (s32)((depth << 5) | (tpage & 31));
@@ -407,26 +511,18 @@ static u32 cache_get(u32 depth, u32 tpage)
             best = i;
         }
     }
-    /* Upload the page's indices: 256 rows of 64 (4-bit) or 128 (8-bit) VRAM words. */
-    /* Rows straight into the transfer packet (whole rows with memcpy unless the page wraps). */
+    /* The page's indices, 256 rows of 64 (4-bit) or 128 (8-bit) VRAM words, read back from the VRAM
+     * buffer straight into the transfer packet (in two parts when the page wraps at the right edge). */
     page_rect(key, &x, &y, &w);
     GpuGs_Sync(); /* s_ImgPkt may still be on its way to the GS */
-    for (row = 0; row < 256; row++)
+    if (x + w <= VRAM_W)
     {
-        u16* dst = (u16*)&s_ImgPkt[2] + row * w;
-        const u16* src = &g_PortVram[(y + row) & (VRAM_H - 1)][0];
-        if (x + w <= VRAM_W)
-        {
-            memcpy(dst, src + x, (u32)w * 2);
-        }
-        else
-        {
-            s32 col;
-            for (col = 0; col < w; col++)
-            {
-                dst[col] = src[(x + col) & (VRAM_W - 1)];
-            }
-        }
+        download_rect(x, y, w, 256, (u16*)&s_ImgPkt[2], w);
+    }
+    else
+    {
+        download_rect(x, y, VRAM_W - x, 256, (u16*)&s_ImgPkt[2], w);
+        download_rect(0, y, x + w - VRAM_W, 256, (u16*)&s_ImgPkt[2] + (VRAM_W - x), w);
     }
     upload_staged(slot_tbp(best), 4, depth == 0 ? PSM_T4 : PSM_T8, 0, 0, 256, 256, (u32)(w * 2 * 256));
     if (s_Slots[best].key >= 0)
@@ -466,9 +562,14 @@ static u32 clut_get(u32 clut, u32 depth)
     x = (s32)(clut & 0x3F) * 16;
     y = (s32)((clut >> 6) & 0x1FF);
     n = depth == 0 ? 16 : 256;
-    for (i = 0; i < n; i++)
+    if (x + n <= VRAM_W)
     {
-        row[i] = g_PortVram[y][(x + i) & (VRAM_W - 1)];
+        download_rect(x, y, n, 1, row, n);
+    }
+    else
+    {
+        download_rect(x, y, VRAM_W - x, 1, row, n);
+        download_rect(0, y, x + n - VRAM_W, 1, row + (VRAM_W - x), n);
     }
     upload(CLUT_ADDR / 256, 4, PSM_CT16, 0, best, n, 1, row, (u32)(n * 2));
     if (s_Cluts[best].key >= 0)
@@ -564,6 +665,34 @@ static void scissor(s32 x1, s32 y1, s32 x2, s32 y2)
     set(R_SCISSOR, (u64x)x1 | ((u64x)x2 << 16) | ((u64x)y1 << 32) | ((u64x)y2 << 48));
 }
 
+/** SCANMSK for the field being scanned out now (see s_Interlace480): 2 masks even lines, 3 odd. */
+static void scanmsk_update(void)
+{
+    u64x m = 0;
+    s_MaskSeq   = g_PortVBlankSeq;
+    s_MaskDirty = 0;
+#ifdef SH_PORT_INTERLACE_FIELDS
+    if (s_Interlace480 && !(s_TexPage & 0x400))
+#else
+    if (0)
+#endif
+    {
+        /* CSR.FIELD 0 scans out the odd lines from DBY (measured: the mask the other way round let
+         * drawing hit the lines on screen), so field 0 masks odd lines (3), field 1 even ones (2). */
+        u32 field = (u32)(*(volatile u64x*)0x12001000 >> 13) & 1;
+        m         = 2 + (field ^ 1u ^ (u32)(s_DispY & 1));
+    }
+    set(R_SCANMSK, m);
+}
+#define SCANMSK_CHECK()                                     \
+    do                                                      \
+    {                                                       \
+        if (s_MaskDirty || s_MaskSeq != g_PortVBlankSeq)    \
+        {                                                   \
+            scanmsk_update();                               \
+        }                                                   \
+    } while (0)
+
 /** Per-primitive state; returns the PRIM register bits other than the type. */
 static u64x state_other(const Prim* p);
 static void tex_state(const Prim* p);
@@ -578,6 +707,8 @@ static u64x prim_state(const Prim* p)
     static u32  memoEpoch = ~0u, memoKey[4];
     static u64x memoPrim;
     u32         key[4];
+
+    SCANMSK_CHECK();
 
     key[0] = p->textured | (p->raw << 1) | (p->semi << 2) | (p->semiMode << 3) | (p->gouraud << 5) |
              (p->dither << 6) | (s_SetMask << 7) | (s_CheckMask << 8) | (s_TwMaskX << 18) | (s_TwMaskY << 23);
@@ -877,7 +1008,7 @@ static u32 polygon(const u32* w, s32 n, const u32* under)
     p.clut     = clut;
     if (textured)
     {
-        s_TexPage = tpage; /* textured polygons also set the current texture page */
+        s_TexPage = (tpage & ~0x400u) | (s_TexPage & 0x400); /* textured polygons also set the current texture page (DFE stays: E1 only) */
     }
     p.semiMode = (tpage >> 5) & 3;
     {
@@ -1066,6 +1197,7 @@ static void fill_rect(s32 x, s32 y, s32 w, s32 h, u32 rgb)
     set(R_TEST, (1 << 16) | (1 << 17));
     set(R_FBA, 0);
     set(R_DTHE, 0);
+    SCANMSK_CHECK();
     read_rgb(rgb, &a);
     a.x = x;
     a.y = y;
@@ -1079,20 +1211,7 @@ static void fill_rect(s32 x, s32 y, s32 w, s32 h, u32 rgb)
         v[1] = &b;
         emit(&p, 6 | (1 << 8), v, 2);
     }
-    cache_invalidate(x, y, w, h);
-    if (g_PortGsRenderer == 1)
-    {
-        /* Keep g_PortVram (the source of the texture and CLUT caches) in step. */
-        u16 c = (u16)(((rgb & 0xFF) >> 3) | ((((rgb >> 8) & 0xFF) >> 3) << 5) | ((((rgb >> 16) & 0xFF) >> 3) << 10));
-        s32 yy, xx;
-        for (yy = 0; yy < h; yy++)
-        {
-            for (xx = 0; xx < w; xx++)
-            {
-                g_PortVram[(y + yy) & (VRAM_H - 1)][(x + xx) & (VRAM_W - 1)] = c;
-            }
-        }
-    }
+    cache_fill(x, y, w, h, (u16)(((rgb & 0xFF) >> 3) | ((((rgb >> 8) & 0xFF) >> 3) << 5) | ((((rgb >> 16) & 0xFF) >> 3) << 10)));
 }
 
 static void fill(const u32* w)
@@ -1116,16 +1235,6 @@ static void move(s32 sx, s32 sy, s32 dx, s32 dy, s32 w, s32 h)
     ad(R_TRXDIR, 2);
     ad(R_TEXFLUSH, 0);
     cache_invalidate(dx, dy, w, h);
-    if (g_PortGsRenderer == 1)
-    {
-        /* Same copy in g_PortVram (rows in an order that handles overlap). */
-        s32 r;
-        for (r = 0; r < h; r++)
-        {
-            s32 row = dy > sy ? h - 1 - r : r;
-            memmove(&g_PortVram[dy + row][dx], &g_PortVram[sy + row][sx], (u32)w * 2);
-        }
-    }
 }
 
 static void vram_copy(const u32* w)
@@ -1141,6 +1250,10 @@ static void settings(u32 w)
     switch (w >> 24)
     {
         case 0xE1:
+            if ((s_TexPage ^ w) & 0x400)
+            {
+                s_MaskDirty = 1; /* DFE */
+            }
             s_TexPage = w & 0x3FFF;
             break;
         case 0xE2:
@@ -1276,8 +1389,8 @@ void GpuGs_Commands(const u32* w, s32 n)
 
 /* --- VRAM transfers (libgpu LoadImage/StoreImage/ClearImage/MoveImage) ------------------------*/
 
-/** g_PortVram's rectangle was written by the CPU: copy it to the GS. */
-void GpuGs_LoadImage(s32 x, s32 y, s32 w, s32 h)
+/** LoadImage: `src` (rows of `stride` pixels) to the VRAM buffer's rectangle. */
+void GpuGs_LoadImage(s32 x, s32 y, s32 w, s32 h, const u16* src, s32 stride)
 {
     pend_flush();
     s32 row, col;
@@ -1291,10 +1404,10 @@ void GpuGs_LoadImage(s32 x, s32 y, s32 w, s32 h)
     {
         /* Wrapping uploads: split at the VRAM edges. */
         s32 w1 = x + w > VRAM_W ? VRAM_W - x : w, h1 = y + h > VRAM_H ? VRAM_H - y : h;
-        GpuGs_LoadImage(x, y, w1, h1);
-        if (w1 < w) GpuGs_LoadImage(0, y, w - w1, h1);
-        if (h1 < h) GpuGs_LoadImage(x, 0, w1, h - h1);
-        if (w1 < w && h1 < h) GpuGs_LoadImage(0, 0, w - w1, h - h1);
+        GpuGs_LoadImage(x, y, w1, h1, src, stride);
+        if (w1 < w) GpuGs_LoadImage(0, y, w - w1, h1, src + w1, stride);
+        if (h1 < h) GpuGs_LoadImage(x, 0, w1, h - h1, src + h1 * stride, stride);
+        if (w1 < w && h1 < h) GpuGs_LoadImage(0, 0, w - w1, h - h1, src + h1 * stride + w1, stride);
         return;
     }
     if ((w & 7) == 0)
@@ -1306,7 +1419,7 @@ void GpuGs_LoadImage(s32 x, s32 y, s32 w, s32 h)
             s32 n = h - row < rows ? h - row : rows, r;
             for (r = 0; r < n; r++)
             {
-                memcpy(&s_Staging[r * w * 2], &g_PortVram[y + row + r][x], w * 2);
+                memcpy(&s_Staging[r * w * 2], &src[(row + r) * stride], w * 2);
             }
             upload(VRAM_TBP, VRAM_BW, PSM_CT16, x, y + row, w, n, s_Staging, (u32)(w * 2 * n));
         }
@@ -1318,7 +1431,7 @@ void GpuGs_LoadImage(s32 x, s32 y, s32 w, s32 h)
         u16* dst = (u16*)s_Staging;
         for (col = 0; col < w; col++)
         {
-            dst[col] = g_PortVram[y + row][x + col];
+            dst[col] = src[row * stride + col];
         }
         upload(VRAM_TBP, VRAM_BW, PSM_CT16, x, y + row, w, 1, s_Staging, (u32)((w * 2 + 15) & ~15));
     }
@@ -1349,73 +1462,96 @@ void GpuGs_MoveImage(s32 sx, s32 sy, s32 dx, s32 dy, s32 w, s32 h)
 
 static u16 s_Readback[256 * VRAM_W] __attribute__((aligned(64)));
 
-/** Local-to-host transfer of VRAM rows [y, y + h) into dst (h <= 256). */
-static void download_rows(u16 (*dst)[VRAM_W], s32 y, s32 h)
+/** Local-to-host transfer of the VRAM rectangle (x, y, w, h) into dst (rows of `stride` pixels).
+ * x and w are rounded out to multiples of 8 pixels (16 bytes) for the transfer; at most
+ * sizeof(s_Readback) bytes at a time (larger rectangles are read in bands). No wrapping. */
+static void download_rect(s32 x, s32 y, s32 w, s32 h, u16* dst, s32 stride)
 {
-    u32 qwc = (u32)(VRAM_W * 2 * h / 16);
-    s32 spins;
-    GpuGs_Flush();
-    GpuGs_Sync();
-    *GS_CSR = 2; /* clear FINISH, then wait for this transfer's FINISH before turning the bus around */
-    ad(R_BITBLTBUF, (u64x)VRAM_TBP | ((u64x)VRAM_BW << 16) | ((u64x)PSM_CT16 << 24));
-    ad(R_TRXPOS, (u64x)0 | ((u64x)y << 16));
-    ad(R_TRXREG, (u64x)VRAM_W | ((u64x)h << 32));
-    ad(R_FINISH, 0);
-    ad(R_TRXDIR, 1);
-    GpuGs_Flush();
-    GpuGs_Sync();
+    s32 x0 = x & ~7, tw = ((x + w + 7) & ~7) - x0;
+    s32 band = (s32)(sizeof(s_Readback) / 2) / tw, row;
+    if (h > band)
+    {
+        for (row = 0; row < h; row += band)
+        {
+            download_rect(x, y + row, w, h - row < band ? h - row : band, dst + row * stride, stride);
+        }
+        return;
+    }
+    {
+        u32 qwc = (u32)(tw * 2 * h / 16);
+        const u16* rb = (const u16*)((u32)s_Readback | 0x20000000); /* uncached: the DMA wrote behind the cache */
+        s32 spins;
+        s_StReadbacks++;
+        GpuGs_Flush();
+        GpuGs_Sync();
+        *GS_CSR = 2; /* clear FINISH, then wait for this transfer's FINISH before turning the bus around */
+        ad(R_BITBLTBUF, (u64x)VRAM_TBP | ((u64x)VRAM_BW << 16) | ((u64x)PSM_CT16 << 24));
+        ad(R_TRXPOS, (u64x)x0 | ((u64x)y << 16));
+        ad(R_TRXREG, (u64x)tw | ((u64x)h << 32));
+        ad(R_FINISH, 0);
+        ad(R_TRXDIR, 1);
+        GpuGs_Flush();
+        GpuGs_Sync();
 
-    /* Real hardware: the bus may only be turned around once the GS has finished drawing (PCSX2
-     * doesn't care); doing it earlier sometimes wedged the download forever (attract demo water). */
-    for (spins = 0; !(*GS_CSR & 2) && spins < READBACK_SPINS; spins++)
-    {
+        /* Real hardware: the bus may only be turned around once the GS has finished drawing (PCSX2
+         * doesn't care); doing it earlier sometimes wedged the download forever (attract demo water). */
+        for (spins = 0; !(*GS_CSR & 2) && spins < READBACK_SPINS; spins++)
+        {
+        }
+        FlushCache(0);
+        *VIF1_STAT = 0x00800000; /* FDR: VIF1 FIFO direction GS -> EE */
+        *GS_BUSDIR = 1;
+        *D1_MADR   = (u32)s_Readback & 0x0FFFFFFF;
+        *D1_QWC    = qwc;
+        *D1_CHCR   = 0x100; /* start, to memory, normal mode */
+        for (spins = 0; (*D1_CHCR & 0x100) && spins < READBACK_SPINS; spins++)
+        {
+        }
+        if (*D1_CHCR & 0x100)
+        {
+            /* Wedged: stop the channel and reset VIF1 rather than freezing (the data is stale). */
+            printf("gpu_gs: VRAM download stuck (%d,%d %dx%d, qwc left %u), recovered\n", x0, y, tw, h,
+                   (unsigned)*D1_QWC);
+            *D1_CHCR    = 0;
+            *VIF1_FBRST = 1;
+        }
+        *GS_BUSDIR = 0;
+        *VIF1_STAT = 0;
+        *GS_CSR    = 2; /* clear FINISH */
+        for (row = 0; row < h; row++)
+        {
+            memcpy(&dst[row * stride], &rb[row * tw + (x - x0)], (u32)w * 2);
+        }
     }
-    FlushCache(0);
-    *VIF1_STAT = 0x00800000; /* FDR: VIF1 FIFO direction GS -> EE */
-    *GS_BUSDIR = 1;
-    *D1_MADR   = (u32)s_Readback & 0x0FFFFFFF;
-    *D1_QWC    = qwc;
-    *D1_CHCR   = 0x100; /* start, to memory, normal mode */
-    for (spins = 0; (*D1_CHCR & 0x100) && spins < READBACK_SPINS; spins++)
-    {
-    }
-    if (*D1_CHCR & 0x100)
-    {
-        /* Wedged: stop the channel and reset VIF1 rather than freezing (this frame's copy is stale). */
-        printf("gpu_gs: VRAM download stuck (rows %d-%d, qwc left %u), recovered\n", y, y + h - 1,
-               (unsigned)*D1_QWC);
-        *D1_CHCR   = 0;
-        *VIF1_FBRST = 1;
-    }
-    *GS_BUSDIR = 0;
-    *VIF1_STAT = 0;
-    *GS_CSR    = 2; /* clear FINISH */
-    /* Read through the uncached segment: the DMA wrote memory behind the data cache. */
-    memcpy(&dst[y][0], (const void*)((u32)s_Readback | 0x20000000), VRAM_W * 2 * h);
 }
 
-/** Copies the GS's VRAM into dst (a 1024x512 array). */
-void GpuGs_Download(u16 (*dst)[VRAM_W])
+/** StoreImage: the VRAM buffer's rectangle into `dst` (w pixels a row), split at the VRAM edges. */
+void GpuGs_StoreImage(s32 x, s32 y, s32 w, s32 h, u16* dst)
 {
+    s32 w1, h1;
+    if (w <= 0 || h <= 0)
+    {
+        return;
+    }
+    PROF_BEGIN("gs: StoreImage (VRAM readback)")
     pend_flush();
     init();
-    download_rows(dst, 0, 256);
-    download_rows(dst, 256, 256);
-}
-
-/** Copies the GS's VRAM into g_PortVram (StoreImage). */
-void GpuGs_StoreAll(void)
-{
-    PROF_BEGIN("gs: StoreAll (VRAM readback)")
-    GpuGs_Download(g_PortVram);
-    PROF_END("gs: StoreAll (VRAM readback)")
+    x &= VRAM_W - 1;
+    y &= VRAM_H - 1;
+    w1 = x + w > VRAM_W ? VRAM_W - x : w;
+    h1 = y + h > VRAM_H ? VRAM_H - y : h;
+    download_rect(x, y, w1, h1, dst, w);
+    if (w1 < w) download_rect(0, y, w - w1, h1, dst + w1, w);
+    if (h1 < h) download_rect(x, 0, w1, h - h1, dst + h1 * w, w);
+    if (w1 < w && h1 < h) download_rect(0, 0, w - w1, h - h1, dst + h1 * w + w1, w);
+    PROF_END("gs: StoreImage (VRAM readback)")
 }
 
 /* --- Display ----------------------------------------------------------------------------------*/
 
 /** Copies the PS1 display area 1:1 into the GS display frame buffer (fbp: page address, fbw: width / 64,
  * psm: its format). */
-void GpuGs_DisplayCopy(u32 fbp, u32 fbw, u32 psm, s32 x, s32 y, s32 w, s32 h)
+static void display_copy(u32 fbp, u32 fbw, u32 psm, s32 x, s32 y, s32 w, s32 h)
 {
     pend_flush();
     s_Epoch++;
@@ -1443,6 +1579,39 @@ void GpuGs_DisplayCopy(u32 fbp, u32 fbw, u32 psm, s32 x, s32 y, s32 w, s32 h)
     GpuGs_Sync(); /* drawn before it is shown */
 }
 
+
+/** Shows the PS1 display area: output circuit 1 scans out the 16-bit VRAM buffer from (x, y), as the
+ * PS1 scans out its own VRAM (PS1 15-bit pixels have the GS's 16-bit layout), with no copy; except
+ * single-buffered interlaced screens (see s_Interlace480), shown from a snapshot at SNAP_ADDR.
+ * `interlace480`: the PS1 display is interlaced with 480 lines. `blank`: output off (BGCOLOR,
+ * black), for the frames right after a video mode change. PMODE: circuit 1 only, fixed alpha (bit
+ * 15, the PS1 mask bit, would otherwise be read as alpha). */
+void GpuGs_DisplayShow(s32 x, s32 y, s32 w, s32 h, s32 interlace480, s32 blank)
+{
+    u64x dispfb;
+    if (interlace480 != s_Interlace480 || (y & 1) != (s_DispY & 1))
+    {
+        s_Interlace480 = interlace480;
+        s_DispY        = y;
+        s_MaskDirty    = 1;
+    }
+#ifndef SH_PORT_INTERLACE_FIELDS
+    if (interlace480 && !(s_TexPage & 0x400))
+    {
+        display_copy(SNAP_ADDR / 8192, 640 / 64, PSM_CT16, x, y, w, h);
+        dispfb = (u64x)(SNAP_ADDR / 8192) | ((u64x)(640 / 64) << 9) | ((u64x)PSM_CT16 << 15);
+    }
+    else
+#endif
+    {
+        GpuGs_Flush();
+        dispfb = (u64x)VRAM_FBP | ((u64x)VRAM_BW << 9) | ((u64x)PSM_CT16 << 15) |
+                 ((u64x)(x & (VRAM_W - 1)) << 32) | ((u64x)(y & (VRAM_H - 1)) << 43);
+    }
+    *(volatile u64x*)0x12000000 = (blank ? 0 : 1) | (1 << 2) | (1 << 5) | (0xFFULL << 8); /* PMODE: EN1, MMOD (ALP) */
+    *(volatile u64x*)0x12000070 = dispfb;                                                   /* DISPFB1 */
+}
+
 /** Prints and clears the statistics (averaged over `frames`). */
 void GpuGs_Stats(u32 frames)
 {
@@ -1452,9 +1621,9 @@ void GpuGs_Stats(u32 frames)
         return;
     }
     printf("gs stats per frame: %u prims, %u TEX0 changes, %u CLUT loads, %u check-mask prims, %u prims "
-           "texturing from VRAM, %u uploads\n", s_StPrims / frames, s_StTex0 / frames, s_StClut / frames,
-           s_StDate / frames, s_StRtTex / frames, s_StUploads / frames);
-    s_StPrims = s_StTex0 = s_StClut = s_StDate = s_StRtTex = s_StUploads = 0;
+           "texturing from VRAM, %u uploads, %u readbacks\n", s_StPrims / frames, s_StTex0 / frames, s_StClut / frames,
+           s_StDate / frames, s_StRtTex / frames, s_StUploads / frames, s_StReadbacks / frames);
+    s_StPrims = s_StTex0 = s_StClut = s_StDate = s_StRtTex = s_StUploads = s_StReadbacks = 0;
     printf("gs fog pairs per frame (plain opaque/semi x textured mode 0-3): %u %u %u %u / %u %u %u %u\n",
            s_StFogPair[0][0] / frames, s_StFogPair[0][1] / frames, s_StFogPair[0][2] / frames, s_StFogPair[0][3] / frames,
            s_StFogPair[1][0] / frames, s_StFogPair[1][1] / frames, s_StFogPair[1][2] / frames, s_StFogPair[1][3] / frames);

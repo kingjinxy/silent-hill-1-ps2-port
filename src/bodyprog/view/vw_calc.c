@@ -295,6 +295,7 @@ void vwMatrixToAngleYXZ(SVECTOR* ang, const MATRIX* mat) // 0x800495D4
 
 void Vw_MultiplyAndTransformMatrix(MATRIX* transformMat, MATRIX* inMat, MATRIX* outMat) // 0x800496AC
 {
+#ifndef SH_PORT
     gte_SetRotMatrix(transformMat);
     gte_SetTransMatrix(transformMat);
     gte_ldclmv(inMat);
@@ -309,6 +310,153 @@ void Vw_MultiplyAndTransformMatrix(MATRIX* transformMat, MATRIX* inMat, MATRIX* 
     gte_ldlvl((VECTOR*)inMat->t);
     gte_rtirtr();
     gte_stlvnl((VECTOR*)outMat->t);
+#else
+#ifdef SH_PORT_CHECK_BATCH
+    MATRIX refOut;
+    gte_SetRotMatrix(transformMat);
+    gte_SetTransMatrix(transformMat);
+    gte_ldclmv(inMat);
+    gte_rtir();
+    gte_stclmv(&refOut);
+    gte_ldclmv((MATRIX*)(inMat->m[0] + 1));
+    gte_rtir();
+    gte_stclmv((MATRIX*)(refOut.m[0] + 1));
+    gte_ldclmv((MATRIX*)(inMat->m[0] + 2));
+    gte_rtir();
+    gte_stclmv((MATRIX*)(refOut.m[0] + 2));
+    gte_ldlvl((VECTOR*)inMat->t);
+    gte_rtirtr();
+    gte_stlvnl((VECTOR*)refOut.t);
+#endif
+
+    MATRIX res;
+    const s16 (*r)[3] = (const s16 (*)[3])transformMat->m;
+    const s16 (*b)[3] = (const s16 (*)[3])inMat->m;
+    s32 col, row;
+
+#if defined(_EE)
+    /* Check for -0x8000 which would overflow 32-bit PHMADH product pairs */
+    if (b[0][0] != -0x8000 && b[1][0] != -0x8000 &&
+        b[0][1] != -0x8000 && b[1][1] != -0x8000 &&
+        b[0][2] != -0x8000 && b[1][2] != -0x8000)
+    {
+        /* MMI accelerated:
+         * Load rows of transformMat into 128-bit registers:
+         * rRow01 = [r00 r01 r02 0, r10 r11 r12 0]
+         * rRow2  = [r20 r21 r22 0, 0 0 0 0]
+         */
+        u64 rRow01[2] __attribute__((aligned(16)));
+        u64 rRow2[2] __attribute__((aligned(16)));
+        rRow01[0] = ((u64)(u16)r[0][0]) | (((u64)(u16)r[0][1]) << 16) | (((u64)(u16)r[0][2]) << 32);
+        rRow01[1] = ((u64)(u16)r[1][0]) | (((u64)(u16)r[1][1]) << 16) | (((u64)(u16)r[1][2]) << 32);
+        rRow2[0]  = ((u64)(u16)r[2][0]) | (((u64)(u16)r[2][1]) << 16) | (((u64)(u16)r[2][2]) << 32);
+        rRow2[1]  = 0;
+
+        for (col = 0; col < 3; col++)
+        {
+            u64 vbuf[2] __attribute__((aligned(16)));
+            s32 p[8] __attribute__((aligned(16)));
+            u64 vx = ((u64)(u16)b[0][col]) | (((u64)(u16)b[1][col]) << 16) | (((u64)(u16)b[2][col]) << 32);
+            vbuf[0] = vx;
+            vbuf[1] = vx;
+
+            __asm__ volatile("lq $8, 0(%1)\n\t"
+                             "lq $9, 0(%2)\n\t"
+                             "lq $10, 0(%3)\n\t"
+                             "phmadh $11, $9, $8\n\t"
+                             "phmadh $12, $10, $8\n\t"
+                             "sq $11, 0(%0)\n\t"
+                             "sq $12, 16(%0)"
+                             :
+                             : "r"(p), "r"(vbuf), "r"(rRow01), "r"(rRow2)
+                             : "$8", "$9", "$10", "$11", "$12", "hi", "lo", "memory"); // PHMADH also writes HI/LO.
+
+            s32 r0 = (s32)((((s64)p[0] + p[1])) >> 12);
+            s32 r1 = (s32)((((s64)p[2] + p[3])) >> 12);
+            s32 r2 = (s32)((((s64)p[4] + p[5])) >> 12);
+
+            res.m[0][col] = (s16)(r0 < -0x8000 ? -0x8000 : r0 > 0x7FFF ? 0x7FFF : r0);
+            res.m[1][col] = (s16)(r1 < -0x8000 ? -0x8000 : r1 > 0x7FFF ? 0x7FFF : r1);
+            res.m[2][col] = (s16)(r2 < -0x8000 ? -0x8000 : r2 > 0x7FFF ? 0x7FFF : r2);
+        }
+    }
+    else
+#endif
+    {
+        /* Portable C exact calculation:
+         * outMat.col = (transformMat * inMat.col) >> 12, clamped to -0x8000..0x7FFF */
+        for (col = 0; col < 3; col++)
+        {
+            s32 vx = b[0][col];
+            s32 vy = b[1][col];
+            s32 vz = b[2][col];
+
+            for (row = 0; row < 3; row++)
+            {
+                s64 acc = ((s64)r[row][0] * vx) + ((s64)r[row][1] * vy) + ((s64)r[row][2] * vz);
+                s32 v = (s32)(acc >> 12);
+                res.m[row][col] = (s16)(v < -0x8000 ? -0x8000 : v > 0x7FFF ? 0x7FFF : v);
+            }
+        }
+    }
+
+    /* Translation vector:
+     * outMat.t = transformMat.t + ((transformMat * inMat.t) >> 12)
+     * gte_ldlvl loads inMat.t into the 16-bit IR registers (low halfword, sign-extended), and MAC
+     * keeps the low 32 bits of the sum, so truncate the inputs and add with wraparound. */
+    {
+        s32 tx = (s16)inMat->t[0];
+        s32 ty = (s16)inMat->t[1];
+        s32 tz = (s16)inMat->t[2];
+
+        res.t[0] = (s32)((u32)transformMat->t[0] + (u32)((((s64)r[0][0] * tx) + ((s64)r[0][1] * ty) + ((s64)r[0][2] * tz)) >> 12));
+        res.t[1] = (s32)((u32)transformMat->t[1] + (u32)((((s64)r[1][0] * tx) + ((s64)r[1][1] * ty) + ((s64)r[1][2] * tz)) >> 12));
+        res.t[2] = (s32)((u32)transformMat->t[2] + (u32)((((s64)r[2][0] * tx) + ((s64)r[2][1] * ty) + ((s64)r[2][2] * tz)) >> 12));
+    }
+
+#ifdef SH_PORT_CHECK_BATCH
+    {
+        static s32 checks, mismatches;
+        s32 mismatch = 0;
+        int i, j;
+        for (i = 0; i < 3; i++)
+        {
+            for (j = 0; j < 3; j++)
+            {
+                if (res.m[i][j] != refOut.m[i][j])
+                {
+                    mismatch = 1;
+                }
+            }
+            if (res.t[i] != refOut.t[i])
+            {
+                mismatch = 1;
+            }
+        }
+        checks++;
+        if (mismatch && mismatches++ < 20)
+        {
+            printf("Vw_MultiplyAndTransformMatrix mismatch (#%d):\n", mismatches);
+            printf("  ref m: [%d %d %d] [%d %d %d] [%d %d %d]\n",
+                   refOut.m[0][0], refOut.m[0][1], refOut.m[0][2],
+                   refOut.m[1][0], refOut.m[1][1], refOut.m[1][2],
+                   refOut.m[2][0], refOut.m[2][1], refOut.m[2][2]);
+            printf("  res m: [%d %d %d] [%d %d %d] [%d %d %d]\n",
+                   res.m[0][0], res.m[0][1], res.m[0][2],
+                   res.m[1][0], res.m[1][1], res.m[1][2],
+                   res.m[2][0], res.m[2][1], res.m[2][2]);
+            printf("  ref t: [%d %d %d]\n", refOut.t[0], refOut.t[1], refOut.t[2]);
+            printf("  res t: [%d %d %d]\n", res.t[0], res.t[1], res.t[2]);
+        }
+        if ((checks & 0x3FFF) == 0)
+        {
+            printf("Vw_MultiplyAndTransformMatrix: %d checks, %d mismatches\n", checks, mismatches);
+        }
+    }
+#endif
+
+    *outMat = res;
+#endif
 }
 
 void vbSetWorldScreenMatrix(GsCOORDINATE2* coord) // 0x800497E4

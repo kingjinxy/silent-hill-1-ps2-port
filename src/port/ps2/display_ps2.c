@@ -1,10 +1,7 @@
-/** @brief Shows the PS1 display area (from the emulated VRAM) on the PS2 via the GS, using gsKit.
+/** @brief Shows the PS1 display area on the PS2: video modes (gsKit's setup) and the display window.
  *
- * The display rectangle is copied out of VRAM and uploaded as a PSMCT16 texture each frame: PS1
- * 15-bit pixels (R 0-4, G 5-9, B 10-14, mask bit 15) have the same layout as the GS's 16-bit format.
- * It's copied 1:1 (no scaling or filtering: the PS1 GPU doesn't filter either) into the top-left
- * of a 640-wide GS framebuffer, without alpha test or blending (bit 15 is the PS1 mask bit), so the
- * framebuffer holds exactly the PS1's pixels. 24-bit display mode (FMV) isn't handled yet.
+ * The GS renderer (gpu_gs.c) keeps the PS1's VRAM as a 16-bit image in GS memory; its display area
+ * is scanned out from there, 1:1 (GpuGs_DisplayShow). 24-bit display mode (FMV) isn't handled yet.
  *
  * The video mode follows the PS1's DISPENV:
  *  - lines: 480i (interlaced, field mode) when isinter is on and the display has more than 256
@@ -18,6 +15,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <kernel.h>
 #include <gsKit.h>
 #include <dmaKit.h>
 
@@ -25,22 +23,42 @@
 #define VRAM_H 512
 
 static GSGLOBAL* s_Gs;
-static GSTEXTURE s_Tex;
-static unsigned short s_Buffer[VRAM_H * VRAM_W] __attribute__((aligned(128)));
 
 static int s_Mode[3] = { -1, -1, -1 }; /* current width, lines, interlaced */
-static int s_TexAllocated;              /* software renderer's upload texture (reset by init) */
+/* Frames to keep the output blank after a video mode change (GS renderer): gsKit's setup shows its
+ * frame buffer's stale contents, and the first frames in a new mode can be half drawn. */
+#define MODE_SWITCH_BLANK_FRAMES 3
+static int s_BlankFrames;
 
 extern void GpuGs_StateLost(void);
 extern void GpuGs_Sync(void); /* gpu_gs.c: its GIF sends run in the background; gsKit uses the same channel */
 extern void Port_VBlankReinstall(void); /* libetc_ps2.c */
-extern void GpuGs_DisplayCopy(u32 fbp, u32 fbw, u32 psm, int x, int y, int w, int h);
-extern void GpuGs_StoreAll(void);
-extern void GpuGs_Download(unsigned short (*dst)[1024]);
-extern int  g_PortGsRenderer;
+extern void GpuGs_DisplayShow(int x, int y, int w, int h, int interlace480, int blank);
 
-static unsigned short s_GsVram[512][1024] __attribute__((aligned(64)));
-extern unsigned short g_PortVram[512][1024];
+
+/* How a video mode change after the first is made (SH1_MODESWITCH, port_link.py):
+ *  0: gsKit's full setup, as the first: a GS reset (CSR bit 9, which also stops the video signal),
+ *     SetGsCrt (the BIOS reprograms the video timing), a new frame buffer;
+ *  1: SetGsCrt without the GS reset, keeping the frame buffer and GS state;
+ *  2: the video timing left running: only SMODE2 (interlace, field/frame) and the display window.
+ *     SYNCV isn't rewritten (its values per mode aren't known; the registers can't be read), so
+ *     240p keeps 480i's vertical timing or the reverse: for a hardware test only.
+ * Every switch logs its setup time and the longest interval between vertical blank interrupts over
+ * the next 30 frames (16.7 ms when the video signal never stopped). */
+#ifndef SH_PORT_MODESWITCH
+#define SH_PORT_MODESWITCH 0
+#endif
+extern volatile unsigned int g_PortVBlankMaxGap; /* libetc_ps2.c */
+static int          s_SetupDone;    /* the first (full) setup has run */
+static unsigned int s_SwitchCycles; /* the last switch's setup time */
+static int          s_SwitchReport; /* frames until its report (0: none pending) */
+
+static unsigned int cycles(void)
+{
+    unsigned int c;
+    __asm__ volatile("mfc0 %0, $9" : "=r"(c));
+    return c;
+}
 
 static int magh_for(int w)
 {
@@ -57,9 +75,30 @@ static int magh_for(int w)
 
 static void init(int w, int h, int interlaced)
 {
-    int magh, dw, dh, dx, dy;
+    int          magh, dw, dh, dx, dy;
+    unsigned int t0 = cycles();
 
     GpuGs_Sync();
+    if (s_Gs && SH_PORT_MODESWITCH != 0)
+    {
+        /* Light switch: gsKit's setup stays (its frame buffer isn't used by the GS renderer). */
+        s_Gs->Interlace = interlaced ? GS_INTERLACED : GS_NONINTERLACED;
+        s_Gs->Field     = interlaced ? GS_FIELD : GS_FRAME;
+        s_Gs->StartY    = interlaced ? 34 : 17;  /* gsKit's values for NTSC (measured) */
+        s_Gs->DH        = interlaced ? 480 : 240;
+        if (SH_PORT_MODESWITCH == 1)
+        {
+            SetGsCrt(s_Gs->Interlace, GS_MODE_NTSC, s_Gs->Field);
+        }
+        else
+        {
+            GS_SET_SMODE2(s_Gs->Interlace, s_Gs->Field, 0);
+        }
+        GS_SET_BGCOLOR(0, 0, 0);
+        GS_SET_PMODE(0, 0, 1, 0, 0, 0xFF);
+        s_BlankFrames = MODE_SWITCH_BLANK_FRAMES;
+        goto window;
+    }
     if (s_Gs)
     {
         gsKit_deinit_global(s_Gs);
@@ -76,7 +115,7 @@ static void init(int w, int h, int interlaced)
     s_Gs->Field           = interlaced ? GS_FIELD : GS_FRAME;
     s_Gs->Width           = 640; /* framebuffer; the displayed width is set below */
     s_Gs->Height          = interlaced ? 480 : 240;
-    s_Gs->PSM             = GS_PSM_CT32;
+    s_Gs->PSM             = GS_PSM_CT16; /* only used by gsKit's setup (gpu_gs.c SNAP_ADDR) */
     s_Gs->DoubleBuffering = GS_SETTING_OFF;
     s_Gs->ZBuffering      = GS_SETTING_OFF;
     s_Gs->PrimAlphaEnable = GS_SETTING_OFF;
@@ -84,7 +123,11 @@ static void init(int w, int h, int interlaced)
     gsKit_mode_switch(s_Gs, GS_ONESHOT);
     gsKit_set_test(s_Gs, GS_ATEST_OFF);
     gsKit_clear(s_Gs, GS_SETREG_RGBAQ(0, 0, 0, 0, 0));
+    GS_SET_BGCOLOR(0, 0, 0);
+    GS_SET_PMODE(0, 0, 1, 0, 0, 0xFF); /* output off until the first frames in this mode are shown */
+    s_BlankFrames = MODE_SWITCH_BLANK_FRAMES;
 
+window:
     /* PS1 width and line count, centred within gsKit's display area. */
     magh = magh_for(w);
     dw   = w * (magh + 1);
@@ -94,7 +137,6 @@ static void init(int w, int h, int interlaced)
     GS_SET_DISPLAY1(dx, dy, magh, 0, dw - 1, dh - 1);
     GS_SET_DISPLAY2(dx, dy, magh, 0, dw - 1, dh - 1);
 
-    s_TexAllocated = 0;
     GpuGs_StateLost();       /* gsKit's setup rewrote GS registers */
     Port_VBlankReinstall();  /* ... and dropped our vertical blank handler */
 
@@ -102,6 +144,13 @@ static void init(int w, int h, int interlaced)
     s_Mode[1] = h;
     s_Mode[2] = interlaced;
     printf("display: %dx%d%s (MAGH %d)\n", w, h, interlaced ? "i" : "p", magh);
+    if (s_SetupDone)
+    {
+        s_SwitchCycles     = cycles() - t0;
+        g_PortVBlankMaxGap = 0;
+        s_SwitchReport     = 30;
+    }
+    s_SetupDone = 1;
 }
 
 /** Sets up a default mode (320x240p) if nothing was shown yet: the GS renderer draws before the game's
@@ -131,36 +180,18 @@ void Display_RequestDump(void)
     s_DumpRequested = 1;
 }
 
-static void dump_vram(const unsigned short* vram)
-{
-    char  name[64];
-    FILE* f;
-    int   i;
-    sprintf(name, "host:vram_%04d.ppm", s_Frame);
-    f = fopen(name, "wb");
-    if (!f)
-    {
-        return;
-    }
-    fprintf(f, "P6\n%d %d\n255\n", VRAM_W, VRAM_H);
-    for (i = 0; i < VRAM_W * VRAM_H; i++)
-    {
-        unsigned short c = vram[i];
-        unsigned char  rgb[3];
-        rgb[0] = (unsigned char)((c & 31) << 3);
-        rgb[1] = (unsigned char)(((c >> 5) & 31) << 3);
-        rgb[2] = (unsigned char)(((c >> 10) & 31) << 3);
-        fwrite(rgb, 1, 3, f);
-    }
-    fclose(f);
-}
+/* Frame dumps read the GS's VRAM back in bands of DUMP_BAND rows (no full copy is kept). */
+#define DUMP_BAND 32
+static unsigned short s_DumpBand[DUMP_BAND * VRAM_W] __attribute__((aligned(64)));
+extern void GpuGs_StoreImage(int x, int y, int w, int h, unsigned short* dst); /* gpu_gs.c */
 
-static void dump(int w, int h)
+/** Writes VRAM's rectangle (x, y, w, h) to host:<what>_<frame>.ppm. */
+static void dump_rect(const char* what, int x, int y, int w, int h)
 {
     char  name[64];
     FILE* f;
-    int   i;
-    sprintf(name, "host:frame_%04d.ppm", s_Frame);
+    int   row, i;
+    sprintf(name, "host:%s_%04d.ppm", what, s_Frame);
     f = fopen(name, "wb");
     if (!f)
     {
@@ -168,14 +199,19 @@ static void dump(int w, int h)
         return;
     }
     fprintf(f, "P6\n%d %d\n255\n", w, h);
-    for (i = 0; i < w * h; i++)
+    for (row = 0; row < h; row += DUMP_BAND)
     {
-        unsigned short c = s_Buffer[i];
-        unsigned char  rgb[3];
-        rgb[0] = (unsigned char)((c & 31) << 3);
-        rgb[1] = (unsigned char)(((c >> 5) & 31) << 3);
-        rgb[2] = (unsigned char)(((c >> 10) & 31) << 3);
-        fwrite(rgb, 1, 3, f);
+        int n = h - row < DUMP_BAND ? h - row : DUMP_BAND;
+        GpuGs_StoreImage(x, y + row, w, n, s_DumpBand);
+        for (i = 0; i < w * n; i++)
+        {
+            unsigned short c = s_DumpBand[i];
+            unsigned char  rgb[3];
+            rgb[0] = (unsigned char)((c & 31) << 3);
+            rgb[1] = (unsigned char)(((c >> 5) & 31) << 3);
+            rgb[2] = (unsigned char)(((c >> 10) & 31) << 3);
+            fwrite(rgb, 1, 3, f);
+        }
     }
     fclose(f);
     printf("display: wrote %s (%dx%d)\n", name, w, h);
@@ -186,151 +222,8 @@ int Display_FrameCount(void)
     return s_Frame;
 }
 
-void Display_Present(const unsigned short* vram, int x, int y, int w, int h, int rgb24, int isinter)
-{
-    int row;
-    unsigned int k;
-    int interlaced = isinter && h > 256;
-
-    if (w <= 0 || h <= 0)
-    {
-        return;
-    }
-    if (w > 640) w = 640;
-    if (h > 480) h = 480;
-    if (w != s_Mode[0] || h != s_Mode[1] || interlaced != s_Mode[2])
-    {
-        init(w, h, interlaced);
-    }
-    if (rgb24)
-    {
-        static int warned;
-        if (!warned++)
-        {
-            printf("display: 24-bit display mode not supported yet\n");
-        }
-        return;
-    }
-
-    for (row = 0; row < h; row++)
-    {
-        int sy = (y + row) & (VRAM_H - 1);
-        if (x + w <= VRAM_W)
-        {
-            memcpy(&s_Buffer[row * w], &vram[sy * VRAM_W + x], w * 2);
-        }
-        else
-        {
-            int col;
-            for (col = 0; col < w; col++)
-            {
-                s_Buffer[row * w + col] = vram[sy * VRAM_W + ((x + col) & (VRAM_W - 1))];
-            }
-        }
-    }
-
-    s_Frame++;
-    if (s_Frame == 1 || s_Frame % 60 == 0)
-    {
-        printf("display: frame %d, %dx%d at (%d,%d)\n", s_Frame, w, h, x, y);
-    }
-    for (k = 0; k < sizeof(DUMP_FRAMES) / sizeof(DUMP_FRAMES[0]); k++)
-    {
-        if (DUMP_FRAMES[k] == s_Frame)
-        {
-            dump(w, h);
-            dump_vram(vram);
-        }
-    }
-
-    GpuGs_Sync();
-    if (!s_TexAllocated)
-    {
-        s_Tex.PSM      = GS_PSM_CT16;
-        s_Tex.Mem      = (u32*)s_Buffer;
-        s_Tex.Filter   = GS_FILTER_NEAREST;
-        s_Tex.Vram     = gsKit_vram_alloc(s_Gs, gsKit_texture_size(VRAM_W, VRAM_H, GS_PSM_CT16), GSKIT_ALLOC_USERBUFFER);
-        s_TexAllocated = 1;
-    }
-    s_Tex.Width  = w;
-    s_Tex.Height = h;
-    gsKit_texture_upload(s_Gs, &s_Tex);
-    gsKit_prim_sprite_texture(s_Gs, &s_Tex, 0.0f, 0.0f, 0.0f, 0.0f, (float)w, (float)h, (float)w, (float)h, 2,
-                              GS_SETREG_RGBAQ(0x80, 0x80, 0x80, 0x80, 0x00)); /* 1:1 */
-    gsKit_queue_exec(s_Gs);
-}
-
-static void write_ppm(const char* name, const unsigned short* px, int w, int h, int stride)
-{
-    FILE* f = fopen(name, "wb");
-    int   x, y;
-    if (!f)
-    {
-        return;
-    }
-    fprintf(f, "P6\n%d %d\n255\n", w, h);
-    for (y = 0; y < h; y++)
-    {
-        for (x = 0; x < w; x++)
-        {
-            unsigned short c = px[y * stride + x];
-            unsigned char  rgb[3];
-            rgb[0] = (unsigned char)((c & 31) << 3);
-            rgb[1] = (unsigned char)(((c >> 5) & 31) << 3);
-            rgb[2] = (unsigned char)(((c >> 10) & 31) << 3);
-            fwrite(rgb, 1, 3, f);
-        }
-    }
-    fclose(f);
-}
-
-/** Compare mode: g_PortVram holds the software renderer's VRAM, s_GsVram the GS's. Writes both
- * display areas and a difference image (white where they differ), and prints how many pixels differ
- * (colour; bit 15 is compared separately). */
-static void compare_dump(int x, int y, int w, int h)
-{
-    char name[64];
-    int  row, col, diff = 0, diffMask = 0, maxd = 0;
-    static unsigned short s_Diff[480 * 640];
-
-    GpuGs_Download(s_GsVram);
-    for (row = 0; row < h; row++)
-    {
-        for (col = 0; col < w; col++)
-        {
-            unsigned short a = g_PortVram[(y + row) & (VRAM_H - 1)][(x + col) & (VRAM_W - 1)];
-            unsigned short b = s_GsVram[(y + row) & (VRAM_H - 1)][(x + col) & (VRAM_W - 1)];
-            int d = 0, ch;
-            for (ch = 0; ch < 15; ch += 5)
-            {
-                int e = (int)((a >> ch) & 31) - (int)((b >> ch) & 31);
-                e = e < 0 ? -e : e;
-                d = e > d ? e : d;
-            }
-            if (d)
-            {
-                diff++;
-            }
-            if ((a ^ b) & 0x8000)
-            {
-                diffMask++;
-            }
-            maxd = d > maxd ? d : maxd;
-            s_Diff[row * w + col] = d ? 0x7FFF : 0;
-        }
-    }
-    sprintf(name, "host:cmp_%04d_soft.ppm", s_Frame);
-    write_ppm(name, &g_PortVram[y][x], w, h, VRAM_W);
-    sprintf(name, "host:cmp_%04d_gs.ppm", s_Frame);
-    write_ppm(name, &s_GsVram[y][x], w, h, VRAM_W);
-    sprintf(name, "host:cmp_%04d_diff.ppm", s_Frame);
-    write_ppm(name, s_Diff, w, h, w);
-    printf("compare: frame %d: %d of %d pixels differ (max %d/31 per channel), bit 15 differs at %d\n", s_Frame,
-           diff, w * h, maxd, diffMask);
-}
-
-/** GS renderer: the display area is already in GS memory (gpu_gs.c), copied 1:1 into the display
- * frame buffer. Same video mode handling as Display_Present. */
+/** GS renderer: the display area is already in GS memory (gpu_gs.c) and is shown from there
+ * (GpuGs_DisplayShow). */
 void Display_PresentGs(int x, int y, int w, int h, int rgb24, int isinter)
 {
     unsigned int k;
@@ -376,26 +269,18 @@ void Display_PresentGs(int x, int y, int w, int h, int rgb24, int isinter)
         {
             continue;
         }
-        if (g_PortGsRenderer == 2)
-        {
-            compare_dump(x, y, w, h);
-        }
-        else
-        {
-            int row;
-            GpuGs_StoreAll();
-            for (row = 0; row < h; row++)
-            {
-                int col;
-                for (col = 0; col < w; col++)
-                {
-                    s_Buffer[row * w + col] = g_PortVram[(y + row) & (VRAM_H - 1)][(x + col) & (VRAM_W - 1)];
-                }
-            }
-            dump(w, h);
-            dump_vram(&g_PortVram[0][0]);
-        }
+        dump_rect("frame", x, y, w, h);
+        dump_rect("vram", 0, 0, VRAM_W, VRAM_H);
     }
 
-    GpuGs_DisplayCopy(s_Gs->ScreenBuffer[0] / 8192, s_Gs->Width / 64, s_Gs->PSM, x, y, w, h);
+    if (s_SwitchReport > 0 && --s_SwitchReport == 0)
+    {
+        printf("display: mode switch (method %d): setup %u us, longest vertical blank interval %u us over 30 frames "
+               "(16683 when the signal never stopped)\n", SH_PORT_MODESWITCH, s_SwitchCycles / 295, g_PortVBlankMaxGap / 295);
+    }
+    GpuGs_DisplayShow(x, y, w, h, interlaced, s_BlankFrames > 0);
+    if (s_BlankFrames > 0)
+    {
+        s_BlankFrames--;
+    }
 }

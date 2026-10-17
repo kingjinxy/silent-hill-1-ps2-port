@@ -191,3 +191,46 @@ PCSX2, Kaufmann cutscene, profiling build:
 | after | 2,621 | 109 | 29 | 57.3 |
 
 Next in the game update: MVMVA (178k, bone matrices in Vw_MultiplyAndTransformMatrix), RTPS (115k, mostly snow particles), the remaining ~1.9M of game C code (to profile with PROF sections, since the instrumented build distorts small functions).
+
+### 2026-10-11: bone matrix transforms (Vw_MultiplyAndTransformMatrix MMI): kept
+
+- `Vw_MultiplyAndTransformMatrix` (src/bodyprog/view/vw_calc.c) moved off emulated GTE MVMVA (`gte_rtir`/`gte_rtirtr`) to EE MMI (`PHMADH` 128-bit SIMD) with bit-exact scalar C fallback.
+- GTE call site profile: eliminated all 318 MVMVA calls per frame from `Vw_MultiplyAndTransformMatrix`.
+- Dynamic verification (`-DSH_PORT_CHECK_BATCH`): **0 mismatches** over >540,000 bone matrix checks in the Kaufmann cutscene.
+- Pixel exactness checked with `bench_cutscene.sh`: frame diff bounding box is `None` (100% bit-for-bit identical rendered pixels).
+- Review fixes (2026-10-16): the translation now takes the low 16 bits of `inMat->t`, as `gte_ldlvl` loads them into IR1-3, and adds with wraparound like MAC (the cutscene's values fit in 16 bits, so its check couldn't see this); `hi`/`lo` added to the asm clobbers (PHMADH writes them).
+- Check build warp sweep (all 43 maps, 15 s each, 2026-10-16): 43/43 pass, **0 mismatches** over ~491k calls.
+- PCSX2, Kaufmann cutscene, profiling build, real time, averaged over 117 s (2026-10-16):
+
+| | game update | GTE MVMVA | fps |
+|---|---|---|---|
+| before | 2,666 | 178 | 57.0 |
+| after | 2,581 | 79 | 57.8 |
+
+  About 85k cycles a frame saved (3% of the game update); the 79k MVMVA left is other call sites. Most of the gain is skipping the GTE emulator: only the 3x3 product uses MMI, while packing the halfwords and the translation are scalar.
+- Next up: remaining MVMVA sites (e.g. `WorldEnv_LightTransform`, `func_8006B318`) and particle RTPS (`Particle_SnowDraw`).
+
+
+### 2026-10-16: GTE control writes refresh only what changed: kept
+
+The MVMVA left after the bone matrices (Kaufmann cutscene, calls a frame): func_8006B318 (collision: two `rtv0` per subcell, after loading two rotation rows) 84, WorldEnv_LightTransform (`rtv0`, `gpf12`, `rtv0` per model) 72 + 36 GPF, rc_RotTrans 7. Both functions write the rotation matrix before their commands, and any control write made the next command unpack all three matrices (RT, LLM, LCM) and redo the TR/BK/FC range checks.
+
+- `g_GteCtrlDirty` is now a bit per control register written (gte.h inline writes, `Gte_CtrlWrite`); `ctrl_refresh` unpacks only the matrices whose registers changed and redoes the range checks only after TR/BK/FC writes. Helps every command after a matrix write.
+- tools/port/gte_test host check, seeds 0-5: 0 of 2,720 tests differ in each.
+
+PCSX2, Kaufmann cutscene, profiling build, real time, averaged over 117 s:
+
+| | game update | GTE MVMVA | GTE RTPS | fps |
+|---|---|---|---|---|
+| before | 2,581 | 79 | 115 | 57.8 |
+| after | 2,556 | 55 | 108 | 58.0 |
+
+Not done: rewriting func_8006B318 / WorldEnv_LightTransform in plain C would save at most most of the remaining ~55k (~2% of the game update), but each leaves MAC/IR/FLAG and half-written rotation rows in the GTE that later code could read, so an exact rewrite has to reproduce that state.
+
+### 2026-10-16: snow particle RTPS batch: reverted (no measurable gain)
+
+A new-game snow scene (PCSX2, profiling build, 60 fps, 28% idle): `Particle_Update` 393k a frame of a 1,692k game update; its draw loop 305k, of which the snow RTPS 191k (298 flakes, ~640 cycles each); clamping 9k, depth colour 19k; movement loop 86k.
+
+- Tried: Particle_SnowDraw run twice (collect each flake's vertex, `Gte_RtpBatch` over all but the last, then draw from the results; the last flake through the GTE with the FIFO preset, so the GTE ends as on the PS1). Check build warp sweep: 43/43, 0 mismatches over 60k+ flakes.
+- Kaufmann cutscene, benchmark build (SH1_BENCH=1): 50.16 fps / 5.2% idle without, 50.03 / 4.6% with: no difference beyond noise. Frame dumps: 9 of 10 identical; the 10th differs only in a subtitle glyph (text timing varies between runs; the two runs took 8,092 and 8,097 vertical blanks for the same frames).
+- Why: profiling builds send every GTE command through the general dispatcher and time each one, roughly doubling RTPS's apparent cost; normal builds already take the direct RTPS path, so batching saves only ~100-150 cycles a flake. Read "GTE ..." profile lines with that in mind. Patch kept outside the repo.
