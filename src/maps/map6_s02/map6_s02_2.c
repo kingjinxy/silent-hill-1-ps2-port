@@ -13,6 +13,9 @@
 #include "bodyprog/sound/sound_system.h"
 #include "main/rng.h"
 #include "maps/map6/map6_s02.h"
+#ifdef SH_PORT
+#include "port/prof.h"
+#endif
 
 #include "../src/maps/chara_util.c" // 0x800CDEB0
 
@@ -1449,6 +1452,79 @@ void func_800D2170(s32 arg0) // 0x800D2170
     }
 }
 
+#ifdef SH_PORT
+#define PORT_GRID_BATCH 284 // grid points done by the batch: every RTPT triple but the last
+
+#ifdef SH_PORT_CHECK_BATCH
+static u32 s_PortGridXy[PORT_GRID_BATCH];
+static s32 s_PortGridZ[PORT_GRID_BATCH];
+static s32 s_PortGridOk;
+
+/** Check build: the batch's results (Port_GridBatch, into s_PortGrid*) against what the GTE loop wrote. */
+static void Port_GridCheck(s_8019F8F8_0* out)
+{
+    static s32 checks, mismatches;
+    s32        i;
+    if (!s_PortGridOk)
+    {
+        return;
+    }
+    for (i = 0; i < PORT_GRID_BATCH; i++)
+    {
+        checks++;
+        if (s_PortGridXy[i] != ((u32*)out->field_0)[i] || s_PortGridZ[i] != ((s32*)out->field_484)[i])
+        {
+            if (mismatches++ < 20)
+            {
+                printf("grid rtpt check: point %d: batch %08x z %d, GTE %08x z %d\n", i, s_PortGridXy[i],
+                       s_PortGridZ[i], ((u32*)out->field_0)[i], ((s32*)out->field_484)[i]);
+            }
+        }
+    }
+    if ((checks & 0xFFFF) < PORT_GRID_BATCH)
+    {
+        printf("grid rtpt check: %d points, %d mismatches\n", checks, mismatches);
+    }
+}
+#endif
+
+/** func_800D2364's grid layer `k`, points 0-283 through Gte_RtpGrid (as RTPT: sf 1, lm 0, the current
+ * matrices). Point i is (((i / 17) << 7) - 0x400, -8 * k, 0x400 - ((i % 17) << 7)), the loop's
+ * Math_SetSVectorFastSum: a lattice. Returns the first point left to the GTE loop: 284, or 0 when the
+ * batch can't run (or in the check build, where the GTE does them all and Port_GridCheck compares). */
+static s32 Port_GridBatch(s_8019F8F8_0* out, s32 k)
+{
+    static const s16 DU[3] = { 0, 0, -128 }; // i % 17 steps
+    static const s16 DV[3] = { 128, 0, 0 };  // i / 17 steps
+    s16              v0[3];
+    s32              ok;
+#ifdef SH_PORT_CHECK_BATCH
+    u32* xy = s_PortGridXy;
+    s32* z  = s_PortGridZ;
+#else
+    u32* xy = (u32*)out->field_0;
+    s32* z  = (s32*)out->field_484;
+#endif
+    LP_BEGIN(LP_MAP_FX_BATCH)
+    v0[0] = -0x400;
+    v0[1] = -8 * k;
+    v0[2] = 0x400;
+    ok    = Gte_RtpGrid(v0, DU, DV, 17, xy, (int*)z, PORT_GRID_BATCH);
+    LP_END(LP_MAP_FX_BATCH);
+#ifdef SH_PORT_CHECK_BATCH
+    s_PortGridOk = ok;
+    return 0;
+#else
+    if (!ok)
+    {
+        return 0;
+    }
+    Gte_DataWrite(19, (u32)z[PORT_GRID_BATCH - 1]); // SZ3: SZ0 after the next RTPT, as on the PS1
+    return PORT_GRID_BATCH;
+#endif
+}
+#endif
+
 void func_800D2364(void) // 0x800D2364
 {
     typedef struct
@@ -1483,6 +1559,9 @@ void func_800D2364(void) // 0x800D2364
     s_func_800D2364* ptr;
     s32              otIdx;
     s_8019F8F8*      base;
+#ifdef SH_PORT
+    LP_BEGIN(LP_MAP_FX)
+#endif
 
     base = FS_BUFFER_22;
 
@@ -1639,7 +1718,16 @@ void func_800D2364(void) // 0x800D2364
             ptr->field_6C[j][0]  = 0;
         }
 
-        for (i = 0; i < 287; i += 3)
+#ifdef SH_PORT
+        // Port: the grid's first 284 points (all RTPT triples but the last) in one exact batch
+        // (Gte_RtpBatch); the last triple and the two RTPS below still go through the GTE, which so
+        // ends as after the original loop (SZ3 preset to the batch's last depth, which the next
+        // RTPT moves to SZ0). field_0 and field_484 are 17x17 arrays filled in order.
+        i = Port_GridBatch(var_t2_2, k);
+#else
+        i = 0;
+#endif
+        for (; i < 287; i += 3)
         {
             for (j = 0; j < 3; j++)
             {
@@ -1654,6 +1742,9 @@ void func_800D2364(void) // 0x800D2364
             gte_stsxy3c(&var_t2_2->field_0[i / 17][i % 17]);
             gte_stsz3c(&var_t2_2->field_484[i / 17][i % 17]);
         }
+#ifdef SH_PORT_CHECK_BATCH
+        Port_GridCheck(var_t2_2);
+#endif
 
         for (i = 287; i < 289; i++)
         {
@@ -1742,6 +1833,9 @@ void func_800D2364(void) // 0x800D2364
             }
         }
     }
+#ifdef SH_PORT
+    LP_END(LP_MAP_FX);
+#endif
 }
 
 void func_800D32D0(void) // 0x800D32D0

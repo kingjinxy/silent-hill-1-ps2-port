@@ -1357,6 +1357,43 @@ void Gte_CmdDpcs(void)
     cmd_end();
 }
 
+/** RTPS's projection from MAC1-3 (sf = 1, lm = 0), as rtp_small without the registers and FLAG:
+ * returns SX | SY << 16 and sets *szOut to SZ. (Gte_RtpBatch, Gte_RtpGrid.) */
+static inline u32 rtp_project(s64 m1, s64 m2, s64 m3, u32 h, s32 ofx, s32 ofy, s32* szOut)
+{
+    s64 z3, mac0;
+    s32 ir1, ir2, sz, sx, sy;
+    u32 n;
+    ir1 = (s32)(m1 >> 12);
+    ir1 = ir1 < -0x8000 ? -0x8000 : ir1 > 0x7FFF ? 0x7FFF : ir1;
+    ir2 = (s32)(m2 >> 12);
+    ir2 = ir2 < -0x8000 ? -0x8000 : ir2 > 0x7FFF ? 0x7FFF : ir2;
+    z3  = m3 >> 12;
+    sz  = z3 < 0 ? 0 : z3 > 0xFFFF ? 0xFFFF : (s32)z3;
+    if (h < (u32)sz * 2)
+    {
+        u32 zz = clz32((u32)sz) - 16, nn = h << zz, dd = (u32)sz << zz, u;
+        u64 r;
+        u  = unr_table[(dd - 0x7FC0) >> 7] + 0x101;
+        dd = (0x2000080u - (dd * u)) >> 8;
+        dd = (0x0000080u + (dd * u)) >> 8;
+        r  = (((u64)nn * dd) + 0x8000) >> 16;
+        n  = r > 0x1FFFF ? 0x1FFFF : (u32)r;
+    }
+    else
+    {
+        n = 0x1FFFF;
+    }
+    mac0 = mul32((s32)n, ir1) + ofx;
+    sx   = (s32)(mac0 >> 16);
+    sx   = sx < -0x400 ? -0x400 : sx > 0x3FF ? 0x3FF : sx;
+    mac0 = mul32((s32)n, ir2) + ofy;
+    sy   = (s32)(mac0 >> 16);
+    sy   = sy < -0x400 ? -0x400 : sy > 0x3FF ? 0x3FF : sy;
+    *szOut = sz;
+    return ((u32)sx & 0xFFFF) | ((u32)sy << 16);
+}
+
 /** Batched RTPS (sf = 1, lm = 0) over `count` vertices, in place: xy[i] holds VX | VY << 16 and z[i]
  * VZ on entry, SX | SY << 16 and SZ on return, exactly as RTPS/RTPT would compute them with the
  * current matrices. GTE registers and FLAG are left untouched (callers run their last command
@@ -1384,42 +1421,71 @@ int Gte_RtpBatch(u32* xy, s16* z, int count)
     for (i = 0; i < count; i++)
     {
         s32 vx = (s16)xy[i], vy = (s16)(xy[i] >> 16), vz = z[i];
-        s64 m1, m2, m3, z3, mac0;
-        s32 ir1, ir2, sz, sx, sy;
-        u32 n;
+        s64 m1, m2, m3;
+        s32 sz;
         {
             m1 = ((s64)(s32)c[C_TRX] << 12) + (s64)(m_rt[0] * vx) + (s64)(m_rt[1] * vy) + (s64)(m_rt[2] * vz);
             m2 = ((s64)(s32)c[C_TRY] << 12) + (s64)(m_rt[3] * vx) + (s64)(m_rt[4] * vy) + (s64)(m_rt[5] * vz);
             m3 = ((s64)(s32)c[C_TRZ] << 12) + (s64)(m_rt[6] * vx) + (s64)(m_rt[7] * vy) + (s64)(m_rt[8] * vz);
         }
-        ir1 = (s32)(m1 >> 12);
-        ir1 = ir1 < -0x8000 ? -0x8000 : ir1 > 0x7FFF ? 0x7FFF : ir1;
-        ir2 = (s32)(m2 >> 12);
-        ir2 = ir2 < -0x8000 ? -0x8000 : ir2 > 0x7FFF ? 0x7FFF : ir2;
-        z3  = m3 >> 12;
-        sz  = z3 < 0 ? 0 : z3 > 0xFFFF ? 0xFFFF : (s32)z3;
-        if (h < (u32)sz * 2)
+        xy[i] = rtp_project(m1, m2, m3, h, ofx, ofy, &sz);
+        z[i]  = (s16)sz;
+    }
+    return 1;
+}
+
+/** Batched RTPS (sf = 1, lm = 0) over a lattice of points: point i is v0 + (i / nu) * dv + (i % nu) * du.
+ * Out: xy[i] = SX | SY << 16 and z[i] = SZ (zero-extended, as SWC2 of SZn stores it), exactly as
+ * RTPS/RTPT compute them with the current matrices. The rotation is linear, so MAC1-3 are stepped by
+ * R.du and R.dv (the same integers as the products; nothing is rounded before the >> 12). GTE registers
+ * and FLAG are left untouched. Returns 0, doing nothing, outside the fast path's range (as Gte_RtpBatch).
+ * (map6_s02 func_800D2364's effect grid.) */
+int Gte_RtpGrid(const short* v0, const short* du, const short* dv, int nu, unsigned int* xy, int* z, int count)
+{
+    u32 h;
+    s32 ofx, ofy, i, k;
+    s64 r1, r2, r3, u1, u2, u3, w1, w2, w3, m1, m2, m3;
+    if (g_GteCtrlDirty)
+    {
+        ctrl_refresh();
+    }
+    if (!unr_ready)
+    {
+        unr_init();
+    }
+    if (!s_Small)
+    {
+        return 0;
+    }
+    h   = c[C_H] & 0xFFFF;
+    ofx = (s32)c[C_OFX];
+    ofy = (s32)c[C_OFY];
+    /* Row start, and the steps along u and v. */
+    r1 = ((s64)(s32)c[C_TRX] << 12) + (s64)(m_rt[0] * v0[0]) + (s64)(m_rt[1] * v0[1]) + (s64)(m_rt[2] * v0[2]);
+    r2 = ((s64)(s32)c[C_TRY] << 12) + (s64)(m_rt[3] * v0[0]) + (s64)(m_rt[4] * v0[1]) + (s64)(m_rt[5] * v0[2]);
+    r3 = ((s64)(s32)c[C_TRZ] << 12) + (s64)(m_rt[6] * v0[0]) + (s64)(m_rt[7] * v0[1]) + (s64)(m_rt[8] * v0[2]);
+    u1 = (s64)(m_rt[0] * du[0]) + (s64)(m_rt[1] * du[1]) + (s64)(m_rt[2] * du[2]);
+    u2 = (s64)(m_rt[3] * du[0]) + (s64)(m_rt[4] * du[1]) + (s64)(m_rt[5] * du[2]);
+    u3 = (s64)(m_rt[6] * du[0]) + (s64)(m_rt[7] * du[1]) + (s64)(m_rt[8] * du[2]);
+    w1 = (s64)(m_rt[0] * dv[0]) + (s64)(m_rt[1] * dv[1]) + (s64)(m_rt[2] * dv[2]);
+    w2 = (s64)(m_rt[3] * dv[0]) + (s64)(m_rt[4] * dv[1]) + (s64)(m_rt[5] * dv[2]);
+    w3 = (s64)(m_rt[6] * dv[0]) + (s64)(m_rt[7] * dv[1]) + (s64)(m_rt[8] * dv[2]);
+    m1 = r1, m2 = r2, m3 = r3;
+    for (i = 0, k = 0; i < count; i++)
+    {
+        s32 sz;
+        xy[i] = rtp_project(m1, m2, m3, h, ofx, ofy, &sz);
+        z[i]  = sz;
+        if (++k == nu)
         {
-            u32 zz = clz32((u32)sz) - 16, nn = h << zz, dd = (u32)sz << zz, u;
-            u64 r;
-            u  = unr_table[(dd - 0x7FC0) >> 7] + 0x101;
-            dd = (0x2000080u - (dd * u)) >> 8;
-            dd = (0x0000080u + (dd * u)) >> 8;
-            r  = (((u64)nn * dd) + 0x8000) >> 16;
-            n  = r > 0x1FFFF ? 0x1FFFF : (u32)r;
+            k  = 0;
+            r1 += w1, r2 += w2, r3 += w3;
+            m1 = r1, m2 = r2, m3 = r3;
         }
         else
         {
-            n = 0x1FFFF;
+            m1 += u1, m2 += u2, m3 += u3;
         }
-        mac0 = mul32((s32)n, ir1) + ofx;
-        sx   = (s32)(mac0 >> 16);
-        sx   = sx < -0x400 ? -0x400 : sx > 0x3FF ? 0x3FF : sx;
-        mac0 = mul32((s32)n, ir2) + ofy;
-        sy   = (s32)(mac0 >> 16);
-        sy   = sy < -0x400 ? -0x400 : sy > 0x3FF ? 0x3FF : sy;
-        xy[i] = ((u32)sx & 0xFFFF) | ((u32)sy << 16);
-        z[i]  = (s16)sz;
     }
     return 1;
 }

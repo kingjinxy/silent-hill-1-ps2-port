@@ -48,6 +48,8 @@ enum
     LP_PL_COLLECT, /* Port_PointLight: pass 1 (calls = vertices) */
     LP_PL_BATCH,   /* Port_PointLight: Gte_RtpsDotBatch */
     LP_PL_APPLY,   /* Port_PointLight: pass 2 */
+    LP_MAP_FX,     /* map6_s02 func_800D2364: the effect grid, whole function */
+    LP_MAP_FX_BATCH, /* its Gte_RtpBatch part (Port_GridBatch) */
     LP_COUNT
 };
 #ifdef SH_PORT_LITEPROF

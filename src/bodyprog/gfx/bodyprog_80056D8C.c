@@ -1313,6 +1313,95 @@ static inline u32 Port_DcplMemo(s_GteScratchData* scratchData, u32 l, u32 f)
     return s_PortDcpl[slot];
 }
 
+/** The fog path's two colours for fog byte `f` into the memo (s_PortFog2/3), as PORT_FOG_COLORS
+ * (the caller has run Port_MemoCheck). */
+static inline void Port_FogMemo(s_GteScratchData* scratchData, u32 f)
+{
+    if (s_PortFogGen[f] != s_PortMeshGen)
+    {
+        s32 t = Q12(1.0f) - (s32)f * 16 - scratchData->field_380.s_0.field_4;
+        if (t < 0)
+        {
+            t = 0;
+        }
+        s_PortFog2[f]   = Port_Dpcs(*(u32*)&scratchData->field_380.s_0.field_C, t);
+        s_PortFog3[f]   = Port_Dpcs(*(u32*)&scratchData->field_380.s_0.field_8, Q12(1.0f) - t);
+        s_PortFogGen[f] = s_PortMeshGen;
+    }
+}
+
+/** The front of every Gfx_MeshDraw face loop: the face's depth (the largest of its four, at least 32)
+ * into *d as the original leaves it in field_18 (also when the face is skipped), the depth cull, the
+ * back-face test (NCLIP, then NCLIP0 with the fourth corner) and the screen bound test (unsigned, as
+ * the original's u32 temp_t0). Returns whether the face is drawn; xy: its four screen positions. */
+static inline s32 Port_FaceTest(s_GteScratchData* scratchData, u32 idx, s32 zfar, s32 xmin, u32 xmin2, s32* d,
+                                s32* xy)
+{
+    const s16* z  = scratchData->field_18C;
+    u32        i0 = idx & 0xFF, i1 = (idx >> 8) & 0xFF, i2 = (idx >> 16) & 0xFF, i3 = idx >> 24;
+    s32        m = z[i0], n;
+    if (m < z[i1]) m = z[i1];
+    if (m < z[i2]) m = z[i2];
+    if (m < z[i3]) m = z[i3];
+    if (m <= 0)
+    {
+        *d = m;
+        return 0;
+    }
+    if (m <= 32)
+    {
+        m = 32;
+    }
+    *d = m;
+    if (m > zfar)
+    {
+        return 0;
+    }
+    xy[0] = *(s32*)&scratchData->screenXy_0[i0];
+    xy[1] = *(s32*)&scratchData->screenXy_0[i1];
+    xy[2] = *(s32*)&scratchData->screenXy_0[i2];
+    xy[3] = *(s32*)&scratchData->screenXy_0[i3];
+    n     = Port_Nclip(xy[0], xy[1], xy[2]);
+    if (n <= 0)
+    {
+        n = Port_Nclip(xy[3], xy[1], xy[2]);
+        if (n >= 0)
+        {
+            return 0;
+        }
+    }
+    return (u32)((s16)xy[0] + xmin) < xmin2 || (u32)((s16)xy[1] + xmin) < xmin2 ||
+           (u32)((s16)xy[2] + xmin) < xmin2 || (u32)((s16)xy[3] + xmin) < xmin2;
+}
+
+#ifdef SH_PORT_CHECK_BATCH
+static u32 s_PortMeshPath[5]; /* meshes per Gfx_MeshDrawPort path (mesh check): lit+fog, lit black fog, lit, fog, flat */
+#define PORT_MESH_PATH(n) (s_PortMeshPath[n]++)
+#else
+#define PORT_MESH_PATH(n) ((void)0)
+#endif
+
+/* Locals of the port face loops: the last face's indices and depth, and the last drawn face's light
+ * indices, written back to the scratch fields after the loop, where the original leaves them. */
+#define PORT_FACE_LOCALS                                                          \
+    u32 lastIdx = 0, lastF14 = 0;                                                 \
+    s32 lastZ = 0, any = 0, drawnAny = 0, xmin = scratchData->field_380.s_0.field_0; \
+    u32 xmin2 = (u32)(xmin * 2);                                                  \
+    s32 zfar  = scratchData->field_380.s_0.field_1C
+#define PORT_FACE_WRITEBACK()                                               \
+    do                                                                      \
+    {                                                                       \
+        if (any)                                                            \
+        {                                                                   \
+            *(u32*)&scratchData->field_380.s_0.field_10 = lastIdx;          \
+            scratchData->field_380.s_0.field_18          = lastZ;           \
+        }                                                                   \
+        if (drawnAny)                                                       \
+        {                                                                   \
+            *(u32*)&scratchData->field_380.s_0.field_14 = lastF14;          \
+        }                                                                   \
+    } while (0)
+
 static void Gfx_MeshDrawPort(s_MeshHeader* meshHdr, s_GteScratchData* scratchData, GsOT_TAG* tag, s32 otShift)
 
 {
@@ -1404,219 +1493,59 @@ static void Gfx_MeshDrawPort(s_MeshHeader* meshHdr, s_GteScratchData* scratchDat
 
     prim = meshHdr->primitives;
 
+    /* The face loops below (all but the lit one, __block1530, which has its own) keep the face's
+     * indices, depth and colour inputs in locals, take the colours from the memos (Port_MemoCheck once
+     * per mesh: its inputs don't change in a loop) and write the scratch fields' final values after the
+     * loop (PORT_FACE_WRITEBACK). The same packets as the original (-DSH_PORT_CHECK_BATCH compares). */
     if (g_WorldEnvWork.field_0 != UnkGfxEnum_0)
     {
         if (g_WorldEnvWork.isFogEnabled)
         {
+            const u8* fog = scratchData->field_252;
+            const u8* lit = scratchData->field_2B8;
+            PORT_FACE_LOCALS;
+
+            Port_MemoCheck(scratchData);
             if (*(s32*)&scratchData->field_380.s_0.field_C & 0xFFFFFF)
             {
+                /* Lit and fogged (the flashlight in fog): a G4 of the fog colour and a GT4 of the light. */
+                PORT_MESH_PATH(0);
                 poly3 = GsOUT_PACKET_P;
-                poly1  = poly3 + 1;
+                poly1 = poly3 + 1;
 
                 for (; prim < &meshHdr->primitives[meshHdr->primitiveCount]; prim++)
                 {
-                    *(s32*)&scratchData->field_380.s_0.field_10 = *(s32*)&prim->faceIdxs;
+                    u32 idx = *(u32*)&prim->faceIdxs, f14, k;
+                    s32 d, xy[4], vis;
 
-                    scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_10];
-                    if (scratchData->field_380.s_0.field_18 < scratchData->field_18C[scratchData->field_380.s_0.field_11])
-                    {
-                        scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_11];
-                    }
-                    if (scratchData->field_380.s_0.field_18 < scratchData->field_18C[scratchData->field_380.s_0.field_12])
-                    {
-                        scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_12];
-                    }
-                    if (scratchData->field_380.s_0.field_18 < scratchData->field_18C[scratchData->field_380.s_0.field_13])
-                    {
-                        scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_13];
-                    }
-
-                    if (scratchData->field_380.s_0.field_18 <= 0)
+                    lastIdx = idx;
+                    any     = 1;
+                    vis     = Port_FaceTest(scratchData, idx, zfar, xmin, xmin2, &d, xy);
+                    lastZ   = d;
+                    if (!vis)
                     {
                         continue;
                     }
 
-                    if (scratchData->field_380.s_0.field_18 <= 32)
+                    *(s32*)&poly3->x0 = xy[0];
+                    *(s32*)&poly1->x0 = xy[0];
+                    *(s32*)&poly3->x1 = xy[1];
+                    *(s32*)&poly1->x1 = xy[1];
+                    *(s32*)&poly3->x2 = xy[2];
+                    *(s32*)&poly1->x2 = xy[2];
+                    *(s32*)&poly3->x3 = xy[3];
+                    *(s32*)&poly1->x3 = xy[3];
+
+                    f14      = *(u32*)&prim->field_10;
+                    lastF14  = f14;
+                    drawnAny = 1;
+                    for (k = 0; k < 4; k++)
                     {
-                        scratchData->field_380.s_0.field_18 = 32;
+                        u32 f = fog[(idx >> (k * 8)) & 0xFF];
+                        Port_FogMemo(scratchData, f);
+                        *(u32*)((u8*)&poly1->r0 + k * 8)  = s_PortFog2[f]; /* POLY_G4: colours 8 bytes apart */
+                        *(u32*)((u8*)&poly3->r0 + k * 12) = Port_DcplMemo(scratchData, lit[(f14 >> (k * 8)) & 0xFF], f);
                     }
-
-                    if (scratchData->field_380.s_0.field_18 > scratchData->field_380.s_0.field_1C)
-                    {
-                        continue;
-                    }
-
-                    PORT_NCLIP3(*(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_10],
-                                *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_11],
-                                *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_12], sp10);
-
-                    if (sp10 <= 0)
-                    {
-                        PORT_NCLIP0(*(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_13], sp10);
-
-                        if (sp10 >= 0)
-                        {
-                            continue;
-                        }
-                    }
-
-                    temp_a3 = scratchData->field_380.s_0.field_0;
-                    temp_a2 = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_10];
-
-                    temp_a1   = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_11];
-                    temp_a0   = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_12];
-                    temp_v1_5 = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_13];
-                    temp_t0   = temp_a3 * 2;
-                    temp_a2_2 = temp_a2;
-
-                    if ((s16)temp_a2 + temp_a3 < temp_t0 || (s16)temp_a1 + temp_a3 < temp_t0 ||
-                        (s16)temp_a0 + temp_a3 < temp_t0 || (s16)temp_v1_5 + temp_a3 < temp_t0)
-                    {
-                        *(s32*)&poly3->x0 = temp_a2_2;
-                        *(s32*)&poly1->x0  = temp_a2_2;
-                        *(s32*)&poly3->x1 = temp_a1;
-                        *(s32*)&poly1->x1  = temp_a1;
-                        *(s32*)&poly3->x2 = temp_a0;
-                        *(s32*)&poly1->x2  = temp_a0;
-                        *(s32*)&poly3->x3 = temp_v1_5;
-                        *(s32*)&poly1->x3  = temp_v1_5;
-
-                        *(s32*)&scratchData->field_380.s_0.field_14 = *(s32*)&prim->field_10;
-
-                        PORT_FOG_COLOR2(scratchData->field_252[scratchData->field_380.s_0.field_10], &poly1->r0);
-                        *(u32*)(&poly3->r0) = Port_DcplMemo(scratchData, scratchData->field_2B8[scratchData->field_380.s_0.field_14], scratchData->field_252[scratchData->field_380.s_0.field_10]);
-
-                        PORT_FOG_COLOR2(scratchData->field_252[scratchData->field_380.s_0.field_11], &poly1->r1);
-                        *(u32*)(&poly3->r1) = Port_DcplMemo(scratchData, scratchData->field_2B8[scratchData->field_380.s_0.field_15], scratchData->field_252[scratchData->field_380.s_0.field_11]);
-
-                        PORT_FOG_COLOR2(scratchData->field_252[scratchData->field_380.s_0.field_12], &poly1->r2);
-                        *(u32*)(&poly3->r2) = Port_DcplMemo(scratchData, scratchData->field_2B8[scratchData->field_380.s_0.field_16], scratchData->field_252[scratchData->field_380.s_0.field_12]);
-
-                        PORT_FOG_COLOR2(scratchData->field_252[scratchData->field_380.s_0.field_13], &poly1->r3);
-                        *(u32*)(&poly3->r3) = Port_DcplMemo(scratchData, scratchData->field_2B8[scratchData->field_380.s_0.field_17], scratchData->field_252[scratchData->field_380.s_0.field_13]);
-
-                        *(s32*)&poly3->u0 = *(s32*)&prim->u0;
-                        *(s32*)&poly3->u1 = *(s32*)&prim->u1 & 0xFFFFFF;
-                        *(u16*)&poly3->u2 = *(u16*)&prim->u2;
-                        *(u16*)&poly3->u3 = *(u16*)&prim->u3;
-
-                        setlen(poly3, 12);
-                        setlen(poly1, 8);
-
-                        if (prim->bits1.flags & (1 << 15))
-                        {
-                            packet1 = poly1 + 1;
-
-                            SetPriority(packet1, 0, 0);
-                            addPrim(&tag[(scratchData->field_380.s_0.field_18 >> otShift) >> 2], packet1);
-
-                            setSemiTrans(poly1, 1);
-                            addPrim(&tag[(scratchData->field_380.s_0.field_18 >> otShift) >> 2], poly1);
-
-                            packet1 = (PACKET*)(poly1 + 1) + 12;
-                            SetPriority(packet1, 1, 1);
-                            addPrim(&tag[(scratchData->field_380.s_0.field_18 >> otShift) >> 2], packet1);
-
-                            addPrim(&tag[(scratchData->field_380.s_0.field_18 >> otShift) >> 2], poly3);
-
-                            poly3 = (PACKET*)(poly1 + 1) + 12 + 12;
-                            poly1  = poly3 + 1;
-                        }
-                        else
-                        {
-                            setSemiTrans(poly3, 1);
-
-                            addPrim(&tag[(scratchData->field_380.s_0.field_18 >> otShift) >> 2], poly3);
-                            addPrim(&tag[(scratchData->field_380.s_0.field_18 >> otShift) >> 2], poly1);
-
-                            poly3 = poly1 + 1;
-                            poly1  = poly3 + 1;
-                        }
-                    }
-                }
-
-                GsOUT_PACKET_P = poly1; // @bug? Should be `poly_gt4`
-                return;
-            }
-
-            poly3 = GsOUT_PACKET_P;
-
-            for (; prim < &meshHdr->primitives[meshHdr->primitiveCount]; prim++)
-            {
-                *(s32*)&scratchData->field_380.s_0.field_10 = *(s32*)&prim->faceIdxs;
-
-                scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_10];
-
-                if (scratchData->field_380.s_0.field_18 < scratchData->field_18C[scratchData->field_380.s_0.field_11])
-                {
-                    scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_11];
-                }
-
-                if (scratchData->field_380.s_0.field_18 < scratchData->field_18C[scratchData->field_380.s_0.field_12])
-                {
-                    scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_12];
-                }
-
-                if (scratchData->field_380.s_0.field_18 < scratchData->field_18C[scratchData->field_380.s_0.field_13])
-                {
-                    scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_13];
-                }
-
-                if (scratchData->field_380.s_0.field_18 <= 0)
-                {
-                    continue;
-                }
-
-                if (scratchData->field_380.s_0.field_18 <= 32)
-                {
-                    scratchData->field_380.s_0.field_18 = 32;
-                }
-
-                if (scratchData->field_380.s_0.field_18 > scratchData->field_380.s_0.field_1C)
-                {
-                    continue;
-                }
-
-                PORT_NCLIP3(*(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_10],
-                   *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_11],
-                   *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_12], sp14);
-
-                if (sp14 <= 0)
-                {
-                    PORT_NCLIP0(*(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_13], sp14);
-
-                    if (sp14 >= 0)
-                    {
-                        continue;
-                    }
-                }
-
-                temp_a3_2 = scratchData->field_380.s_0.field_0;
-                temp_a2_3 = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_10];
-
-                temp_a1_2  = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_11];
-                temp_a0_5  = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_12];
-                temp_v1_11 = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_13];
-                temp_t0_2  = temp_a3_2 * 2;
-                temp2      = temp_a2_3;
-
-                if ((s16)temp_a2_3 + temp_a3_2 < temp_t0_2 || (s16)temp_a1_2 + temp_a3_2 < temp_t0_2 ||
-                    (s16)temp_a0_5 + temp_a3_2 < temp_t0_2 || (s16)temp_v1_11 + temp_a3_2 < temp_t0_2)
-                {
-                    *(s32*)&poly3->x0 = temp2;
-                    *(s32*)&poly3->x1 = temp_a1_2;
-                    *(s32*)&poly3->x2 = temp_a0_5;
-                    *(s32*)&poly3->x3 = temp_v1_11;
-
-                    *(s32*)&scratchData->field_380.s_0.field_14 = *(s32*)&prim->field_10;
-
-                    *(u32*)(&poly3->r0) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_14] << 5, scratchData->field_252[scratchData->field_380.s_0.field_10] << 4);
-
-                    *(u32*)(&poly3->r1) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_15] << 5, scratchData->field_252[scratchData->field_380.s_0.field_11] << 4);
-
-                    *(u32*)(&poly3->r2) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_16] << 5, scratchData->field_252[scratchData->field_380.s_0.field_12] << 4);
-
-                    *(u32*)(&poly3->r3) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_17] << 5, scratchData->field_252[scratchData->field_380.s_0.field_13] << 4);
 
                     *(s32*)&poly3->u0 = *(s32*)&prim->u0;
                     *(s32*)&poly3->u1 = *(s32*)&prim->u1 & 0xFFFFFF;
@@ -1624,12 +1553,88 @@ static void Gfx_MeshDrawPort(s_MeshHeader* meshHdr, s_GteScratchData* scratchDat
                     *(u16*)&poly3->u3 = *(u16*)&prim->u3;
 
                     setlen(poly3, 12);
+                    setlen(poly1, 8);
 
-                    addPrim(&tag[(scratchData->field_380.s_0.field_18 >> otShift) >> 2], poly3);
-                    poly3++;
+                    if (prim->bits1.flags & (1 << 15))
+                    {
+                        packet1 = poly1 + 1;
+
+                        SetPriority(packet1, 0, 0);
+                        addPrim(&tag[(d >> otShift) >> 2], packet1);
+
+                        setSemiTrans(poly1, 1);
+                        addPrim(&tag[(d >> otShift) >> 2], poly1);
+
+                        packet1 = (PACKET*)(poly1 + 1) + 12;
+                        SetPriority(packet1, 1, 1);
+                        addPrim(&tag[(d >> otShift) >> 2], packet1);
+
+                        addPrim(&tag[(d >> otShift) >> 2], poly3);
+
+                        poly3 = (PACKET*)(poly1 + 1) + 12 + 12;
+                        poly1 = poly3 + 1;
+                    }
+                    else
+                    {
+                        setSemiTrans(poly3, 1);
+
+                        addPrim(&tag[(d >> otShift) >> 2], poly3);
+                        addPrim(&tag[(d >> otShift) >> 2], poly1);
+
+                        poly3 = poly1 + 1;
+                        poly1 = poly3 + 1;
+                    }
                 }
+
+                PORT_FACE_WRITEBACK();
+                GsOUT_PACKET_P = poly1; // @bug? Should be `poly_gt4`
+                return;
             }
 
+            /* Lit, fog colour black: one GT4 of the light, depth-cued to black (DCPL). */
+            PORT_MESH_PATH(1);
+            poly3 = GsOUT_PACKET_P;
+
+            for (; prim < &meshHdr->primitives[meshHdr->primitiveCount]; prim++)
+            {
+                u32 idx = *(u32*)&prim->faceIdxs, f14, k;
+                s32 d, xy[4], vis;
+
+                lastIdx = idx;
+                any     = 1;
+                vis     = Port_FaceTest(scratchData, idx, zfar, xmin, xmin2, &d, xy);
+                lastZ   = d;
+                if (!vis)
+                {
+                    continue;
+                }
+
+                *(s32*)&poly3->x0 = xy[0];
+                *(s32*)&poly3->x1 = xy[1];
+                *(s32*)&poly3->x2 = xy[2];
+                *(s32*)&poly3->x3 = xy[3];
+
+                f14      = *(u32*)&prim->field_10;
+                lastF14  = f14;
+                drawnAny = 1;
+                for (k = 0; k < 4; k++)
+                {
+                    *(u32*)((u8*)&poly3->r0 + k * 12) =
+                        Port_DcplMemo(scratchData, lit[(f14 >> (k * 8)) & 0xFF], fog[(idx >> (k * 8)) & 0xFF]);
+                }
+
+                *(s32*)&poly3->u0 = *(s32*)&prim->u0;
+                *(s32*)&poly3->u1 = *(s32*)&prim->u1 & 0xFFFFFF;
+                *(u16*)&poly3->u2 = *(u16*)&prim->u2;
+                *(u16*)&poly3->u3 = *(u16*)&prim->u3;
+
+                setlen(poly3, 12);
+
+                addPrim(&tag[(d >> otShift) >> 2], poly3);
+                poly3++;
+            }
+
+            PORT_FACE_WRITEBACK();
             GsOUT_PACKET_P = poly3;
             return;
         }
@@ -1641,126 +1646,84 @@ static void Gfx_MeshDrawPort(s_MeshHeader* meshHdr, s_GteScratchData* scratchDat
 
     if (g_WorldEnvWork.isFogEnabled != 0)
     {
-        poly3  = GsOUT_PACKET_P;
+        /* Fogged, unlit: a G4 of the fog colour and a GT4 of the tint over it (the fog pairs). */
+        const u8* fog = scratchData->field_252;
+        PORT_FACE_LOCALS;
+
+        PORT_MESH_PATH(3);
+        Port_MemoCheck(scratchData);
+        poly3 = GsOUT_PACKET_P;
         poly2 = poly3 + 1;
 
         for (; prim < &meshHdr->primitives[meshHdr->primitiveCount]; prim++)
         {
-            *(s32*)&scratchData->field_380.s_0.field_10 = *(s32*)&prim->faceIdxs;
+            u32 idx = *(u32*)&prim->faceIdxs, k;
+            s32 d, xy[4], vis;
 
-            scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_10];
-
-            if (scratchData->field_380.s_0.field_18 < scratchData->field_18C[scratchData->field_380.s_0.field_11])
-            {
-                scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_11];
-            }
-
-            if (scratchData->field_380.s_0.field_18 < scratchData->field_18C[scratchData->field_380.s_0.field_12])
-            {
-                scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_12];
-            }
-
-            if (scratchData->field_380.s_0.field_18 < scratchData->field_18C[scratchData->field_380.s_0.field_13])
-            {
-                scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_13];
-            }
-
-            if (scratchData->field_380.s_0.field_18 <= 0)
+            lastIdx = idx;
+            any     = 1;
+            vis     = Port_FaceTest(scratchData, idx, zfar, xmin, xmin2, &d, xy);
+            lastZ   = d;
+            if (!vis)
             {
                 continue;
             }
 
-            if (scratchData->field_380.s_0.field_18 <= 32)
+            *(s32*)&poly3->x0 = xy[0];
+            *(s32*)&poly2->x0 = xy[0];
+            *(s32*)&poly3->x1 = xy[1];
+            *(s32*)&poly2->x1 = xy[1];
+            *(s32*)&poly3->x2 = xy[2];
+            *(s32*)&poly2->x2 = xy[2];
+            *(s32*)&poly3->x3 = xy[3];
+            *(s32*)&poly2->x3 = xy[3];
+
+            for (k = 0; k < 4; k++)
             {
-                scratchData->field_380.s_0.field_18 = 32;
+                u32 f = fog[(idx >> (k * 8)) & 0xFF];
+                Port_FogMemo(scratchData, f);
+                *(u32*)((u8*)&poly2->r0 + k * 8)  = s_PortFog2[f]; /* POLY_G4: colours 8 bytes apart */
+                *(u32*)((u8*)&poly3->r0 + k * 12) = s_PortFog3[f];
             }
 
-            if (scratchData->field_380.s_0.field_18 > scratchData->field_380.s_0.field_1C)
+            *(s32*)&poly3->u0 = *(s32*)&prim->u0;
+            *(s32*)&poly3->u1 = *(s32*)&prim->u1 & 0xFFFFFF;
+            *(u16*)&poly3->u2 = *(u16*)&prim->u2;
+            *(u16*)&poly3->u3 = *(u16*)&prim->u3;
+
+            setlen(poly3, 12);
+            setlen(poly2, 8);
+
+            if (prim->bits1.flags & (1 << 15))
             {
-                continue;
+                packet0 = poly2 + 1;
+
+                SetPriority(packet0, 0, 0);
+
+                addPrim(&tag[(d >> otShift) >> 2], packet0);
+                setSemiTrans(poly2, 1);
+                addPrim(&tag[(d >> otShift) >> 2], poly2);
+
+                packet0 = (PACKET*)(poly2 + 1) + 12;
+                SetPriority(packet0, 1, 1);
+                addPrim(&tag[(d >> otShift) >> 2], packet0);
+                addPrim(&tag[(d >> otShift) >> 2], poly3);
+
+                poly3 = (PACKET*)(poly2 + 1) + 12 + 12;
+                poly2 = poly3 + 1;
             }
-
-            PORT_NCLIP3(*(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_10],
-                   *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_11],
-                   *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_12], sp18);
-
-            if (sp18 <= 0)
+            else
             {
-                PORT_NCLIP0(*(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_13], sp18);
+                setSemiTrans(poly3, 1);
+                addPrim(&tag[(d >> otShift) >> 2], poly3);
+                addPrim(&tag[(d >> otShift) >> 2], poly2);
 
-                if (sp18 >= 0)
-                {
-                    continue;
-                }
-            }
-
-            temp_a3_4 = scratchData->field_380.s_0.field_0;
-            temp_a2_5 = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_10];
-
-            temp_a1_4  = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_11];
-            temp_a0_9  = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_12];
-            temp_v1_21 = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_13];
-            temp_t0_4  = temp_a3_4 * 2;
-            temp_a2_6  = temp_a2_5;
-
-            if (((s16)temp_a2_5 + temp_a3_4) < temp_t0_4 || ((s16)temp_a1_4 + temp_a3_4) < temp_t0_4 ||
-                ((s16)temp_a0_9 + temp_a3_4) < temp_t0_4 || ((s16)temp_v1_21 + temp_a3_4) < temp_t0_4)
-            {
-                *(s32*)&poly3->x0 = temp_a2_6;
-                *(s32*)&poly2->x0 = temp_a2_6;
-                *(s32*)&poly3->x1 = temp_a1_4;
-                *(s32*)&poly2->x1 = temp_a1_4;
-                *(s32*)&poly3->x2 = temp_a0_9;
-                *(s32*)&poly2->x2 = temp_a0_9;
-                *(s32*)&poly3->x3 = temp_v1_21;
-                *(s32*)&poly2->x3 = temp_v1_21;
-
-                PORT_FOG_COLORS(scratchData->field_252[scratchData->field_380.s_0.field_10], &poly2->r0, &poly3->r0);
-
-                PORT_FOG_COLORS(scratchData->field_252[scratchData->field_380.s_0.field_11], &poly2->r1, &poly3->r1);
-
-                PORT_FOG_COLORS(scratchData->field_252[scratchData->field_380.s_0.field_12], &poly2->r2, &poly3->r2);
-
-                PORT_FOG_COLORS(scratchData->field_252[scratchData->field_380.s_0.field_13], &poly2->r3, &poly3->r3);
-
-                *(s32*)&poly3->u0 = *(s32*)&prim->u0;
-                *(s32*)&poly3->u1 = *(s32*)&prim->u1 & 0xFFFFFF;
-                *(u16*)&poly3->u2 = *(u16*)&prim->u2;
-                *(u16*)&poly3->u3 = *(u16*)&prim->u3;
-
-                setlen(poly3, 12);
-                setlen(poly2, 8);
-
-                if (prim->bits1.flags & (1 << 15))
-                {
-                    packet0 = poly2 + 1;
-
-                    SetPriority(packet0, 0, 0);
-
-                    addPrim(&tag[(scratchData->field_380.s_0.field_18 >> otShift) >> 2], packet0);
-                    setSemiTrans(poly2, 1);
-                    addPrim(&tag[(scratchData->field_380.s_0.field_18 >> otShift) >> 2], poly2);
-
-                    packet0 = (PACKET*)(poly2 + 1) + 12;
-                    SetPriority(packet0, 1, 1);
-                    addPrim(&tag[(scratchData->field_380.s_0.field_18 >> otShift) >> 2], packet0);
-                    addPrim(&tag[(scratchData->field_380.s_0.field_18 >> otShift) >> 2], poly3);
-
-                    poly3  = (PACKET*)(poly2 + 1) + 12 + 12;
-                    poly2 = poly3 + 1;
-                }
-                else
-                {
-                    setSemiTrans(poly3, 1);
-                    addPrim(&tag[(scratchData->field_380.s_0.field_18 >> otShift) >> 2], poly3);
-                    addPrim(&tag[(scratchData->field_380.s_0.field_18 >> otShift) >> 2], poly2);
-
-                    poly3  = poly2 + 1;
-                    poly2 = poly3 + 1;
-                }
+                poly3 = poly2 + 1;
+                poly2 = poly3 + 1;
             }
         }
 
+        PORT_FACE_WRITEBACK();
         GsOUT_PACKET_P = poly2; // @bug? Should be `poly_gt4`.
         return;
     }
@@ -1783,6 +1746,7 @@ __block1530:
     const s16* z = scratchData->field_18C;
     const u8*  lit = scratchData->field_2B8;
 
+    PORT_MESH_PATH(2);
     Port_MemoCheck(scratchData);
     poly0 = GsOUT_PACKET_P;
 
@@ -1884,91 +1848,54 @@ __block1530:
 }
 
 __block19CC:
+{
+    /* Unlit, unfogged: one FT4 of the tint per face. */
+    PORT_FACE_LOCALS;
+    u32 col;
+
+    PORT_MESH_PATH(4);
     scratchData->field_380.s_0.field_8.cd = 44;
-    poly4                       = GsOUT_PACKET_P;
+    col                                   = *(u32*)&scratchData->field_380.s_0.field_8;
+    poly4                                 = GsOUT_PACKET_P;
 
     for (prim = meshHdr->primitives; prim < &meshHdr->primitives[meshHdr->primitiveCount]; prim++)
     {
-        *(s32*)&scratchData->field_380.s_0.field_10 = *(s32*)&prim->faceIdxs;
-        scratchData->field_380.s_0.field_18         = scratchData->field_18C[scratchData->field_380.s_0.field_10];
+        u32 idx = *(u32*)&prim->faceIdxs;
+        s32 d, xy[4], vis;
 
-        if (scratchData->field_380.s_0.field_18 < scratchData->field_18C[scratchData->field_380.s_0.field_11])
-        {
-            scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_11];
-        }
-
-        if (scratchData->field_380.s_0.field_18 < scratchData->field_18C[scratchData->field_380.s_0.field_12])
-        {
-            scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_12];
-        }
-
-        if (scratchData->field_380.s_0.field_18 < scratchData->field_18C[scratchData->field_380.s_0.field_13])
-        {
-            scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_13];
-        }
-
-        if (scratchData->field_380.s_0.field_18 <= 0)
+        lastIdx = idx;
+        any     = 1;
+        vis     = Port_FaceTest(scratchData, idx, zfar, xmin, xmin2, &d, xy);
+        lastZ   = d;
+        if (!vis)
         {
             continue;
         }
 
-        if (scratchData->field_380.s_0.field_18 <= 32)
-        {
-            scratchData->field_380.s_0.field_18 = 32;
-        }
+        *(s32*)&poly4->x0 = xy[0];
+        *(s32*)&poly4->x1 = xy[1];
+        *(s32*)&poly4->x2 = xy[2];
+        *(s32*)&poly4->x3 = xy[3];
 
-        if (scratchData->field_380.s_0.field_18 > scratchData->field_380.s_0.field_1C)
-        {
-            continue;
-        }
+        *(u32*)&poly4->r0 = col;
 
-        PORT_NCLIP3(*(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_10],
-                   *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_11],
-                   *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_12], sp20);
+        *(s32*)&poly4->u0 = *(s32*)&prim->u0;
+        *(s32*)&poly4->u1 = *(s32*)&prim->u1 & 0xFFFFFF;
+        *(u16*)&poly4->u2 = *(u16*)&prim->u2;
+        *(u16*)&poly4->u3 = *(u16*)&prim->u3;
 
-        if (sp20 <= 0)
-        {
-            PORT_NCLIP0(*(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_13], sp20);
+        setlen(poly4, 9);
 
-            if (sp20 >= 0)
-            {
-                continue;
-            }
-        }
+        addPrim(&tag[(d >> otShift) >> 2], poly4);
 
-        temp_a3_5 = scratchData->field_380.s_0.field_0;
-        temp_a2_7 = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_10];
-
-        temp_a1_5  = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_11];
-        temp_a0_13 = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_12];
-        temp_v1_27 = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_13];
-        temp_t0_5  = temp_a3_5 * 2;
-        temp       = temp_a2_7;
-
-        if (((s16)temp_a2_7 + temp_a3_5) < temp_t0_5 || ((s16)temp_a1_5 + temp_a3_5) < temp_t0_5 ||
-            ((s16)temp_a0_13 + temp_a3_5) < temp_t0_5 || ((s16)temp_v1_27 + temp_a3_5) < temp_t0_5)
-        {
-            *(s32*)&poly4->x0 = temp;
-            *(s32*)&poly4->x1 = temp_a1_5;
-            *(s32*)&poly4->x2 = temp_a0_13;
-            *(s32*)&poly4->x3 = temp_v1_27;
-
-            *(s32*)&poly4->r0 = *(s32*)&scratchData->field_380.s_0.field_8;
-
-            *(s32*)&poly4->u0 = *(s32*)&prim->u0;
-            *(s32*)&poly4->u1 = *(s32*)&prim->u1 & 0xFFFFFF;
-            *(u16*)&poly4->u2 = *(u16*)&prim->u2;
-            *(u16*)&poly4->u3 = *(u16*)&prim->u3;
-
-            setlen(poly4, 9);
-
-            addPrim(&tag[(scratchData->field_380.s_0.field_18 >> otShift) >> 2], poly4);
-
-            poly4++;
-        }
+        poly4++;
     }
 
+    (void)drawnAny;
+    (void)lastF14;
+    PORT_FACE_WRITEBACK();
     GsOUT_PACKET_P = poly4;
+}
 }
 
 #ifdef SH_PORT_CHECK_BATCH
@@ -2034,7 +1961,8 @@ void Gfx_MeshDraw(s_MeshHeader* meshHdr, s_GteScratchData* scratchData, GsOT_TAG
             }
             if ((checks & 0xFFF) == 0)
             {
-                printf("mesh check: %d meshes, %d mismatches\n", checks, mismatches);
+                printf("mesh check: %d meshes, %d mismatches; per path (lit+fog, lit black fog, lit, fog, flat): %u %u %u %u %u\n", checks,
+                       mismatches, s_PortMeshPath[0], s_PortMeshPath[1], s_PortMeshPath[2], s_PortMeshPath[3], s_PortMeshPath[4]);
             }
         }
         return;

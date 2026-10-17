@@ -336,6 +336,9 @@ static u8 s_ClutMap[0x10000];
 #define CLUT_MAP(key) (((key) & 0x7FFF) | (((key) >> 16) << 15))
 
 static u32  s_UseClock;
+/* Incremented whenever a page or CLUT changes cache slot (s_PageMap/s_ClutMap entries set or
+ * dropped): tex_state's memo of TEX0/TEXCLUT values is then stale. */
+static u32  s_TexGen = 1;
 static u8   s_Staging[256 * 256] __attribute__((aligned(64)));
 static u64x s_ImgPkt[(256 * 256 / 16 + 8) * 2] __attribute__((aligned(64)));
 
@@ -365,6 +368,7 @@ static void cache_invalidate(s32 x, s32 y, s32 w, s32 h)
         {
             s_PageMap[s_Slots[i].key] = 0;
             s_Slots[i].key            = -1;
+            s_TexGen++;
             s_RegValid[R_TEX0]        = 0; /* prim_state's texture memo: look the page up again */
         }
     }
@@ -382,6 +386,7 @@ static void cache_invalidate(s32 x, s32 y, s32 w, s32 h)
         {
             s_ClutMap[CLUT_MAP(s_Cluts[i].key)] = 0;
             s_Cluts[i].key                      = -1;
+            s_TexGen++;
             s_RegValid[R_TEX0]                  = 0;
         }
     }
@@ -452,6 +457,7 @@ static void cache_fill(s32 x, s32 y, s32 w, s32 h, u16 c)
         {
             s_PageMap[s_Slots[i].key] = 0;
             s_Slots[i].key            = -1;
+            s_TexGen++;
             s_RegValid[R_TEX0]        = 0;
             continue;
         }
@@ -488,6 +494,7 @@ static void cache_fill(s32 x, s32 y, s32 w, s32 h, u16 c)
         {
             s_ClutMap[CLUT_MAP(s_Cluts[i].key)] = 0;
             s_Cluts[i].key                      = -1;
+            s_TexGen++;
             s_RegValid[R_TEX0]                  = 0;
             continue;
         }
@@ -546,6 +553,7 @@ static u32 cache_get(u32 depth, u32 tpage)
     s_Slots[best].key  = key;
     s_Slots[best].used = ++s_UseClock;
     s_PageMap[key]     = (u8)(best + 1);
+    s_TexGen++;
     return slot_tbp(best);
 }
 
@@ -593,6 +601,7 @@ static u32 clut_get(u32 clut, u32 depth)
     s_Cluts[best].key            = key;
     s_Cluts[best].used           = ++s_UseClock;
     s_ClutMap[CLUT_MAP(key)]     = (u8)(best + 1);
+    s_TexGen++;
     s_RegValid[R_TEX0] = 0; /* this row's contents changed: load it again */
     return (u32)best;
 }
@@ -623,6 +632,7 @@ static void init(void)
     }
     memset(s_PageMap, 0, sizeof(s_PageMap));
     memset(s_ClutMap, 0, sizeof(s_ClutMap));
+    s_TexGen++;
     s_Ready = 1;
 }
 
@@ -758,30 +768,62 @@ static u64x prim_state(const Prim* p)
     return memoPrim;
 }
 
-/** TEX0/TEXCLUT for a textured primitive (tpage: page and depth; clut; raw). */
+/** TEX0/TEXCLUT for a textured primitive (tpage: page and depth; clut; raw). The register values
+ * are memoized by page, CLUT and raw until a cache slot changes (s_TexGen): a hit skips the page and
+ * CLUT lookups (s_ClutMap is 64 KB, a cache miss each time) but touches the same LRU clocks, so the
+ * caches evict as before. */
 static void tex_state(const Prim* p)
 {
+    static struct
+    {
+        u32  key, gen;
+        s32  slot, row; /* page cache slot and CLUT row (4/8-bit pages) */
+        u64x tex0, texclut;
+    } memo[64];
     u32  depth = (p->tpage >> 7) & 3;
+    u32  clut  = depth >= 2 ? 0 : p->clut & 0xFFFF;
+    u32  key   = (p->tpage & 0x19F) | (clut << 9) | (p->raw << 25);
     u64x tex0;
-    if (depth >= 2)
+    __typeof__(&memo[0]) e = &memo[(clut ^ (clut >> 6) ^ ((p->tpage & 0x19F) * 5)) & 63];
+
+    if (e->gen == s_TexGen && e->key == key)
+    {
+        if (depth < 2)
+        {
+            s_Slots[e->slot].used = ++s_UseClock; /* as cache_get and clut_get on a hit */
+            s_Cluts[e->row].used  = ++s_UseClock;
+        }
+    }
+    else if (depth >= 2)
     {
         u32 px = (p->tpage & 15) * 64, py = ((p->tpage >> 4) & 1) * 256;
-        tex0   = (u64x)(VRAM_TBP + ((py / 64) * VRAM_BW + px / 64) * 32) | ((u64x)VRAM_BW << 14) |
-               ((u64x)PSM_CT16 << 20);
+        e->tex0 = (u64x)(VRAM_TBP + ((py / 64) * VRAM_BW + px / 64) * 32) | ((u64x)VRAM_BW << 14) |
+                  ((u64x)PSM_CT16 << 20);
+        e->tex0 |= (8ULL << 26) | (8ULL << 30) | (1ULL << 34) | ((u64x)(p->raw ? 1 : 0) << 35); /* 256x256, TCC, TFX */
+        e->key = key;
+        e->gen = s_TexGen;
     }
     else
     {
-        u32  tbp     = cache_get(depth, p->tpage);
-        u64x texclut = 4 | ((u64x)clut_get(p->clut, depth) << 12); /* CBW 4 (256), COU 0, COV = row */
-        if (!s_RegValid[R_TEXCLUT] || s_Reg[R_TEXCLUT] != texclut)
+        u32 tbp = cache_get(depth, p->tpage);
+        e->slot    = s_PageMap[(depth << 5) | (p->tpage & 31)] - 1;
+        e->row     = (s32)clut_get(p->clut, depth);
+        e->texclut = 4 | ((u64x)e->row << 12); /* CBW 4 (256), COU 0, COV = row */
+        e->tex0 = (u64x)tbp | ((u64x)4 << 14) | ((u64x)(depth == 0 ? PSM_T4 : PSM_T8) << 20) |
+                  ((u64x)(CLUT_ADDR / 256) << 37) | ((u64x)PSM_CT16 << 51) | (1ULL << 55) | (1ULL << 61); /* CSM2, CLD */
+        e->tex0 |= (8ULL << 26) | (8ULL << 30) | (1ULL << 34) | ((u64x)(p->raw ? 1 : 0) << 35); /* 256x256, TCC, TFX */
+        e->key = key;
+        e->gen = s_TexGen; /* after the lookups, which may have changed slots */
+    }
+    tex0 = e->tex0;
+    if (depth < 2)
+    {
+        if (!s_RegValid[R_TEXCLUT] || s_Reg[R_TEXCLUT] != e->texclut)
         {
             s_RegValid[R_TEX0] = 0; /* the CLUT is loaded when TEX0 is written */
         }
-        set(R_TEXCLUT, texclut);
-        tex0 = (u64x)tbp | ((u64x)4 << 14) | ((u64x)(depth == 0 ? PSM_T4 : PSM_T8) << 20) |
-               ((u64x)(CLUT_ADDR / 256) << 37) | ((u64x)PSM_CT16 << 51) | (1ULL << 55) | (1ULL << 61); /* CSM2, CLD */
+        set(R_TEXCLUT, e->texclut);
     }
-    tex0 |= (8ULL << 26) | (8ULL << 30) | (1ULL << 34) | ((u64x)(p->raw ? 1 : 0) << 35); /* 256x256, TCC, TFX */
     if (!s_RegValid[R_TEX0] || s_Reg[R_TEX0] != tex0)
     {
         ad(R_TEXFLUSH, 0);
@@ -1010,13 +1052,15 @@ static inline int quad_fits(const s32* x, const s32* y)
     return x1 - x0 <= 1023 && y1 - y0 <= 511;
 }
 
-/** A GP0 polygon; `under`: a fog pair's underlay to draw first (GpuGs_Commands), or NULL. */
-static u32 polygon(const u32* w, s32 n, const u32* under)
+/** A GP0 polygon; `under`: a fog pair's underlay to draw first (GpuGs_Commands), or NULL. `shape`:
+ * the command's gouraud, quad and textured bits (cmd & 0x1C), a constant in each copy (polygon()), so
+ * the vertex loops unroll and the per-vertex branches go. */
+static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, const u32* under, u32 shape)
 {
-    u32  cmd      = w[0] >> 24;
-    s32  nv       = (cmd & 0x08) ? 4 : 3;
-    u32  gouraud  = (cmd >> 4) & 1;
-    u32  textured = (cmd >> 2) & 1;
+    u32  cmd      = (w[0] >> 24 & ~0x1Cu) | shape;
+    s32  nv       = (shape & 0x08) ? 4 : 3;
+    u32  gouraud  = (shape >> 4) & 1;
+    u32  textured = (shape >> 2) & 1;
     u32  raw      = (cmd & 1) && textured;
     s32  words    = nv * (1 + (s32)textured) + (gouraud ? nv : 1);
     u32  rgb[4], clut = 0, tpage = s_TexPage, colorMask = 0xFFFFFF;
@@ -1166,6 +1210,22 @@ static u32 polygon(const u32* w, s32 n, const u32* under)
     LP_END(LP_POLY_EMIT);
     }
     return (u32)k;
+}
+
+static u32 polygon(const u32* w, s32 n, const u32* under) __attribute__((noinline));
+static u32 polygon(const u32* w, s32 n, const u32* under)
+{
+    switch ((w[0] >> 24) & 0x1C)
+    {
+        case 0x00: return polygon_t(w, n, under, 0x00);
+        case 0x04: return polygon_t(w, n, under, 0x04);
+        case 0x08: return polygon_t(w, n, under, 0x08);
+        case 0x0C: return polygon_t(w, n, under, 0x0C);
+        case 0x10: return polygon_t(w, n, under, 0x10);
+        case 0x14: return polygon_t(w, n, under, 0x14);
+        case 0x18: return polygon_t(w, n, under, 0x18);
+        default:   return polygon_t(w, n, under, 0x1C);
+    }
 }
 
 static u32 rectangle(const u32* w, s32 n)
@@ -1765,7 +1825,8 @@ void GpuGs_Stats(u32 frames)
         static const char* const NAMES[LP_COUNT] = { "DrawOTag", "GpuGs_Commands", "polygon: parse", "polygon: state",
                                                      "polygon: emit", "rectangle", "lines", "flush (DMA)",
                                                      "state: texture", "state: other", "mesh: light", "mesh: transform",
-                                                     "mesh: packets", "light: collect", "light: batch", "light: apply" };
+                                                     "mesh: packets", "light: collect", "light: batch", "light: apply",
+                                                     "map fx (grid)", "map fx: batch" };
         for (a = 0; a < LP_COUNT; a++)
         {
             printf("liteprof: %-16s %5u kcycles %5u calls a frame\n", NAMES[a], g_LiteProf[a][0] / 1000 / frames,

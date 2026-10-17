@@ -237,7 +237,12 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [x] gte.c's EE paths (PHMADH, MULT/MFHI, PLZCW) and vw_calc.c's MMI were compiled out of the game (no -D_EE outside src/port/ps2): now on `_MIPS_ARCH_R5900`; exact (gte_test EE/host, check build); CybilFightStart -7.6% vertical blanks, bar fight -5.2%
 - [x] Point light arithmetic in registers (exact): apply 469 -> 182 k-cycles a frame
 - [x] World mesh packets, lit path in locals (exact): 479 -> 404 k-cycles a frame; lit-and-fogged colours memoized
-- [ ] CybilFightStart next (k-cycles a frame): DrawOTag 1,410, point light 1,368 (batch 988), mesh transform 613, mesh packets 404
+- [x] DrawOTag third step: polygon copies per shape, texture-state memo (exact; 1,409 → 1,371 k-cycles a frame in CybilFightStart)
+- [ ] CybilFightStart next (k-cycles a frame): point light 1,368 (batch 988), DrawOTag 1,371, mesh transform 613, mesh packets 404; DrawOTag next on hardware (cache effects PCSX2 doesn't model)
+- [x] All-cutscene profile (PS2 Optimizations.md 2026-10-17): in the heavy cutscenes, DrawOTag 34%, point light 18%, mesh transform 12%, mesh packets 9%, rest 28%
+- [x] map6_s02 func_800D2364 effect grid: Gte_RtpGrid lattice batch (exact; 1,179 → 653 k-cycles a frame, busy −12% / −19% in its two cutscenes)
+- [x] Gfx_MeshDrawPort fog, lit+fog, lit+black-fog and flat loops in locals with memos (exact; mesh packets −13% to −23% in the fogged maps, busy −2% to −3%)
+- [ ] Next candidates: character pipeline packets (func_8005AC50), snow particles
 - [ ] Hardware tests: `SH1_INTERLACE_FIELDS=1` (PS1-style field drawing for the 448i screens, broken in PCSX2) and `SH1_MODESWITCH=0/1/2` (video signal gaps on mode switches; film the TV)
 - [ ] 480p / 720p modes (2026-10-17 assessment: 480p fits in VRAM with a 2x render buffer and the 1:1 VRAM image; fill rate isn't the limit; the work is keeping the 2x image and the PS1 VRAM in step for effects that read the frame buffer; true 720p doesn't fit double-buffered)
 - [x] Benchmarks besides Kaufmann (#4): #36 CybilFightStart (map6_s04 func_800E1D50, 28.1 fps in the 2026-10-10 sweep) and #50 MapEvent_KaufmannBarFightCutscene (33.3); speed only, their pictures depend on timing

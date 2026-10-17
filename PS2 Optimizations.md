@@ -323,3 +323,87 @@ Every world face in CybilFightStart takes Gfx_MeshDrawPort's lit path without fo
 Also: the lit-and-fogged path (the flashlight) now memoizes its two corner colours (its fog colour shares the fog path's memo; its DCPL by light and fog byte in a 2048-entry direct-mapped table keyed on both). Exact by construction; not exercised by the benchmarks.
 
 Mesh check (packets and OT against the original): 0 mismatches (#36, #50, #4, #1-3). Kaufmann dumps identical. Mesh packets: CybilFightStart 479 → **404** k-cycles a frame, 1,661 → **1,652** vertical blanks; bar fight 310 → 278.
+
+### 2026-10-17: DrawOTag, third step: polygon copies per shape and a texture-state memo (exact): kept, small
+
+Breakdown before (CybilFightStart, k-cycles a frame): DrawOTag 1,409; OT walk ~137; per packet outside the counted parts ~270; polygon parse 261, state 401 (texture 222: 505 changes at ~440 cycles), emit 337.
+
+- `polygon()` dispatches on the command's shape bits (gouraud, quad, textured) to eight always-inlined copies of `polygon_t`, each with the shape as a constant: the vertex loops unroll and the per-vertex branches go. polygon grows to 14.7 KB (the GT4 copy, the one CybilFightStart uses most, ~1.8 KB); worth checking on hardware, where the I-cache is 16 KB.
+- `tex_state` memoizes TEX0/TEXCLUT by page, CLUT and raw (64 entries, direct-mapped), valid until a page or CLUT changes cache slot (`s_TexGen`). A hit skips the page and CLUT lookups (s_ClutMap is 64 KB) and touches the same LRU clocks, so evictions and uploads are unchanged.
+
+| DrawOTag k-cycles a frame | Kaufmann #4 | CybilFightStart #36 | Bar fight #50 |
+|---|---|---|---|
+| before | 1,398 | 1,409 | 1,131 |
+| after | **1,355** | **1,371** | **1,094** |
+
+Kaufmann dumps identical. Vertical blanks: #36 1,652 → 1,647; #50 5,725 → 5,725. Texture changes still cost ~400 cycles each: the lookups were only ~45 of them; the rest is the A+D block (tag close, TEXFLUSH/TEXCLUT/TEX0, REGLIST tag reopened).
+
+Note on these numbers: PCSX2 doesn't model the EE's caches (without its slow EE-cache option), so its cycle counts track instruction counts. Cache misses on the scattered OT packets and the I-cache footprint only show on hardware; DrawOTag's remaining cost is spread over the per-packet path with no single hot spot left in this cost model.
+
+### 2026-10-17: all-cutscene profile (PCSX2)
+
+Two sweeps of all 52 Demo cutscenes:
+- **A:** a benchmark build with the light counters.
+- **B:** a function-level profiling build (`-finstrument-functions`, SH1_PROF). It inflates small functions, so its per-function figures are medians over the 120-frame reports: single reports carried spikes from the shadow stack around waits.
+
+Measure: in benchmark builds the game never waits on its own; only presenting a frame waits for the next vertical blank. So busy cycles per displayed frame = elapsed × (1 − heartbeat idle). The 60 fps budget is ~4.9M cycles. (The demo "fps:" line counts simulated vertical blanks in these builds, so it isn't a speed measure.) Coverage: 44 cutscenes reached gameplay in A. The 8 that timed out are the same 8 as in the 2026-10-10 sweep. B stalled in 8 more, as the instrumented build is slow.
+
+The heaviest cutscenes, k-cycles per displayed frame (A):
+
+| cutscene | fps | busy | DrawOTag | point light | mesh transform | mesh packets | rest |
+|---|---|---|---|---|---|---|---|
+| CybilFightStart | 50.6 | 4,751 | 1,396 | 1,420 | 634 | 419 | 882 |
+| KaufmannBarFight | 59.6 | 4,203 | 1,061 | 1,230 | 494 | 271 | 1,147 |
+| map6_s02 func_800CF0B8 | 59.5 | 3,871 | 1,204 | 390 | 176 | 120 | 1,981 |
+| CafeCutscene | 59.5 | 3,854 | 1,736 | 0 | 550 | 481 | 1,086 |
+| map2_s01 func_800CED88 | 59.2 | 3,636 | 1,719 | 0 | 678 | 617 | 623 |
+| map5_s02 func_800D4B58 | 60.0 | 3,559 | 758 | 1,174 | 528 | 286 | 812 |
+
+- All 44 cutscenes, frame-weighted: busy 2,877; DrawOTag 969; point light 485; mesh transform 308; mesh packets 229; rest 885.
+- The 14 with under 40% idle: busy 3,426; DrawOTag 1,160 (34%); point light 601 (18%); mesh transform 399 (12%); mesh packets 299 (9%); rest 966 (28%).
+- Only CybilFightStart misses 60 fps by much in PCSX2.
+
+What "rest" is (B, medians, exclusive):
+- **Character mesh pipeline:** func_8005A478 setup, func_8005A900 transform, func_8005AA08 light, func_8005AC50 packets. Together ~600k instrumented in the heavy cutscenes, with func_8005AC50 (packets) the largest at ~210k.
+- **Other per-frame work:** WorldEnv_LightTransform ~120k; Port_Nclip ~130k.
+- **map6_s02 func_800D2364:** ~3.3M instrumented in both map6_s02 cutscenes (their "rest" is 1.7-2.0M in A). It's a per-frame effect grid: 8 layers × 289 vertices through RTPT/RTPS (~770 RTPT a frame), each followed by a 16×16 cell loop. It's the biggest single target outside the world mesh, and it can be batched like Gte_RtpBatch.
+- **Snow particles:** Particle_SnowDraw and Particle_Update are large in CutsceneOpening (~1.7M + 0.7M instrumented) and map2_s00 (~0.9M + 0.5M). Both are under 50% busy, so they aren't limiting there.
+- **Gfx_MeshDrawPort in fogged maps:** large in map3_s06, map2_s01 and CafeCutscene (0.97-3.75M instrumented), on the fog paths rather than the lit path optimized for CybilFightStart.
+
+### 2026-10-17: map6_s02 effect grid batched (exact): kept
+
+func_800D2364 (map6_s02, both cutscenes there) projects an 8-layer grid every frame. Each layer is 17×17 points at (((i / 17) << 7) − 0x400, −8k, 0x400 − ((i % 17) << 7)): 96 RTPT and 2 RTPS a layer, ~770 RTPT a frame.
+
+Change:
+- `Port_GridBatch` (map6_s02_2.c) computes points 0-283 of each layer with the new `Gte_RtpGrid` (gte.c), straight into field_0/field_484.
+- The last triple and the two RTPS still go through the GTE, with SZ3 preset to the batch's last depth, so the GTE ends as after the original loop.
+- `Gte_RtpGrid` treats the points as a lattice. The rotation is linear, so MAC1-3 step by R·du and R·dv: the same integers as the products, with nothing rounded before the >> 12. Only the division and the screen projection run per point.
+- The projection is now `rtp_project`, shared with `Gte_RtpBatch`.
+
+Check build (Port_GridCheck: batch against the GTE loop, SXY and SZ): 0 mismatches over 4.7M points (#1, #2); the other batch checks still 0. Light counters `map fx (grid)` and `map fx: batch`.
+
+| k-cycles a frame | #1 map6_s02 func_800CF0B8 | #2 map6_s02 func_800CFC34 |
+|---|---|---|
+| func_800D2364 before | 1,179 | 1,046 |
+| Gte_RtpBatch per point (batch 479 / 431) | 844 | 705 |
+| Gte_RtpGrid (batch 288 / 240) | **653** | **515** |
+| busy per displayed frame, before → after | 4,122 → **3,621** (−12%) | 2,877 → **2,332** (−19%) |
+
+What's left in the function (~365k / ~275k) is the per-cell C: the 8 × 15 × 15 level update (Q12_MULT_PRECISE, Rng_Rand16) and the 8 × 16 × 16 cell visibility and packet loop.
+
+### 2026-10-17: world mesh packets, the other paths (exact): kept, small
+
+Gfx_MeshDrawPort has five face loops (by point light and fog): lit + fog colour (the flashlight in fog), lit + black fog, lit (done earlier), fog (the fog pairs), and flat. The four not yet done kept the original's style: each face's indices and depth went through the scratch fields, and the lit + black fog loop computed four DCPL per face without the memo.
+
+Change: a shared `Port_FaceTest` (depth, cull, NCLIP/NCLIP0, the unsigned screen bound test). Each loop keeps its values in locals, takes colours from the memos (`Port_FogMemo`, `Port_DcplMemo`, Port_MemoCheck once per mesh) and writes the scratch fields' final values after the loop (`PORT_FACE_WRITEBACK`).
+
+Mesh check (packets and OT against the original; it now also counts meshes per path): 0 mismatches over 1.47M meshes in #0-4, #12, #36, #43, #47 and #50. Paths seen: lit + fog 244k (Kaufmann's map3_s00 uses it heavily), lit + black fog 1.6k, lit 377k, fog 851k, flat 0 (unverified by these benchmarks; exact by the same construction). Kaufmann dumps identical.
+
+| | mesh packets k-cycles a frame, before → after | busy per displayed frame, before → after |
+|---|---|---|
+| map2_s01 func_800CED88 (#0, fog) | 617 → **478** | 3,636 → **3,522** (−3%) |
+| map3_s06 func_800D0C14 (#3, fog) | 273 → **238** | 2,497 → **2,455** (−2%) |
+| CafeCutscene (#43, fog) | 481 → **399** | 3,854 → **3,781** (−2%) |
+| Kaufmann map3_s00 (#4, lit + fog) | 393 → **344** | |
+
+Before: the all-cutscene sweep A (same build without this change). In these maps the larger cost is DrawOTag (1.6-1.7M in #0 and #43): every fogged face is two polygons (the fog pairs).

@@ -41,6 +41,8 @@ int Gte_RtpsDotBatch(const short* row0, const short* row1, const short (*v)[3], 
 void Gte_CmdRtpsRow2(const short* v); /* row 2 of RT and V0 = v, then RTPS (func_80057658) */
 /** Batched exact RTPS over `count` vertices in place (see gte.c); 0 when it can't (use the GTE). */
 int Gte_RtpBatch(unsigned int* xy, short* z, int count);
+/** Batched exact RTPS over a lattice v0 + (i / nu) * dv + (i % nu) * du (see gte.c); 0 when it can't. */
+int Gte_RtpGrid(const short* v0, const short* du, const short* dv, int nu, unsigned int* xy, int* z, int count);
 int Gte_NcBatch(const short* v, unsigned int* out, int count);
 #if !defined(GTE_IMPLEMENTATION) && !defined(SH_PORT_PROF)
 static inline void Gte_CommandDirect(unsigned int cmd)
