@@ -1,4 +1,5 @@
 #include "game.h"
+#include "port/prof.h"
 #include "inline_no_dmpsx.h"
 
 #include <psyq/gtemac.h>
@@ -244,7 +245,11 @@ void func_80057344(s_ModelInfo* modelInfo, GsOT_TAG* otTag, s32 otShift, MATRIX*
                 break;
 
             case UnkGfxEnum_1:
-                func_80057658(curMeshHdr, normalOffset, scratchData, &g_WorldEnvWork.light.field_28, &g_WorldEnvWork.light.field_30);
+                {
+                    LP_BEGIN(LP_MESH_LIGHT)
+                    func_80057658(curMeshHdr, normalOffset, scratchData, &g_WorldEnvWork.light.field_28, &g_WorldEnvWork.light.field_30);
+                    LP_END(LP_MESH_LIGHT);
+                }
                 break;
 
             case UnkGfxEnum_2:
@@ -252,8 +257,16 @@ void func_80057344(s_ModelInfo* modelInfo, GsOT_TAG* otTag, s32 otShift, MATRIX*
                 break;
         }
 
-        func_80057B7C(curMeshHdr, vertOffset, scratchData, mat);
-        Gfx_MeshDraw(curMeshHdr, scratchData, otTag, otShift);
+        {
+            LP_BEGIN(LP_MESH_XFORM)
+            func_80057B7C(curMeshHdr, vertOffset, scratchData, mat);
+            LP_END(LP_MESH_XFORM);
+        }
+        {
+            LP_BEGIN(LP_MESH_DRAW)
+            Gfx_MeshDraw(curMeshHdr, scratchData, otTag, otShift);
+            LP_END(LP_MESH_DRAW);
+        }
     }
 }
 
@@ -324,6 +337,363 @@ void func_8005759C(s_MeshHeader* meshHdr, s_GteScratchData* scratchData, s32 ver
     }
 }
 
+#if defined(SH_PORT) && defined(SH_PORT_CHECK_BATCH)
+/* Check build: Gte_CmdRtpsRow2 against the three macros it replaces, from the same GTE state, all 64
+ * registers compared. */
+static void Port_RtpsRow2Check(MATRIX* mat, s16* v)
+{
+    static s32   checks, mismatches;
+    unsigned int d0[32], c0[32], d1[32], c1[32], dirty0;
+    s32          i, bad = 0;
+    memcpy(d0, g_GteData, sizeof(d0));
+    memcpy(c0, g_GteCtrl, sizeof(c0));
+    dirty0 = g_GteCtrlDirty;
+    Gte_CmdRtpsRow2(v);
+    memcpy(d1, g_GteData, sizeof(d1));
+    memcpy(c1, g_GteCtrl, sizeof(c1));
+    memcpy(g_GteData, d0, sizeof(d0));
+    memcpy(g_GteCtrl, c0, sizeof(c0));
+    g_GteCtrlDirty = dirty0 | ~0u;
+    gte_SetRotMatrix_Row2(mat->m);
+    gte_ldv0(v);
+    gte_rtps();
+    for (i = 0; i < 32; i++)
+    {
+        bad |= d1[i] != g_GteData[i] || c1[i] != g_GteCtrl[i];
+    }
+    checks++;
+    if (bad && mismatches++ < 20)
+    {
+        printf("RtpsRow2 mismatch: v %d %d %d\n", v[0], v[1], v[2]);
+    }
+    if ((checks & 0xFFFF) == 0)
+    {
+        printf("RtpsRow2: %d checks, %d mismatches\n", checks, mismatches);
+    }
+}
+#define PORT_RTPS_ROW2(mat, v) Port_RtpsRow2Check(mat, v)
+#else
+#define PORT_RTPS_ROW2(mat, v) Gte_CmdRtpsRow2(v)
+#endif
+
+#ifdef SH_PORT
+/* func_80057658's loop with its RTPS batched (port): RTPS only serves as three dot products there
+ * (rows light, normal, vertex-to-light vector; V0 = that vector), and only SXY2 and IR0 are read. The
+ * first pass collects every vector in the loop's visiting order; Gte_RtpsDotBatch computes all but the
+ * last; the second pass is the original arithmetic on those results. The very last vertex runs through
+ * the GTE with the FIFO preset to the earlier results, so the GTE ends as after the original loop.
+ * Returns 0 (nothing done) when the batch can't be used: the original loop runs instead. */
+#define PORT_PL_MAX 1024
+static s16 s_PlVtx[PORT_PL_MAX][3];
+static u32 s_PlXy[PORT_PL_MAX];
+static u16 s_PlSz[PORT_PL_MAX];
+static s16 s_PlIr0[PORT_PL_MAX];
+
+static s32 Port_PointLight(s_MeshHeader* meshHdr, u8* var_t0, s_GteScratchData* scratchData, s32 temp_t9, u8 temp_v1)
+{
+    MATRIX*   mat = &scratchData->field_380.field_0;
+    s_Normal* curNormal;
+    s16       row1[3];
+    u8*       p = var_t0;
+    s32       n = 0, idx, last, start;
+
+    LP_BEGIN(LP_PL_COLLECT)
+    /* Pass 1: the vectors, as the original loop visits them (at least one per normal). */
+    for (curNormal = meshHdr->normals; curNormal < &meshHdr->normals[meshHdr->normalCount]; curNormal++)
+    {
+        s32 visits = curNormal->count ? curNormal->count : 1, k;
+        if (n + visits > PORT_PL_MAX)
+        {
+            return 0;
+        }
+        for (k = 0; k < visits; k++, n++)
+        {
+            s_PlVtx[n][0] = (s16)(scratchData->screenXy_0[p[k]].vx - scratchData->field_3AC.vx);
+            s_PlVtx[n][1] = (s16)(scratchData->screenXy_0[p[k]].vy - scratchData->field_3AC.vy);
+            s_PlVtx[n][2] = (s16)(scratchData->field_18C[p[k]] - scratchData->field_3AC.vz);
+        }
+        p += visits;
+    }
+    LP_END(LP_PL_COLLECT);
+#ifdef SH_PORT_LITEPROF
+    g_LiteProf[LP_PL_COLLECT][1] += n - 1;
+#endif
+    if (n < 4)
+    {
+        return 0; /* the FIFO preset needs three earlier results */
+    }
+    last = n - 1;
+
+    /* Batch, per normal (row 1 changes), all but the last vertex. */
+    LP_BEGIN(LP_PL_BATCH)
+    start = 0;
+    for (curNormal = meshHdr->normals; curNormal < &meshHdr->normals[meshHdr->normalCount]; curNormal++)
+    {
+        s32 visits = curNormal->count ? curNormal->count : 1, cnt = visits;
+        row1[0] = (s16)(curNormal->nx << 5);
+        row1[1] = (s16)(curNormal->ny << 5);
+        row1[2] = (s16)(curNormal->nz << 5);
+        if (start + cnt > last)
+        {
+            cnt = last - start;
+        }
+        if (cnt > 0 && !Gte_RtpsDotBatch(mat->m[0], row1, (const short(*)[3])&s_PlVtx[start], &s_PlXy[start],
+                                          &s_PlSz[start], &s_PlIr0[start], cnt))
+        {
+            return 0;
+        }
+        start += visits;
+    }
+
+    LP_END(LP_PL_BATCH);
+    /* Pass 2: the original arithmetic on the results. Each light value depends only on its own
+     * vertex's results, and the loop writes it to the vertex's own position (var_t0 advances by one
+     * per visit), so it runs in registers; the scratch fields get only their final values (the last
+     * vertex's, as the original leaves them). */
+    LP_BEGIN(LP_PL_APPLY)
+    for (idx = 0; idx < last; idx++)
+    {
+        s16 sx = (s16)((s16)s_PlXy[idx] + 1024);
+        s16 sy = (s16)((s16)(s_PlXy[idx] >> 16) + 1024);
+        s32 dp = s_PlIr0[idx];
+        s32 var_a1, var_v1;
+        var_a1 = ((sx * sy) + (sy * (dp >> 4))) >> 5;
+        var_a1 -= 16;
+        if (var_a1 < 0)
+        {
+            var_a1 = 0;
+        }
+        var_v1  = (sx >> 1) + (dp >> 2);
+        var_a1 += temp_t9;
+        if (var_v1 > 48)
+        {
+            var_v1 = 48;
+        }
+        var_a1 += var_v1;
+        if (temp_v1 < var_a1)
+        {
+            var_a1 = temp_v1;
+        }
+        var_t0[idx] = var_a1;
+    }
+    {
+        /* The last vertex: through the GTE, with the scratch state the original loop leaves. */
+        s_Normal* lastNormal = &meshHdr->normals[meshHdr->normalCount - 1];
+        s32       var_a1, var_v1;
+        *(u32*)&scratchData->field_3A0 = *(u32*)lastNormal;
+        mat->m[1][0] = scratchData->field_3A0.nx << 5;
+        mat->m[1][1] = scratchData->field_3A0.ny << 5;
+        mat->m[1][2] = scratchData->field_3A0.nz << 5;
+        mat->m[2][0] = s_PlVtx[last][0];
+        mat->m[2][1] = s_PlVtx[last][1];
+        mat->m[2][2] = s_PlVtx[last][2];
+        gte_SetRotMatrix_Row0_1(mat->m);
+        Gte_DataWrite(12, s_PlXy[last - 3]);
+        Gte_DataWrite(13, s_PlXy[last - 2]);
+        Gte_DataWrite(14, s_PlXy[last - 1]);
+        Gte_DataWrite(16, s_PlSz[last - 4]);
+        Gte_DataWrite(17, s_PlSz[last - 3]);
+        Gte_DataWrite(18, s_PlSz[last - 2]);
+        Gte_DataWrite(19, s_PlSz[last - 1]);
+        Gte_CmdRtpsRow2(mat->m[2]);
+        gte_stsxy(&scratchData->screenPos_3A4);
+        gte_stdp(&scratchData->depthP_3A8);
+
+        scratchData->screenPos_3A4.vx += 1024;
+        scratchData->screenPos_3A4.vy += 1024;
+        var_a1   = (scratchData->screenPos_3A4.vx * scratchData->screenPos_3A4.vy) + (scratchData->screenPos_3A4.vy * (scratchData->depthP_3A8 >> 4));
+        var_a1 >>= 5;
+        var_a1  -= 16;
+        if (var_a1 < 0)
+        {
+            var_a1 = 0;
+        }
+        var_v1  = (scratchData->screenPos_3A4.vx >> 1) + (scratchData->depthP_3A8 >> 2);
+        var_a1 += temp_t9;
+        if (var_v1 > 48)
+        {
+            var_v1 = 48;
+        }
+        var_a1 += var_v1;
+        if (temp_v1 < var_a1)
+        {
+            var_a1 = temp_v1;
+        }
+        var_t0[last] = var_a1;
+    }
+    LP_END(LP_PL_APPLY);
+    return 1;
+}
+#ifdef SH_PORT_CHECK_BATCH
+static void Port_PointLightOriginal(s_MeshHeader* meshHdr, u8* var_t0, s_GteScratchData* scratchData, s32 temp_t9, u8 temp_v1);
+
+/* Check build: the batched loop against the original (Port_PointLightOriginal), from the same scratch
+ * data and GTE state: light values, the scratch fields it leaves and all 64 GTE registers. */
+static void Port_PointLightCheck(s_MeshHeader* meshHdr, u8* var_t0, s_GteScratchData* scratchData, s32 temp_t9, u8 temp_v1)
+{
+    static s32       checks, mismatches;
+    static u8        vals0[256], vals1[256];
+    s_GteScratchData sd0, sd1;
+    unsigned int     d0[32], c0[32], d1[32], c1[32], dirty0;
+    s32              i, len = 0, bad = 0;
+    s_Normal*        nrm;
+    for (nrm = meshHdr->normals; nrm < &meshHdr->normals[meshHdr->normalCount]; nrm++)
+    {
+        len += nrm->count ? nrm->count : 1;
+    }
+    if (len > 256)
+    {
+        return;
+    }
+    memcpy(vals0, var_t0, len);
+    sd0 = *scratchData;
+    memcpy(d0, g_GteData, sizeof(d0));
+    memcpy(c0, g_GteCtrl, sizeof(c0));
+    dirty0 = g_GteCtrlDirty;
+    if (!Port_PointLight(meshHdr, var_t0, scratchData, temp_t9, temp_v1))
+    {
+        return;
+    }
+    memcpy(vals1, var_t0, len);
+    sd1 = *scratchData;
+    memcpy(d1, g_GteData, sizeof(d1));
+    memcpy(c1, g_GteCtrl, sizeof(c1));
+    memcpy(var_t0, vals0, len);
+    *scratchData = sd0;
+    memcpy(g_GteData, d0, sizeof(d0));
+    memcpy(g_GteCtrl, c0, sizeof(c0));
+    g_GteCtrlDirty = dirty0 | ~0u;
+    Port_PointLightOriginal(meshHdr, var_t0, scratchData, temp_t9, temp_v1);
+    bad |= memcmp(vals1, var_t0, len) != 0;
+    bad |= memcmp(&sd1, scratchData, sizeof(sd1)) != 0;
+    for (i = 0; i < 32; i++)
+    {
+        bad |= d1[i] != g_GteData[i] || c1[i] != g_GteCtrl[i];
+    }
+    checks++;
+    if (bad && mismatches++ < 20)
+    {
+        printf("PointLight mismatch: values %d, scratch %d, gte %d\n", memcmp(vals1, var_t0, len) != 0,
+               memcmp(&sd1, scratchData, sizeof(sd1)) != 0, memcmp(d1, g_GteData, sizeof(d1)) || memcmp(c1, g_GteCtrl, sizeof(c1)));
+    }
+    if ((checks & 0x3FF) == 0)
+    {
+        printf("PointLight: %d meshes checked, %d mismatches\n", checks, mismatches);
+    }
+}
+#endif
+#endif
+
+#ifdef SH_PORT_CHECK_BATCH
+/* func_80057658's original loop, for Port_PointLightCheck. */
+static void Port_PointLightOriginal(s_MeshHeader* meshHdr, u8* var_t0, s_GteScratchData* scratchData, s32 temp_t9, u8 temp_v1)
+{
+    s32       var_a1;
+    s32       var_v1;
+    s32       temp_t2;
+    u8*       end;
+    s16*      temp_t8;
+    s32*      depthP;
+    MATRIX*   mat = &scratchData->field_380.field_0;
+    DVECTOR*  screenPos;
+    s_Normal* curNormal;
+
+    for (curNormal = meshHdr->normals; curNormal < &meshHdr->normals[meshHdr->normalCount]; curNormal++)
+    {
+        temp_t8   = &scratchData->field_380.field_0.m[2][0];
+        screenPos = &scratchData->screenPos_3A4;
+        depthP    = &scratchData->depthP_3A8;
+        temp_t2   = temp_v1;
+
+        *(u32*)&scratchData->field_3A0 = *(u32*)curNormal;
+
+        mat->m[1][0] = scratchData->field_3A0.nx << 5;
+        mat->m[1][1] = scratchData->field_3A0.ny << 5;
+        mat->m[1][2] = scratchData->field_3A0.nz << 5;
+        gte_SetRotMatrix_Row0_1(mat->m);
+
+        end = &var_t0[scratchData->field_3A0.count];
+
+        mat->m[2][0] = scratchData->screenXy_0[*var_t0].vx - scratchData->field_3AC.vx;
+        mat->m[2][1] = scratchData->screenXy_0[*var_t0].vy - scratchData->field_3AC.vy;
+        mat->m[2][2] = scratchData->field_18C[*var_t0] - scratchData->field_3AC.vz;
+        gte_SetRotMatrix_Row2(mat->m);
+
+        gte_ldv0(temp_t8);
+        gte_rtps();
+        gte_stsxy(screenPos);
+        gte_stdp(depthP);
+
+        while (++var_t0 < end)
+        {
+            mat->m[2][0] = scratchData->screenXy_0[*var_t0].vx - scratchData->field_3AC.vx;
+            mat->m[2][1] = scratchData->screenXy_0[*var_t0].vy - scratchData->field_3AC.vy;
+            mat->m[2][2] = scratchData->field_18C[*var_t0] - scratchData->field_3AC.vz;
+
+            gte_SetRotMatrix_Row2(mat->m);
+            gte_ldv0(temp_t8);
+            gte_rtps();
+
+            scratchData->screenPos_3A4.vx += 1024;
+            scratchData->screenPos_3A4.vy += 1024;
+
+            var_a1   = (scratchData->screenPos_3A4.vx * scratchData->screenPos_3A4.vy) + (scratchData->screenPos_3A4.vy * (scratchData->depthP_3A8 >> 4));
+            var_a1 >>= 5;
+            var_a1  -= 16;
+            if (var_a1 < 0)
+            {
+                var_a1 = 0;
+            }
+
+            var_v1 = (scratchData->screenPos_3A4.vx >> 1) + (scratchData->depthP_3A8 >> 2);
+            var_a1 += temp_t9;
+            if (var_v1 > 48)
+            {
+                var_v1 = 48;
+            }
+            var_a1 += var_v1;
+
+            if (temp_t2 < var_a1)
+            {
+                var_a1 = temp_t2;
+            }
+
+            *(var_t0 - 1) = var_a1;
+
+            gte_stsxy(screenPos);
+            gte_stdp(depthP);
+        }
+
+        scratchData->screenPos_3A4.vx += 1024;
+        scratchData->screenPos_3A4.vy += 1024;
+
+        var_a1   = (scratchData->screenPos_3A4.vx * scratchData->screenPos_3A4.vy) + (scratchData->screenPos_3A4.vy * (scratchData->depthP_3A8 >> 4));
+        var_a1 >>= 5;
+        var_a1  -= 16;
+        if (var_a1 < 0)
+        {
+            var_a1 = 0;
+        }
+
+        var_v1  = (scratchData->screenPos_3A4.vx >> 1) + (scratchData->depthP_3A8 >> 2);
+        var_a1 += temp_t9;
+        if (var_v1 > 48)
+        {
+            var_v1 = 48;
+        }
+        var_a1 += var_v1;
+
+        if (temp_t2 < var_a1)
+        {
+            var_a1 = temp_t2;
+        }
+
+        *(var_t0 - 1) = var_a1;
+    }
+
+}
+#endif
+
 void func_80057658(s_MeshHeader* meshHdr, s32 offset, s_GteScratchData* scratchData, SVECTOR3* arg3, SVECTOR* arg4) // 0x80057658
 {
     s32       geomOffsetX;
@@ -361,6 +731,17 @@ void func_80057658(s_MeshHeader* meshHdr, s32 offset, s_GteScratchData* scratchD
     var_t0 = &scratchData->field_2B8[offset];
     mat    = &scratchData->field_380.field_0;
 
+#ifdef SH_PORT
+#ifdef SH_PORT_CHECK_BATCH
+    Port_PointLightCheck(meshHdr, var_t0, scratchData, temp_t9, temp_v1);
+#endif
+    if (Port_PointLight(meshHdr, var_t0, scratchData, temp_t9, temp_v1))
+    {
+        SetGeomOffset(geomOffsetX, geomOffsetY);
+        SetGeomScreen(geomScreen);
+        return;
+    }
+#endif
     for (curNormal = meshHdr->normals; curNormal < &meshHdr->normals[meshHdr->normalCount]; curNormal++)
     {
         temp_t8   = &scratchData->field_380.field_0.m[2][0];
@@ -380,10 +761,14 @@ void func_80057658(s_MeshHeader* meshHdr, s32 offset, s_GteScratchData* scratchD
         mat->m[2][0] = scratchData->screenXy_0[*var_t0].vx - scratchData->field_3AC.vx;
         mat->m[2][1] = scratchData->screenXy_0[*var_t0].vy - scratchData->field_3AC.vy;
         mat->m[2][2] = scratchData->field_18C[*var_t0] - scratchData->field_3AC.vz;
+#ifdef SH_PORT
+        PORT_RTPS_ROW2(mat, temp_t8); /* the three below in one, exact (gte.c) */
+#else
         gte_SetRotMatrix_Row2(mat->m);
 
         gte_ldv0(temp_t8);
         gte_rtps();
+#endif
         gte_stsxy(screenPos);
         gte_stdp(depthP);
 
@@ -393,9 +778,13 @@ void func_80057658(s_MeshHeader* meshHdr, s32 offset, s_GteScratchData* scratchD
             mat->m[2][1] = scratchData->screenXy_0[*var_t0].vy - scratchData->field_3AC.vy;
             mat->m[2][2] = scratchData->field_18C[*var_t0] - scratchData->field_3AC.vz;
 
+#ifdef SH_PORT
+            PORT_RTPS_ROW2(mat, temp_t8); /* the three below in one, exact (gte.c) */
+#else
             gte_SetRotMatrix_Row2(mat->m);
             gte_ldv0(temp_t8);
             gte_rtps();
+#endif
 
             scratchData->screenPos_3A4.vx += 1024;
             scratchData->screenPos_3A4.vy += 1024;
@@ -886,6 +1275,44 @@ static void Port_NclipCheck(s32 c, s32 gte)
         *(u32*)(out) = s_PortLit[l_];                                                    \
     } while (0)
 
+/** The lit-and-fogged path's fog colour for fog byte `f`: DPCS of field_C, the same value as the fog
+ * path's (PORT_FOG_COLORS) and memoized with it. */
+#define PORT_FOG_COLOR2(f, out)                                                          \
+    do                                                                                   \
+    {                                                                                    \
+        u32 f2_ = (f);                                                                   \
+        Port_MemoCheck(scratchData);                                                     \
+        if (s_PortFogGen[f2_] != s_PortMeshGen)                                          \
+        {                                                                                \
+            s32 t_ = Q12(1.0f) - (s32)f2_ * 16 - scratchData->field_380.s_0.field_4;     \
+            if (t_ < 0)                                                                  \
+            {                                                                            \
+                t_ = 0;                                                                  \
+            }                                                                            \
+            s_PortFog2[f2_] = Port_Dpcs(*(u32*)&scratchData->field_380.s_0.field_C, t_);                                                   \
+            s_PortFog3[f2_] = Port_Dpcs(*(u32*)&scratchData->field_380.s_0.field_8, Q12(1.0f) - t_);                                                   \
+            s_PortFogGen[f2_] = s_PortMeshGen;                                           \
+        }                                                                                \
+        *(u32*)(out) = s_PortFog2[f2_];                                                  \
+    } while (0)
+
+/* The lit-and-fogged path's lit colour: DCPL of field_8 by light byte l and fog byte f, memoized by
+ * the pair in a direct-mapped table (key and generation checked, so a collision only recomputes). */
+#define PORT_DCPL_SLOTS 2048
+static u32 s_PortDcplKey[PORT_DCPL_SLOTS], s_PortDcplGen[PORT_DCPL_SLOTS], s_PortDcpl[PORT_DCPL_SLOTS];
+
+static inline u32 Port_DcplMemo(s_GteScratchData* scratchData, u32 l, u32 f)
+{
+    u32 key = l | (f << 8), slot = (l ^ (f << 3) ^ (f >> 5)) & (PORT_DCPL_SLOTS - 1);
+    if (s_PortDcplGen[slot] != s_PortMeshGen || s_PortDcplKey[slot] != key)
+    {
+        s_PortDcpl[slot]    = Port_Dcpl(*(u32*)&scratchData->field_380.s_0.field_8, l << 5, f << 4);
+        s_PortDcplKey[slot] = key;
+        s_PortDcplGen[slot] = s_PortMeshGen;
+    }
+    return s_PortDcpl[slot];
+}
+
 static void Gfx_MeshDrawPort(s_MeshHeader* meshHdr, s_GteScratchData* scratchData, GsOT_TAG* tag, s32 otShift)
 
 {
@@ -1056,45 +1483,17 @@ static void Gfx_MeshDrawPort(s_MeshHeader* meshHdr, s_GteScratchData* scratchDat
 
                         *(s32*)&scratchData->field_380.s_0.field_14 = *(s32*)&prim->field_10;
 
-                        var_t3  = Q12(1.0f) - scratchData->field_252[scratchData->field_380.s_0.field_10] * 16;
-                        var_t3 -= scratchData->field_380.s_0.field_4;
-                        if (var_t3 < 0)
-                        {
-                            var_t3 = 0;
-                        }
+                        PORT_FOG_COLOR2(scratchData->field_252[scratchData->field_380.s_0.field_10], &poly1->r0);
+                        *(u32*)(&poly3->r0) = Port_DcplMemo(scratchData, scratchData->field_2B8[scratchData->field_380.s_0.field_14], scratchData->field_252[scratchData->field_380.s_0.field_10]);
 
-                        *(u32*)(&poly1->r0) = Port_Dpcs(*(u32*)(&scratchData->field_380.s_0.field_C), var_t3);
-                        *(u32*)(&poly3->r0) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_14] << 5, scratchData->field_252[scratchData->field_380.s_0.field_10] << 4);
+                        PORT_FOG_COLOR2(scratchData->field_252[scratchData->field_380.s_0.field_11], &poly1->r1);
+                        *(u32*)(&poly3->r1) = Port_DcplMemo(scratchData, scratchData->field_2B8[scratchData->field_380.s_0.field_15], scratchData->field_252[scratchData->field_380.s_0.field_11]);
 
-                        var_t3  = Q12(1.0f) - scratchData->field_252[scratchData->field_380.s_0.field_11] * 16;
-                        var_t3 -= scratchData->field_380.s_0.field_4;
-                        if (var_t3 < 0)
-                        {
-                            var_t3 = 0;
-                        }
+                        PORT_FOG_COLOR2(scratchData->field_252[scratchData->field_380.s_0.field_12], &poly1->r2);
+                        *(u32*)(&poly3->r2) = Port_DcplMemo(scratchData, scratchData->field_2B8[scratchData->field_380.s_0.field_16], scratchData->field_252[scratchData->field_380.s_0.field_12]);
 
-                        *(u32*)(&poly1->r1) = Port_Dpcs(*(u32*)(&scratchData->field_380.s_0.field_C), var_t3);
-                        *(u32*)(&poly3->r1) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_15] << 5, scratchData->field_252[scratchData->field_380.s_0.field_11] << 4);
-
-                        var_t3  = Q12(1.0f) - scratchData->field_252[scratchData->field_380.s_0.field_12] * 0x10;
-                        var_t3 -= scratchData->field_380.s_0.field_4;
-                        if (var_t3 < 0)
-                        {
-                            var_t3 = 0;
-                        }
-
-                        *(u32*)(&poly1->r2) = Port_Dpcs(*(u32*)(&scratchData->field_380.s_0.field_C), var_t3);
-                        *(u32*)(&poly3->r2) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_16] << 5, scratchData->field_252[scratchData->field_380.s_0.field_12] << 4);
-
-                        var_t3  = Q12(1.0f) - scratchData->field_252[scratchData->field_380.s_0.field_13] * 0x10;
-                        var_t3 -= scratchData->field_380.s_0.field_4;
-                        if (var_t3 < 0)
-                        {
-                            var_t3 = 0;
-                        }
-
-                        *(u32*)(&poly1->r3) = Port_Dpcs(*(u32*)(&scratchData->field_380.s_0.field_C), var_t3);
-                        *(u32*)(&poly3->r3) = Port_Dcpl(*(u32*)(&scratchData->field_380.s_0.field_8), scratchData->field_2B8[scratchData->field_380.s_0.field_17] << 5, scratchData->field_252[scratchData->field_380.s_0.field_13] << 4);
+                        PORT_FOG_COLOR2(scratchData->field_252[scratchData->field_380.s_0.field_13], &poly1->r3);
+                        *(u32*)(&poly3->r3) = Port_DcplMemo(scratchData, scratchData->field_2B8[scratchData->field_380.s_0.field_17], scratchData->field_252[scratchData->field_380.s_0.field_13]);
 
                         *(s32*)&poly3->u0 = *(s32*)&prim->u0;
                         *(s32*)&poly3->u1 = *(s32*)&prim->u1 & 0xFFFFFF;
@@ -1372,84 +1771,92 @@ static void Gfx_MeshDrawPort(s_MeshHeader* meshHdr, s_GteScratchData* scratchDat
 
 __block1530:
 {
+    /* The lit path (the world under a point light: CybilFightStart's every face), with the face's
+     * indices, depth and light bytes in locals instead of the scratch fields, and the colour memo
+     * checked once (its inputs don't change in this loop). The scratch fields get the values the
+     * original loop leaves: field_10 and field_18 from the last face, field_14 from the last face
+     * drawn. The same packets (-DSH_PORT_CHECK_BATCH compares them). */
+    u32 lastIdx = 0, lastF14 = 0;
+    s32 lastZ = 0, any = 0, drawnAny = 0, xmin = scratchData->field_380.s_0.field_0;
+    u32 xmin2 = (u32)(xmin * 2); /* unsigned, as the original's temp_t0_3: the test below compares unsigned */
+    s32 zfar = scratchData->field_380.s_0.field_1C;
+    const s16* z = scratchData->field_18C;
+    const u8*  lit = scratchData->field_2B8;
+
+    Port_MemoCheck(scratchData);
     poly0 = GsOUT_PACKET_P;
 
     for (; prim < &meshHdr->primitives[meshHdr->primitiveCount]; prim++)
     {
-        *(s32*)&scratchData->field_380.s_0.field_10 = *(s32*)&prim->faceIdxs;
+        u32 idx = *(u32*)&prim->faceIdxs;
+        u32 i0 = idx & 0xFF, i1 = (idx >> 8) & 0xFF, i2 = (idx >> 16) & 0xFF, i3 = idx >> 24;
+        s32 d = z[i0], xy0, xy1, xy2, xy3;
 
-        scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_10];
-
-        if (scratchData->field_380.s_0.field_18 < scratchData->field_18C[scratchData->field_380.s_0.field_11])
+        lastIdx = idx;
+        any     = 1;
+        if (d < z[i1]) d = z[i1];
+        if (d < z[i2]) d = z[i2];
+        if (d < z[i3]) d = z[i3];
+        lastZ = d;
+        if (d <= 0)
         {
-            scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_11];
+            continue;
         }
-
-        if (scratchData->field_380.s_0.field_18 < scratchData->field_18C[scratchData->field_380.s_0.field_12])
+        if (d <= 32)
         {
-            scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_12];
+            d     = 32;
+            lastZ = 32;
         }
-
-        if (scratchData->field_380.s_0.field_18 < scratchData->field_18C[scratchData->field_380.s_0.field_13])
-        {
-            scratchData->field_380.s_0.field_18 = scratchData->field_18C[scratchData->field_380.s_0.field_13];
-        }
-
-        if (scratchData->field_380.s_0.field_18 <= 0)
+        if (d > zfar)
         {
             continue;
         }
 
-        if (scratchData->field_380.s_0.field_18 <= 32)
-        {
-            scratchData->field_380.s_0.field_18 = 32;
-        }
-
-        if (scratchData->field_380.s_0.field_18 > scratchData->field_380.s_0.field_1C)
-        {
-            continue;
-        }
-
-        PORT_NCLIP3(*(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_10],
-                   *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_11],
-                   *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_12], sp1C);
-
+        xy0 = *(s32*)&scratchData->screenXy_0[i0];
+        xy1 = *(s32*)&scratchData->screenXy_0[i1];
+        xy2 = *(s32*)&scratchData->screenXy_0[i2];
+        xy3 = *(s32*)&scratchData->screenXy_0[i3];
+        sp1C = Port_Nclip(xy0, xy1, xy2);
         if (sp1C <= 0)
         {
-            PORT_NCLIP0(*(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_13], sp1C);
-
+            sp1C = Port_Nclip(xy3, xy1, xy2);
             if (sp1C >= 0)
             {
                 continue;
             }
         }
 
-        temp_a3_3 = scratchData->field_380.s_0.field_0;
-        temp_a2_4 = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_10];
-
-        temp_a1_3  = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_11];
-        temp_a0_7  = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_12];
-        temp_v1_16 = *(s32*)&scratchData->screenXy_0[scratchData->field_380.s_0.field_13];
-        temp_t0_3  = temp_a3_3 * 2;
-        temp3      = temp_a2_4;
-
-        if (((s16)temp_a2_4 + temp_a3_3) < temp_t0_3 || ((s16)temp_a1_3 + temp_a3_3) < temp_t0_3 ||
-            ((s16)temp_a0_7 + temp_a3_3) < temp_t0_3 || ((s16)temp_v1_16 + temp_a3_3) < temp_t0_3)
+        if ((u32)((s16)xy0 + xmin) < xmin2 || (u32)((s16)xy1 + xmin) < xmin2 || (u32)((s16)xy2 + xmin) < xmin2 ||
+            (u32)((s16)xy3 + xmin) < xmin2)
         {
-            *(s32*)&poly0->x0 = temp3;
-            *(s32*)&poly0->x1 = temp_a1_3;
-            *(s32*)&poly0->x2 = temp_a0_7;
-            *(s32*)&poly0->x3 = temp_v1_16;
+            u32 f14 = *(u32*)&prim->field_10, k;
+            lastF14  = f14;
+            drawnAny = 1;
 
-            *(s32*)&scratchData->field_380.s_0.field_14 = *(s32*)&prim->field_10;
+            *(s32*)&poly0->x0 = xy0;
+            *(s32*)&poly0->x1 = xy1;
+            *(s32*)&poly0->x2 = xy2;
+            *(s32*)&poly0->x3 = xy3;
 
-            PORT_LIT_COLOR(scratchData->field_2B8[scratchData->field_380.s_0.field_14], &poly0->r0);
-
-            PORT_LIT_COLOR(scratchData->field_2B8[scratchData->field_380.s_0.field_15], &poly0->r1);
-
-            PORT_LIT_COLOR(scratchData->field_2B8[scratchData->field_380.s_0.field_16], &poly0->r2);
-
-            PORT_LIT_COLOR(scratchData->field_2B8[scratchData->field_380.s_0.field_17], &poly0->r3);
+            for (k = 0; k < 4; k++)
+            {
+                u32 l = lit[(f14 >> (k * 8)) & 0xFF], col;
+                if (l < 8)
+                {
+                    col = 0x3C000000;
+                }
+                else
+                {
+                    if (s_PortLitGen[l] != s_PortMeshGen)
+                    {
+                        s_PortLit[l]    = Port_Dpcs(*(u32*)&scratchData->field_380.s_0.field_8, Q12(1.0f) - (l << 5));
+                        s_PortLitGen[l] = s_PortMeshGen;
+                    }
+                    col = s_PortLit[l];
+                }
+                /* r0/r1/r2/r3 are 12 bytes apart in POLY_GT4. */
+                *(u32*)((u8*)&poly0->r0 + k * 12) = col;
+            }
 
             *(s32*)&poly0->u0 = *(s32*)&prim->u0;
             *(s32*)&poly0->u1 = *(s32*)&prim->u1 & 0xFFFFFF;
@@ -1458,11 +1865,20 @@ __block1530:
 
             setlen(poly0, 12);
 
-            addPrim(&tag[(scratchData->field_380.s_0.field_18 >> otShift) >> 2], poly0);
+            addPrim(&tag[(d >> otShift) >> 2], poly0);
             poly0++;
         }
     }
 
+    if (any)
+    {
+        *(u32*)&scratchData->field_380.s_0.field_10 = lastIdx;
+        scratchData->field_380.s_0.field_18          = lastZ;
+    }
+    if (drawnAny)
+    {
+        *(u32*)&scratchData->field_380.s_0.field_14 = lastF14;
+    }
     GsOUT_PACKET_P = poly0;
     return;
 }

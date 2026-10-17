@@ -36,6 +36,9 @@ void Gte_CmdRtps(void);  /* 0x0180001 */
 void Gte_CmdRtpt(void);  /* 0x0280030 */
 void Gte_CmdNclip(void); /* 0x1400006 */
 void Gte_CmdDpcs(void);  /* 0x0780010 */
+int Gte_RtpsDotBatch(const short* row0, const short* row1, const short (*v)[3], unsigned int* xy, unsigned short* sz,
+                     short* ir0, int count); /* func_80057658's point light */
+void Gte_CmdRtpsRow2(const short* v); /* row 2 of RT and V0 = v, then RTPS (func_80057658) */
 /** Batched exact RTPS over `count` vertices in place (see gte.c); 0 when it can't (use the GTE). */
 int Gte_RtpBatch(unsigned int* xy, short* z, int count);
 int Gte_NcBatch(const short* v, unsigned int* out, int count);

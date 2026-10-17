@@ -153,9 +153,11 @@ static void DrawOTagImpl(u_long* p);
 
 void DrawOTag(u_long* p)
 {
+    LP_BEGIN(LP_DRAWOTAG)
     PROF_BEGIN("DrawOTag (GPU packets)")
     DrawOTagImpl(p);
     PROF_END("DrawOTag (GPU packets)")
+    LP_END(LP_DRAWOTAG);
 }
 
 static void DrawOTagImpl(u_long* p)

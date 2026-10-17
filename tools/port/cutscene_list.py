@@ -225,7 +225,16 @@ def cutscenes():
     return sorted(out, key=lambda c: (c["func"].lower(), c["map"]))
 
 
+# Readable names for unnamed event functions (the list stays sorted by function name, so their place
+# in the Demo menu doesn't change).
+NAMES = {
+    ("map6_s04", "func_800E1D50"): "CybilFightStart",  # benchmark (slowest in the 2026-10-10 sweep)
+}
+
+
 def label(c):
+    if (c["map"], c["func"]) in NAMES:
+        return NAMES[(c["map"], c["func"])]
     return c["func"] if not c["func"].startswith("func_") else "%s %s" % (c["map"], c["func"])
 
 

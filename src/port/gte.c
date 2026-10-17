@@ -53,6 +53,13 @@ enum
 #define F_IR0      (1u << 12)
 #define F_ERROR_MASK 0x7F87E000u /* bits 30-23 and 18-13 feed bit 31 */
 
+/* The EE paths (MMI, MULT/MFHI): on the R5900 compiler's own define. The game's build doesn't
+ * pass -D_EE (only src/port/ps2/ gets it), so `#ifdef _EE` alone left them out of the game until
+ * 2026-10-17; tools/port/gte_test's EE checker passes _EE. */
+#if defined(_EE) || defined(_MIPS_ARCH_R5900)
+#define GTE_EE 1
+#endif
+
 u32 g_GteData[32];
 u32 g_GteCtrl[32];
 u32 g_GteCtrlDirty = ~0u; /* a bit per control register written since the last refresh */
@@ -65,10 +72,6 @@ u32 g_GteCtrlDirty = ~0u; /* a bit per control register written since the last r
  *    other operand is 16-bit (products below 2^30), so sums stay below 2^43; mac44() skips its
  *    checks (s_FastMac, per command: not for GPF/GPL, which add a shifted 32-bit MAC). */
 static s32 m_rt[9], m_llm[9], m_lcm[9];
-#ifdef _EE
-/* RT for MMI (rt_dot3): [r00 r01 r02 0 r10 r11 r12 0], [r20 r21 r22 0 0 0 0 0]. */
-static s16 m_rt_mmi[16] __attribute__((aligned(16)));
-#endif
 static int s_Small = 1;
 /* FC within ±2^18: DPCS with sf = 1 fits 32-bit arithmetic (dpcs_tiny). */
 static int s_FcTiny = 1;
@@ -112,11 +115,6 @@ static void ctrl_refresh(void)
     if (dirty & 0x1Fu) /* RT */
     {
         unpack_matrix(C_RT0, m_rt);
-#ifdef _EE
-        m_rt_mmi[0] = (s16)m_rt[0]; m_rt_mmi[1] = (s16)m_rt[1]; m_rt_mmi[2]  = (s16)m_rt[2];
-        m_rt_mmi[4] = (s16)m_rt[3]; m_rt_mmi[5] = (s16)m_rt[4]; m_rt_mmi[6]  = (s16)m_rt[5];
-        m_rt_mmi[8] = (s16)m_rt[6]; m_rt_mmi[9] = (s16)m_rt[7]; m_rt_mmi[10] = (s16)m_rt[8];
-#endif
     }
     if (dirty & 0x1F00u) /* LLM */
     {
@@ -458,7 +456,7 @@ static void mul_mat_vec(const s32 m[3][3], const s32 v[3], const s64 t[3], int s
 /** Leading zero count of a nonzero value below 2^31. */
 static u32 clz32(u32 v)
 {
-#ifdef _EE
+#ifdef GTE_EE
     u64 r;
     /* MMI PLZCW: leading bits equal to the sign bit, minus one (per 32-bit half). */
     __asm__("plzcw %0, %1" : "=r"(r) : "r"((u64)v));
@@ -561,32 +559,6 @@ static __attribute__((noinline)) void rtp(int v, int sf, int lm, int last)
     }
 }
 
-#ifdef _EE
-/** RT * V with MMI: PHMADH gives the sums of adjacent products ([r0 r1 r2 0] . [vx vy vz 0] as
- * r0*vx + r1*vy, r2*vz + 0), exact while no pair sum reaches 2^31 (only possible with vx or vy
- * = -8000h: the caller checks). */
-static void rt_dot3(u32 vxy, u32 vz, s64 out[3])
-{
-    static u64 vbuf[2] __attribute__((aligned(16)));
-    s32        r[8] __attribute__((aligned(16)));
-    u64        x = (u64)vxy | ((u64)(vz & 0xFFFF) << 32);
-    vbuf[0] = x;
-    vbuf[1] = x;
-    __asm__ volatile("lq $8, 0(%1)\n\t"
-                     "lq $9, 0(%2)\n\t"
-                     "lq $10, 16(%2)\n\t"
-                     "phmadh $11, $9, $8\n\t"
-                     "phmadh $12, $10, $8\n\t"
-                     "sq $11, 0(%0)\n\t"
-                     "sq $12, 16(%0)"
-                     :
-                     : "r"(r), "r"(vbuf), "r"(m_rt_mmi)
-                     : "$8", "$9", "$10", "$11", "$12", "hi", "lo", "memory");
-    out[0] = (s64)r[0] + r[1];
-    out[1] = (s64)r[2] + r[3];
-    out[2] = (s64)r[4] + r[5];
-}
-#endif
 
 /** MVMVA with matrix RT/LLM/LCM and translation TR/BK/none when nothing saturates: computed in
  * registers, committed only if no IR saturates (FLAG stays 0).
@@ -847,7 +819,7 @@ static __attribute__((noinline)) void gpf_gpl(int base, int sf, int lm)
  * (s64)a * b into a 64-bit multiply call (__muldi3) when it can't prove both sides are 32-bit. */
 static inline s64 mul32(s32 a, s32 b)
 {
-#ifdef _EE
+#ifdef GTE_EE
     s32 lo, hi;
     __asm__("mult %0, %2, %3\n\tmfhi %1" : "=r"(lo), "=r"(hi) : "r"(a), "r"(b) : "hi", "lo");
     return ((s64)hi << 32) | (u32)lo;
@@ -874,17 +846,6 @@ static __attribute__((noinline)) void rtp_small(int v, int sf, int lm, int last)
     s32 mac1, mac2, mac3, ir1, ir2, ir3, chk, sz, sx, sy, lo = lm ? 0 : -0x8000;
     u32 fl = 0, n, h;
 
-#ifdef _EE
-    if (vx != -0x8000 && vy != -0x8000)
-    {
-        s64 p[3];
-        rt_dot3(d[D_VXY0 + v * 2], d[D_VZ0 + v * 2], p);
-        m1 = ((s64)(s32)c[C_TRX] << 12) + p[0];
-        m2 = ((s64)(s32)c[C_TRY] << 12) + p[1];
-        m3 = ((s64)(s32)c[C_TRZ] << 12) + p[2];
-    }
-    else
-#endif
     {
         m1 = ((s64)(s32)c[C_TRX] << 12) + (s64)(m_rt[0] * vx) + (s64)(m_rt[1] * vy) + (s64)(m_rt[2] * vz);
         m2 = ((s64)(s32)c[C_TRY] << 12) + (s64)(m_rt[3] * vx) + (s64)(m_rt[4] * vy) + (s64)(m_rt[5] * vz);
@@ -1329,6 +1290,31 @@ void Gte_CmdRtps(void)
     cmd_end();
 }
 
+/** gte_SetRotMatrix_Row2(m); gte_ldv0(&m[2][0]); gte_rtps() in one (func_80057658's per-vertex point
+ * light: rotation row 2 and V0 are the same vector). `v`: m[2][0..2]. Row 2 is written to RT3/RT4 and
+ * the unpacked matrices directly, without marking the matrix dirty, so no full refresh per vertex;
+ * then the same RTPS as Gte_CmdRtps. All registers end as with the three macros. */
+void Gte_CmdRtpsRow2(const short* v)
+{
+    u32 xy = (u16)v[0] | ((u32)(u16)v[1] << 16);
+    c[C_RT3] = xy;
+    c[C_RT4] = (u32)(s32)v[2];
+    d[D_VXY0] = xy;
+    d[D_VZ0]  = (u32)(s32)v[2];
+    if (!unr_ready || g_GteCtrlDirty || !s_Small)
+    {
+        g_GteCtrlDirty |= (1u << C_RT3) | (1u << C_RT4);
+        Gte_Command(0x0180001);
+        return;
+    }
+    m_rt[6] = v[0];
+    m_rt[7] = v[1];
+    m_rt[8] = v[2];
+    cmd_begin();
+    rtp_small(0, 1, 0, 1);
+    cmd_end();
+}
+
 /** RTPT, sf = 1, lm = 0 (0x0280030). */
 void Gte_CmdRtpt(void)
 {
@@ -1401,17 +1387,6 @@ int Gte_RtpBatch(u32* xy, s16* z, int count)
         s64 m1, m2, m3, z3, mac0;
         s32 ir1, ir2, sz, sx, sy;
         u32 n;
-#ifdef _EE
-        if (vx != -0x8000 && vy != -0x8000)
-        {
-            s64 p[3];
-            rt_dot3(xy[i], (u32)(u16)vz, p);
-            m1 = ((s64)(s32)c[C_TRX] << 12) + p[0];
-            m2 = ((s64)(s32)c[C_TRY] << 12) + p[1];
-            m3 = ((s64)(s32)c[C_TRZ] << 12) + p[2];
-        }
-        else
-#endif
         {
             m1 = ((s64)(s32)c[C_TRX] << 12) + (s64)(m_rt[0] * vx) + (s64)(m_rt[1] * vy) + (s64)(m_rt[2] * vz);
             m2 = ((s64)(s32)c[C_TRY] << 12) + (s64)(m_rt[3] * vx) + (s64)(m_rt[4] * vy) + (s64)(m_rt[5] * vz);
@@ -1445,6 +1420,83 @@ int Gte_RtpBatch(u32* xy, s16* z, int count)
         sy   = sy < -0x400 ? -0x400 : sy > 0x3FF ? 0x3FF : sy;
         xy[i] = ((u32)sx & 0xFFFF) | ((u32)sy << 16);
         z[i]  = (s16)sz;
+    }
+    return 1;
+}
+
+/** Batched RTPS (sf = 1, lm = 0) for func_80057658's point light: for each of `count` vectors v[i],
+ * the rotation matrix is (row0, row1, v[i]) and V0 = v[i], with the current TR, H, OFX/OFY and
+ * DQA/DQB. Out: SXY2 (xy[i]), SZ3 (sz[i]) and IR0 (ir0[i]) as RTPS computes them (the same arithmetic
+ * as rtp_small). GTE registers and FLAG untouched (the caller runs the last vertex through the GTE).
+ * Returns 0, doing nothing, outside the fast path's range (TR/BK/FC beyond +-2^30). */
+int Gte_RtpsDotBatch(const short* row0, const short* row1, const short (*v)[3], unsigned int* xy, unsigned short* sz,
+                     short* ir0, int count)
+{
+    u32 h;
+    s32 ofx, ofy, dqa, dqb, i;
+    s64 tx, ty, tz;
+    if (g_GteCtrlDirty)
+    {
+        ctrl_refresh();
+    }
+    if (!unr_ready)
+    {
+        unr_init();
+    }
+    if (!s_Small)
+    {
+        return 0;
+    }
+    h   = c[C_H] & 0xFFFF;
+    ofx = (s32)c[C_OFX];
+    ofy = (s32)c[C_OFY];
+    dqa = (s16)c[C_DQA];
+    dqb = (s32)c[C_DQB];
+    tx  = (s64)(s32)c[C_TRX] << 12;
+    ty  = (s64)(s32)c[C_TRY] << 12;
+    tz  = (s64)(s32)c[C_TRZ] << 12;
+    for (i = 0; i < count; i++)
+    {
+        s32 vx = v[i][0], vy = v[i][1], vz = v[i][2];
+        s64 m1, m2, z3;
+        /* Scalar: PHMADH (with a 128-bit store and reload around it) was slower here (2026-10-17). */
+        m1 = tx + (s64)(row0[0] * vx) + (s64)(row0[1] * vy) + (s64)(row0[2] * vz);
+        m2 = ty + (s64)(row1[0] * vx) + (s64)(row1[1] * vy) + (s64)(row1[2] * vz);
+        z3 = (tz + (s64)(vx * vx) + (s64)(vy * vy) + (s64)(vz * vz)) >> 12;
+        {
+            s32 ir1, ir2, s, sx, sy, q;
+            s64 mac0;
+            u32 n;
+            ir1 = (s32)(m1 >> 12);
+            ir1 = ir1 < -0x8000 ? -0x8000 : ir1 > 0x7FFF ? 0x7FFF : ir1;
+            ir2 = (s32)(m2 >> 12);
+            ir2 = ir2 < -0x8000 ? -0x8000 : ir2 > 0x7FFF ? 0x7FFF : ir2;
+            s   = z3 < 0 ? 0 : z3 > 0xFFFF ? 0xFFFF : (s32)z3;
+            if (h < (u32)s * 2)
+            {
+                u32 zz = clz32((u32)s) - 16, nn = h << zz, dd = (u32)s << zz, u;
+                u64 r;
+                u  = unr_table[(dd - 0x7FC0) >> 7] + 0x101;
+                dd = (0x2000080u - (dd * u)) >> 8;
+                dd = (0x0000080u + (dd * u)) >> 8;
+                r  = (((u64)nn * dd) + 0x8000) >> 16;
+                n  = r > 0x1FFFF ? 0x1FFFF : (u32)r;
+            }
+            else
+            {
+                n = 0x1FFFF;
+            }
+            sx    = (s32)((mul32((s32)n, ir1) + ofx) >> 16);
+            sx    = sx < -0x400 ? -0x400 : sx > 0x3FF ? 0x3FF : sx;
+            sy    = (s32)((mul32((s32)n, ir2) + ofy) >> 16);
+            sy    = sy < -0x400 ? -0x400 : sy > 0x3FF ? 0x3FF : sy;
+            mac0  = mul32((s32)n, dqa) + dqb;
+            q     = (s32)(mac0 >> 12);
+            q     = q < 0 ? 0 : q > 0x1000 ? 0x1000 : q;
+            xy[i]  = ((u32)sx & 0xFFFF) | ((u32)sy << 16);
+            sz[i]  = (u16)s;
+            ir0[i] = (s16)q;
+        }
     }
     return 1;
 }

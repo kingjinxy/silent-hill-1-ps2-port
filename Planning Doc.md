@@ -225,6 +225,22 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [x] Bone matrix MVMVA optimization (`Vw_MultiplyAndTransformMatrix`): EE MMI (`PHMADH` SIMD) with exact scalar C fallback; eliminated 318 GTE calls/frame; verified with `-DSH_PORT_CHECK_BATCH` (0 mismatches over >540k checks)
 - [x] Play-through to the cafe: fixed a wrong spawn after an area load (`g_ItemTriggerEvents` unsized), frozen pad in heavy scenes (pad polled only after VSync waits), dropped held buttons (a pad command every poll), two freezes in the alley (decompiled code relying on the PS1 stack layout: los.c ray trace, particle.c hull)
 - [x] Debugging tools: load watchdog (RAM dump), `world_diag.py` (PS2 save state / RAM dump / PS1 RAM), DuckStation world watch (gdb), registers from PCSX2 save states
+- [x] Split Head (map1_s05): crash and wrong aim, both decompiled code relying on the PS1 stack layout (2026-10-16)
+- [x] GTE control writes refresh only the matrices whose registers changed (MVMVA 79 -> 55 k-cycles a frame)
+- [x] Display straight from the VRAM image (no per-frame copy); single-buffered 448i screens from a 16-bit snapshot; 3 blank frames after a mode switch (2026-10-17)
+- [x] Software renderer retired; no EE copy of VRAM (GS readback on cache misses, fills patch cached pages); ~3 MB of EE RAM and the CPU mirror loops gone; texture cache 28 -> 37 slots
+- [x] DrawOTag first pass (exact): 1,763 -> 1,523 k-cycles a frame (Kaufmann); `SH1_LITEPROF=1` counters
+- [x] DrawOTag: quads written straight into the packet (Kaufmann 1,523 -> 1,396 k-cycles a frame, exact)
+- [ ] DrawOTag next: texture state (~330 cycles a change), 128-bit stores, OT walk (~110 cycles a packet); then CPU/GS overlap (async sends)
+- [x] CybilFightStart (#36): func_80057658's per-vertex point light through Gte_CmdRtpsRow2 (exact, 0 mismatches over 6.2M): 27.5 -> 30.8 fps; bar fight 40.8 -> 42.4
+- [x] func_80057658 batched (Gte_RtpsDotBatch, exact over 46k meshes): CybilFightStart game update 5.85M -> 5.45M cycles a frame
+- [x] gte.c's EE paths (PHMADH, MULT/MFHI, PLZCW) and vw_calc.c's MMI were compiled out of the game (no -D_EE outside src/port/ps2): now on `_MIPS_ARCH_R5900`; exact (gte_test EE/host, check build); CybilFightStart -7.6% vertical blanks, bar fight -5.2%
+- [x] Point light arithmetic in registers (exact): apply 469 -> 182 k-cycles a frame
+- [x] World mesh packets, lit path in locals (exact): 479 -> 404 k-cycles a frame; lit-and-fogged colours memoized
+- [ ] CybilFightStart next (k-cycles a frame): DrawOTag 1,410, point light 1,368 (batch 988), mesh transform 613, mesh packets 404
+- [ ] Hardware tests: `SH1_INTERLACE_FIELDS=1` (PS1-style field drawing for the 448i screens, broken in PCSX2) and `SH1_MODESWITCH=0/1/2` (video signal gaps on mode switches; film the TV)
+- [ ] 480p / 720p modes (2026-10-17 assessment: 480p fits in VRAM with a 2x render buffer and the 1:1 VRAM image; fill rate isn't the limit; the work is keeping the 2x image and the PS1 VRAM in step for effects that read the frame buffer; true 720p doesn't fit double-buffered)
+- [x] Benchmarks besides Kaufmann (#4): #36 CybilFightStart (map6_s04 func_800E1D50, 28.1 fps in the 2026-10-10 sweep) and #50 MapEvent_KaufmannBarFightCutscene (33.3); speed only, their pictures depend on timing
 - [ ] Alley end (child ghosts) and onward: 34-55 fps with the EE fully busy for minutes; profile and optimise
 - [ ] `Gfx_EffectsUpdate` reads through a null pointer (address 8) at the start of map0_s00 (harmless in PCSX2)
 - [ ] Audit the whole codebase for decompiled code relying on the PS1 stack layout (one local array reached through another, out-of-bounds indexing into a neighbour: los.c, particle.c, split_head.c so far); try `-Warray-bounds` and a wider pattern search (tabled 2026-10-16)

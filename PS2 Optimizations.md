@@ -234,3 +234,92 @@ A new-game snow scene (PCSX2, profiling build, 60 fps, 28% idle): `Particle_Upda
 - Tried: Particle_SnowDraw run twice (collect each flake's vertex, `Gte_RtpBatch` over all but the last, then draw from the results; the last flake through the GTE with the FIFO preset, so the GTE ends as on the PS1). Check build warp sweep: 43/43, 0 mismatches over 60k+ flakes.
 - Kaufmann cutscene, benchmark build (SH1_BENCH=1): 50.16 fps / 5.2% idle without, 50.03 / 4.6% with: no difference beyond noise. Frame dumps: 9 of 10 identical; the 10th differs only in a subtitle glyph (text timing varies between runs; the two runs took 8,092 and 8,097 vertical blanks for the same frames).
 - Why: profiling builds send every GTE command through the general dispatcher and time each one, roughly doubling RTPS's apparent cost; normal builds already take the direct RTPS path, so batching saves only ~100-150 cycles a flake. Read "GTE ..." profile lines with that in mind. Patch kept outside the repo.
+
+### 2026-10-17: GS memory and display: kept
+
+- GS memory map (4 MB): 0x000000 gsKit's frame buffer / the 448i snapshot (640x480x16 at most), 0x0A0000-0x2F0000 texture page cache (37 slots of 64 KB), 0x2F0000 CLUT cache (128 rows), 0x300000 the PS1's VRAM (1024x512x16, drawn to and scanned out directly).
+- No per-frame display copy (the GS's display reads the VRAM image), except a 16-bit snapshot for single-buffered 448i screens.
+- No EE copy of VRAM: the CPU mirror loops for clears and copies are gone (a 320x224 clear is 72k pixel writes a frame; 143k on the 448i screens), ~3 MB of EE RAM free. Steady play does 0 readbacks (fills patch cached pages and CLUTs).
+
+### 2026-10-17: DrawOTag, first pass (exact): kept
+
+Measuring: `SH1_LITEPROF=1` (include/port/prof.h `LP_*`): inline COP0 Count reads around the parts of DrawOTag, a few cycles each (the benchmark's fps didn't change with them on), printed with the GS stats. PROF_BEGIN/END pairs cost hundreds of cycles a call and distorted per-primitive work. (A timer-interrupt PC sampler doesn't work under the ps2sdk kernel: handlers run after the kernel has replaced EPC with its own return stub.) The benchmark's fps saturates at 60 for most of the cutscene and includes the frame-dump stalls, so the cycle counts are the measure; the frame dumps are the exactness check.
+
+Kaufmann cutscene (benchmark build), k-cycles a frame:
+
+| | DrawOTag | OT walk + per packet | polygon parse | polygon state | polygon emit |
+|---|---|---|---|---|---|
+| before | 1,763 | 166 | 436 | 375 | 430 |
+| fog pair counting only in SH1_PROF builds (a memcmp and two memcpy per polygon) | 1,635 | | 304 | | |
+| prim_state: a generation counter for the GP0 E2-E6 settings instead of a 4-word key from 12 globals; slow paths noinline (the fast path no longer saves 10 registers) | 1,589 | | | 334 | |
+| emit: a quad's bounding box decides the 1023x511 fit (12 checks only for big quads); a fog pair's underlay in the textured register layout (UV ignored without TME), one GIF tag for the pair | **1,523** | | | | 370 |
+
+All 10 frame dumps identical to before. Per polygon call (959 a frame, half of them fog pairs): parse ~316 cycles, state ~350 (texture state 493 calls, ~330 each), emit ~385.
+
+Next: write GS data straight into the packet while parsing (no rgbaq/uv/xyz arrays), 128-bit stores, texture state (page/CLUT lookups), the OT walk (~110 cycles a packet).
+
+### 2026-10-17: DrawOTag, straight into the packet (exact): kept
+
+New benchmarks next to Kaufmann (`bench_cutscene.sh N`): Demo #36 **CybilFightStart** (map6_s04 func_800E1D50, renamed in tools/port/cutscene_list.py NAMES; the slowest in the 2026-10-10 sweep) and #50 **MapEvent_KaufmannBarFightCutscene**. Each is deterministic for a given build, but its picture depends on timing: the same source with the light counters on or off gives different frame dumps (a few to a few hundred pixels) and slightly different vertical blank counts. So they measure speed only; exactness is checked on Kaufmann (#4), whose dumps only vary in one subtitle glyph between builds.
+
+Where CybilFightStart's frame goes (profiling build, 34 fps real time): game update 6.3M cycles a frame, DrawOTag 1.4M. In the game update, func_80057658 (the world mesh's per-vertex point light, `UnkGfxEnum_1`) issues ~3,550 RTPS a frame, two per vertex: the next target there (batch like Gte_RtpBatch).
+
+Change: a quad that fits (bounding box within 1023x511, nearly all) is written straight into the packet after the state lookup, the fog pair's underlay first; RGBAQ/XYZ are computed there instead of into arrays during parsing; big quads and triangles keep the emit_poly path.
+
+DrawOTag k-cycles a frame (benchmark builds, SH1_LITEPROF=1):
+
+| | Kaufmann #4 | CybilFightStart #36 | Bar fight #50 |
+|---|---|---|---|
+| before (end of the first pass) | 1,523 | 1,520 | 1,198 |
+| after | 1,396 | 1,418 | 1,132 |
+
+Kaufmann frame dumps identical. Per polygon call now (Kaufmann): parse ~222 cycles, state ~352, emit ~351.
+
+### 2026-10-17: func_80057658 point light, one exact call per vertex: kept
+
+func_80057658 (world mesh per-vertex point light) uses RTPS as three dot products: RT rows 0 and 1 hold the light and the normal, and for each vertex RT row 2 and V0 are both set to the vertex-to-light vector. Each vertex wrote two RT registers, which made the next command unpack all three matrices again. `Gte_CmdRtpsRow2` (gte.c) writes row 2 and V0 in place (registers and the unpacked copies, nothing marked dirty) and runs the same rtp_small as Gte_CmdRtps.
+
+- Check build (`-DSH_PORT_CHECK_BATCH`, Port_RtpsRow2Check: both paths from the same GTE state, all 64 registers compared): 0 mismatches over 6.2M calls (#36 and #50).
+- Benchmark builds, fps over dump-free seconds: CybilFightStart #36 27.5 → **30.8**; bar fight #50 40.8 → **42.4**.
+
+### 2026-10-17: func_80057658 point light batched (exact): kept
+
+Re-profile of CybilFightStart (#36) after Gte_CmdRtpsRow2: game update 5.8M cycles a frame, DrawOTag 1.4M. Function-level profile (`-finstrument-functions`, inflates small functions; the port's GTE code is counted in its caller): func_80057658 3.5M, Fs_QueueWaitForEmpty 1.1M (waiting on file loads), func_80057B7C 0.9M, Gfx_MeshDrawPort 0.8M.
+
+Change: `Port_PointLight` (bodyprog_80056D8C.c) collects every vertex-to-light vector in the loop's visiting order, `Gte_RtpsDotBatch` (gte.c) computes SXY2, SZ3 and IR0 for all but the last (the rtp_small arithmetic, rows light/normal/vector), and the original arithmetic runs on the results. The last vertex goes through the GTE with the SXY/SZ FIFO preset, so the GTE ends as after the original loop.
+
+- Check build (`Port_PointLightCheck`: against the original loop from the same state; light values, the whole scratch struct, all 64 GTE registers): 0 mismatches over 46k meshes (#36, #50).
+- CybilFightStart, profiling build at real time: game update 5,849 → **5,446** k-cycles a frame (−7%); 36.9 → 39.0 fps. Whole-run benchmark: #36 1,918 → 1,849 vertical blanks for its 801 frames, #50 6,492 → 6,040 for 4,017.
+- Smaller than the instrumented profile suggested: that build inflates the function's many small calls.
+
+### 2026-10-17: the EE paths in gte.c were never compiled into the game: fixed
+
+Light counters on the world mesh (CybilFightStart): point light 2.1M cycles a frame (of which Gte_RtpsDotBatch 1.42M for ~3,800 vertices, ~370 cycles each), transform (func_80057B7C, Gte_RtpBatch) 0.91M, packets (Gfx_MeshDraw) 0.48M. The batch's code called `__clzdi2` with ~18 register spills per vertex, although clz32 uses PLZCW under `_EE`.
+
+Cause: only src/port/ps2/ is compiled with `-D_EE`; gte.c (src/port) and the game code are not. So every `#ifdef _EE` path in gte.c (PHMADH rt_dot3, MULT/MFHI mul32, PLZCW) and Gemini's MMI bone matrices (vw_calc.c `#if defined(_EE)`) were left out of the game; only tools/port/gte_test's EE checker (which passes -D_EE) ran them. Now keyed on the compiler's own `_MIPS_ARCH_R5900` as well (gte.c `GTE_EE`).
+
+Checks: gte_test on the EE (all 7 seeds, every register and FLAG) and on the host: all match. Check build (#36, #4): batch, chara RTPT/NC, light, mesh, NCLIP, point light, Vw_MultiplyAndTransformMatrix: 0 mismatches. Kaufmann frame dumps identical.
+
+| | CybilFightStart #36 (801 frames) | Bar fight #50 (~4,030 frames) |
+|---|---|---|
+| vertical blanks before | 1,849 | 6,040 |
+| after | **1,709** (−7.6%) | **5,723** (−5.2%) |
+| point light batch (k-cycles a frame) | 1,419 → 988 | |
+| mesh transform | 910 → 640 | |
+
+- Tried: Gte_RtpsDotBatch's dot products with PHMADH (as rt_dot3). Exact (check build: 0 mismatches over 110k meshes) but slower: batch 988 → 1,146 k-cycles a frame (CybilFightStart). The 128-bit store and reload around PHMADH cost more than the nine scalar multiplies. Reverted.
+- Same for rt_dot3 (PHMADH in rtp_small and Gte_RtpBatch): scalar is a little faster now that the scalar path has MULT/MFHI and PLZCW. Mesh transform 640 → 613 k-cycles a frame (CybilFightStart), 1,709 → 1,702 vertical blanks; bar fight 521 → 497. rt_dot3 and the MMI copy of RT removed; gte_test EE and host still match, Kaufmann dumps identical. MMI pays off when data stays in 128-bit registers across several operations, not for one dot product with a store and reload.
+
+### 2026-10-17: point light arithmetic in registers (exact): kept
+
+Port_PointLight's second pass kept the original's scratch variables (screen position, depth, matrix rows, normal) up to date per vertex. Each light value depends only on its own vertex's RTPS results and is written to its own position, so the loop now runs in registers and the scratch fields get only their final values (the last vertex, through the GTE as before). Check build (whole scratch struct, light values, all GTE registers): 0 mismatches over 117k meshes.
+
+CybilFightStart: apply 469 → **182** k-cycles a frame (point light 1,654 → 1,368); 1,702 → **1,662** vertical blanks. Bar fight: apply 387 → 193.
+
+### 2026-10-17: world mesh packets, lit path (exact): kept
+
+Every world face in CybilFightStart takes Gfx_MeshDrawPort's lit path without fog (~2,300 faces a frame, ~200 cycles each); the lit-and-fogged and fog paths aren't used there. The lit loop now keeps the face's indices, depth and light bytes in locals instead of re-reading the scratch fields, and checks the colour memo's inputs once per mesh instead of once per corner; the scratch fields get the original's final values. (A first version compared the screen bound signed; the original's bound is a u32, so the test is unsigned: the mesh check caught it.)
+
+Also: the lit-and-fogged path (the flashlight) now memoizes its two corner colours (its fog colour shares the fog path's memo; its DCPL by light and fog byte in a 2048-entry direct-mapped table keyed on both). Exact by construction; not exercised by the benchmarks.
+
+Mesh check (packets and OT against the original): 0 mismatches (#36, #50, #4, #1-3). Kaufmann dumps identical. Mesh packets: CybilFightStart 479 → **404** k-cycles a frame, 1,661 → **1,652** vertical blanks; bar fight 310 → 278.

@@ -1227,3 +1227,42 @@ If the PS2 seems stuck:
   - yellow: no frame for 10 s;
   - black: the EE stopped (or nothing is wrong yet).
 - When the PS2 is stuck, `deploy` can't restart it; press RESET. The server switches to the newest build on `touch build/port/.udpfs_refresh` (deploy does this too).
+
+### Split Head, the display straight from VRAM, no EE copy of VRAM (2026-10-16/17)
+
+Split Head (first boss, map1_s05), two more spots of decompiled code relying on the PS1 stack layout:
+- `sharedFunc_800D3388_1_s05` reached `sp38[i]` as `&sp18[i * 16] + 32`; in GCC's frame the copy overwrote a saved global base, and the next store crashed (console log: `addr store at pc=001EF850 badvaddr=FFFF9840`).
+- `sharedFunc_800D2D74_1_s05` read `sp20[unkIdx + 4]` (meaning `sp50[unkIdx]`): garbage hitbox height, so Harry's vertical aim (the middle of the hitbox) was wrong.
+- Both under `SH_PORT` with the arrays named directly; an audit for the pattern is on the planning list.
+
+Gemini's bone matrix MMI (`Vw_MultiplyAndTransformMatrix`), reviewed: the translation now takes the low 16 bits of `inMat->t` as `gte_ldlvl` loads them into IR, with MAC's wraparound; `hi`/`lo` added to the asm clobbers (PHMADH writes them). Warp sweep with `-DSH_PORT_CHECK_BATCH`: 43/43, 0 mismatches over ~491k calls.
+
+GTE control writes: `g_GteCtrlDirty` has a bit per register, so a rotation write no longer unpacks all three matrices and redoes the TR/BK/FC range checks (gte_test seeds 0-5: 0 differences).
+
+Display (display_ps2.c, gpu_gs.c `GpuGs_DisplayShow`):
+- The PS1 display area is scanned out straight from the VRAM image in GS memory (DISPFB1 at 0x300000, PSMCT16, DBX/DBY = the PS1's display start); the copy into gsKit's 640x480x32 buffer is gone. PS1 15-bit pixels have the GS's 16-bit layout; PMODE uses a fixed alpha so bit 15 doesn't blend.
+- Single-buffered screens: the 448-line interlaced title and inventory redraw the area on screen. Shown live, the TV caught them half redrawn (text missing). Checked: no progressive screen in the game is single-buffered (all maps and Demo cutscenes). Interlaced 480-line screens with DFE off are shown from a snapshot (16-bit, SNAP_ADDR 0); everything else straight from VRAM.
+- The PS1's own way (DFE off: no drawing on the lines of the field being scanned out) is implemented with SCANMSK behind `SH1_INTERLACE_FIELDS=1`. VRAM held the complete text at every swap, but PCSX2's output lacked most of it with either field mapping; to test on hardware.
+- Mode switches: the output is blanked for 3 frames (BGCOLOR black) after a change; gsKit's setup showed its stale buffer. `SH1_MODESWITCH=0|1|2` chooses gsKit's full setup (a GS reset, which stops the video signal, then SetGsCrt), SetGsCrt alone, or SMODE2 and the display window only; each switch logs its setup time and the longest interval between vertical blanks. PCSX2: setup 1-17 ms / 0.4 ms / 0.02 ms; no vertical blank gap (PCSX2 doesn't model signal loss). Hardware test pending.
+
+VRAM: the GS image is now the only copy.
+- The software renderer (gpu_soft.c) and the compare mode are retired; comparisons are against DuckStation.
+- `g_PortVram` (1 MB of EE RAM) is gone, with two more 1 MB buffers that only served it. LoadImage uploads straight from the game's data; fills and VRAM copies are GS-only (no CPU mirror loops); StoreImage reads back just its rectangle.
+- 4/8-bit pages and CLUTs are read back from the GS on a cache miss. Fills write their value into cached pages and CLUTs they touch instead of dropping them: the screen clear covers rows of an 8-bit page whose textures sit above the frame buffer, which otherwise meant 2-4 readbacks a frame.
+- Frame dumps and DuckStation captures read VRAM back in 32-row bands. (A `malloc` of 1 MB for them corrupted the file I/O RPC: TLB miss in sifrpc `_request_end`.)
+- gsKit's frame buffer is 16-bit and only used by its setup: the texture page cache has 37 slots (was 28).
+- Kaufmann benchmark: all 10 frame dumps identical to before.
+
+DrawOTag, first pass: see PS2 Optimizations.md (2026-10-17). `SH1_LITEPROF=1` adds cheap cycle counters around its parts. 1,763 → 1,523 k-cycles a frame in the Kaufmann cutscene, frame dumps identical.
+
+DrawOTag, second step (2026-10-17): quads that fit are written straight into the packet (Kaufmann 1,523 → 1,396 k-cycles a frame, dumps identical). New speed benchmarks: Demo #36 CybilFightStart (map6_s04 func_800E1D50, renamed in the Demo menu) and #50 MapEvent_KaufmannBarFightCutscene. Their frame dumps change with timing alone (the same source with or without the light counters differs by a few to a few hundred pixels), so exactness stays checked on Kaufmann. CybilFightStart's frame is mostly the game update (6.3M cycles), led by func_80057658's ~3,550 RTPS a frame (per-vertex point light).
+
+func_80057658 (world mesh point light, ~3,550 RTPS a frame in CybilFightStart): each vertex set RT row 2 and V0 to the same vector, so every RTPS followed a matrix write and a full matrix refresh. `Gte_CmdRtpsRow2` does the three in one, exactly (check build: 0 mismatches over 6.2M calls, all registers). CybilFightStart 27.5 → 30.8 fps, bar fight 40.8 → 42.4 (benchmark builds).
+
+func_80057658 batched: the loop's vectors are collected, `Gte_RtpsDotBatch` computes all but the last, the original arithmetic runs on the results, and the last vertex goes through the GTE with the FIFO preset. Check build: 0 mismatches over 46k meshes (light values, scratch data, all GTE registers). CybilFightStart's game update 5.85M → 5.45M cycles a frame.
+
+The GTE emulator's EE code (MMI PHMADH dot products, MULT/MFHI multiplies, PLZCW) had never been in the game: `#ifdef _EE` guarded it, and only src/port/ps2/ is compiled with -D_EE (gte_test's EE checker passes it, so the tests ran it). Found from a `__clzdi2` call in the point-light batch. gte.c and vw_calc.c now also key on `_MIPS_ARCH_R5900`. All GTE tests and check builds: 0 mismatches. CybilFightStart takes 7.6% fewer vertical blanks, the bar fight 5.2%.
+
+Point light, second pass in registers: only the final scratch values are written (the last vertex's, as the original leaves them). 0 mismatches over 117k meshes; CybilFightStart's light arithmetic 469 → 182 k-cycles a frame, 1,702 → 1,662 vertical blanks. Also learned: MMI dot products (PHMADH) with a 128-bit store and reload around each are slower than scalar multiplies here; rt_dot3 was removed (mesh transform 640 → 613).
+
+World mesh packets: CybilFightStart's faces all take Gfx_MeshDrawPort's lit path; it now runs in locals with the colour memo checked once per mesh (479 → 404 k-cycles a frame, packets identical). The original's screen bound is a u32, so its bound test is unsigned; a signed first version drew extra faces until the mesh check flagged it.

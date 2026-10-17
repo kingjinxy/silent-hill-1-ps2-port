@@ -204,6 +204,8 @@ def main():
     port_objs = []
     # Profiling counters (include/port/prof.h): SH1_PROF=1.
     prof = ["-DSH_PORT_PROF"] if os.environ.get("SH1_PROF") else []
+    # Light counters inside DrawOTag (include/port/prof.h LP_*): SH1_LITEPROF=1.
+    prof += ["-DSH_PORT_LITEPROF"] if os.environ.get("SH1_LITEPROF") else []
     # Benchmark builds (SH1_BENCH=1, as tools/port/ee_compile_check.sh): the Demo menu's frame dumps.
     bench = ["-DSH_PORT_BENCH"] if os.environ.get("SH1_BENCH") else []
     # Fixed debug frame dumps (src/port/ps2/display_ps2.c): SH1_DUMP=1.

@@ -16,13 +16,13 @@ check() {
     f=$1
     m=$(echo "$f" | sed -nE 's|src/maps/(map[0-9]_s[0-9]+)/.*|\1|p' | tr a-z A-Z)
     o="$OUT/$(echo "$f" | tr / _)"
-    "$CC" -c -O2 ${SH1_EXTRA_CFLAGS:-} ${SH1_FPS:+-DSH_PORT_FPS=$SH1_FPS} ${SH1_BENCH:+-DSH_PORT_BENCH} ${SH1_PROF:+-DSH_PORT_PROF} -G0 -fno-toplevel-reorder -fno-zero-initialized-in-bss -mno-check-zero-division -fno-strict-aliasing -fno-delete-null-pointer-checks -fno-isolate-erroneous-paths-dereference -std=gnu89 -nostdinc -Iinclude -Ibuild/USA -Iinclude/psyq -Iinclude/decomp -Wa,-Iinclude \
+    "$CC" -c -O2 ${SH1_EXTRA_CFLAGS:-} ${SH1_FPS:+-DSH_PORT_FPS=$SH1_FPS} ${SH1_BENCH:+-DSH_PORT_BENCH} ${SH1_PROF:+-DSH_PORT_PROF} ${SH1_LITEPROF:+-DSH_PORT_LITEPROF} -G0 -fno-toplevel-reorder -fno-zero-initialized-in-bss -mno-check-zero-division -fno-strict-aliasing -fno-delete-null-pointer-checks -fno-isolate-erroneous-paths-dereference -std=gnu89 -nostdinc -Iinclude -Ibuild/USA -Iinclude/psyq -Iinclude/decomp -Wa,-Iinclude \
         -D_LANGUAGE_C -DVER_USA -DSH_PORT -DNON_MATCHING ${m:+-D$m -DSH_MAP_OVERLAY} \
         -Wno-error=implicit-function-declaration -Wno-error=int-conversion \
         -Wno-error=incompatible-pointer-types -Wno-error=implicit-int -Wno-error=return-mismatch \
         "$f" -o "$o.o" > "$o.txt" 2>&1 || echo "$f"
 }
-export -f check; export CC OUT SH1_EXTRA_CFLAGS SH1_FPS SH1_BENCH SH1_PROF
+export -f check; export CC OUT SH1_EXTRA_CFLAGS SH1_FPS SH1_BENCH SH1_PROF SH1_LITEPROF
 cat linkers/USA/*.ld linkers/USA/*/*.ld | grep -oE 'build/USA/src/[^ ()]+\.c\.o' | sed -E 's|^build/USA/||; s|\.o$||' \
     | sort -u > "$OUT/files.txt"
 xargs -P "$(nproc)" -I{} bash -c 'check {}' < "$OUT/files.txt" > "$OUT/failed.txt"

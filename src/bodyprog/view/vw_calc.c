@@ -334,7 +334,7 @@ void Vw_MultiplyAndTransformMatrix(MATRIX* transformMat, MATRIX* inMat, MATRIX* 
     const s16 (*b)[3] = (const s16 (*)[3])inMat->m;
     s32 col, row;
 
-#if defined(_EE)
+#if defined(_EE) || defined(_MIPS_ARCH_R5900) /* the R5900 compiler's define: the game build has no -D_EE */
     /* Check for -0x8000 which would overflow 32-bit PHMADH product pairs */
     if (b[0][0] != -0x8000 && b[1][0] != -0x8000 &&
         b[0][1] != -0x8000 && b[1][1] != -0x8000 &&

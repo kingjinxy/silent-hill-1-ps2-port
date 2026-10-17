@@ -97,6 +97,9 @@ static int  s_TagLoops;
 static int  s_LastTag = -1;   /* for EOP */
 
 static u64x s_Reg[REG_COUNT];
+#ifdef SH_PORT_LITEPROF
+unsigned int g_LiteProf[LP_COUNT][2];
+#endif
 /* Incremented whenever GS state may have changed outside prim_state() (reset, fills, display
  * copies, texture cache changes): its memo of the last primitive's state is then stale. */
 static u32  s_Epoch;
@@ -178,7 +181,15 @@ static void tag_close(void)
 
 /** Sends the queued packet. */
 void GpuGs_Flush(void) __attribute__((noinline));
+static void GpuGs_FlushImpl(void);
 void GpuGs_Flush(void)
+{
+    LP_BEGIN(LP_FLUSH)
+    GpuGs_FlushImpl();
+    LP_END(LP_FLUSH);
+}
+
+static void GpuGs_FlushImpl(void)
 {
     pend_flush();
     tag_close();
@@ -268,6 +279,9 @@ void GpuGs_StateLost(void)
 static u32 s_TexPage;
 static u32 s_TwMaskX, s_TwMaskY, s_TwOffX, s_TwOffY;
 static s32 s_AreaX1, s_AreaY1, s_AreaX2 = VRAM_W - 1, s_AreaY2 = VRAM_H - 1;
+/* Incremented when a drawing setting prim_state depends on changes (GP0 E2-E4, E6): its memo then
+ * only compares this, s_Epoch and the primitive's own flags. */
+static u32 s_StateGen = 1;
 static s32 s_OffX, s_OffY;
 static u32 s_SetMask, s_CheckMask;
 
@@ -666,6 +680,7 @@ static void scissor(s32 x1, s32 y1, s32 x2, s32 y2)
 }
 
 /** SCANMSK for the field being scanned out now (see s_Interlace480): 2 masks even lines, 3 odd. */
+static void scanmsk_update(void) __attribute__((noinline));
 static void scanmsk_update(void)
 {
     u64x m = 0;
@@ -694,8 +709,8 @@ static void scanmsk_update(void)
     } while (0)
 
 /** Per-primitive state; returns the PRIM register bits other than the type. */
-static u64x state_other(const Prim* p);
-static void tex_state(const Prim* p);
+static u64x state_other(const Prim* p) __attribute__((noinline));
+static void tex_state(const Prim* p) __attribute__((noinline));
 
 /** GS state for a primitive; returns the PRIM register bits other than the type. Two parts, each
  * memoized on its own inputs, so a change of texture page or CLUT between neighbouring primitives
@@ -704,28 +719,24 @@ static void tex_state(const Prim* p);
  * - the texture: TEX0/TEXCLUT (with the texture page and CLUT caches). */
 static u64x prim_state(const Prim* p)
 {
-    static u32  memoEpoch = ~0u, memoKey[4];
+    static u32  memoEpoch = ~0u, memoGen = ~0u, memoKey = ~0u;
     static u64x memoPrim;
-    u32         key[4];
+    u32         key;
 
     SCANMSK_CHECK();
 
-    key[0] = p->textured | (p->raw << 1) | (p->semi << 2) | (p->semiMode << 3) | (p->gouraud << 5) |
-             (p->dither << 6) | (s_SetMask << 7) | (s_CheckMask << 8) | (s_TwMaskX << 18) | (s_TwMaskY << 23);
-    key[1] = (s_TwOffX << 16) | (s_TwOffY << 21);
-    key[2] = (u32)s_AreaX1 | ((u32)s_AreaY1 << 10) | ((u32)s_AreaX2 << 20);
-    key[3] = (u32)s_AreaY2;
-    if (memoEpoch != s_Epoch || key[0] != memoKey[0] || key[1] != memoKey[1] || key[2] != memoKey[2] ||
-        key[3] != memoKey[3])
+    /* The drawing settings are covered by s_StateGen. */
+    key = p->textured | (p->raw << 1) | (p->semi << 2) | (p->semiMode << 3) | (p->gouraud << 5) | (p->dither << 6);
+    if (memoEpoch != s_Epoch || memoGen != s_StateGen || memoKey != key)
     {
+        LP_BEGIN(LP_STATE_OTHER)
         PROF_BEGIN("gs: prim_state (other)")
         memoPrim = state_other(p);
         PROF_END("gs: prim_state (other)")
-        memoEpoch  = s_Epoch;
-        memoKey[0] = key[0];
-        memoKey[1] = key[1];
-        memoKey[2] = key[2];
-        memoKey[3] = key[3];
+        LP_END(LP_STATE_OTHER);
+        memoEpoch = s_Epoch;
+        memoGen   = s_StateGen;
+        memoKey   = key;
     }
     if (p->textured)
     {
@@ -733,9 +744,11 @@ static u64x prim_state(const Prim* p)
         if (texEpoch != s_Epoch || texTpage != (p->tpage & 0x19F) || texClut != (p->clut & 0xFFFF) ||
             texRaw != p->raw || !s_RegValid[R_TEX0])
         {
+            LP_BEGIN(LP_STATE_TEX)
             PROF_BEGIN("gs: prim_state (texture)")
             tex_state(p);
             PROF_END("gs: prim_state (texture)")
+            LP_END(LP_STATE_TEX);
             texEpoch = s_Epoch;
             texTpage = p->tpage & 0x19F;
             texClut  = p->clut & 0xFFFF;
@@ -932,7 +945,12 @@ static int too_big_xy(const s32* x, const s32* y, int a, int b, int c)
            absd(y[a], y[b]) > 511 || absd(y[b], y[c]) > 511 || absd(y[a], y[c]) > 511;
 }
 
-static u32 s_StFogPair[2][4]; /* GpuGs_Stats */
+/* Fog pair counts (GpuGs_Stats), a diagnostic of the pair fusion: SH1_PROF builds only, as the
+ * per-polygon comparison costs ~5% of DrawOTag. */
+#ifdef SH_PORT_PROF
+#define GS_FOG_PAIR_STATS 1
+#endif
+static u32 s_StFogPair[2][4];
 
 /** A polygon's GS primitives: a quad as one strip, or its halves (or a triangle) when they fit what
  * the GPU draws (1023x511). */
@@ -941,7 +959,9 @@ static void emit_poly(int textured, u64x prim, const u64x* rgbaq, const u64x* uv
 {
     if (nv == 4)
     {
-        int big0 = too_big_xy(x, y, 0, 1, 2), big1 = too_big_xy(x, y, 1, 2, 3);
+        int big0, big1;
+        big0 = too_big_xy(x, y, 0, 1, 2);
+        big1 = too_big_xy(x, y, 1, 2, 3);
         if (!big0 && !big1)
         {
             emit_packed(textured, prim | 4, rgbaq, uv, xyz, 4); /* both halves as one strip */
@@ -967,6 +987,29 @@ static void emit_poly(int textured, u64x prim, const u64x* rgbaq, const u64x* uv
 static void emit_poly(int textured, u64x prim, const u64x* rgbaq, const u64x* uv, const u64x* xyz, const s32* x,
                       const s32* y, s32 nv);
 
+/** Space in the packet for one quad strip (PRIM and 4 vertices: RGBAQ, [UV], XYZ2). */
+static inline u64x* quad_loop(int textured)
+{
+    static u64x regs[2];
+    static int  nreg[2];
+    if (!nreg[textured])
+    {
+        regs[textured] = vertex_regs(textured, 4, &nreg[textured]);
+    }
+    s_StPrims++;
+    return reglist(regs[textured], nreg[textured]);
+}
+
+/** Whether the quad's bounding box fits what the GPU draws (1023x511): then both halves do. */
+static inline int quad_fits(const s32* x, const s32* y)
+{
+    s32 x0 = x[0] < x[1] ? x[0] : x[1], x1 = x[0] < x[1] ? x[1] : x[0];
+    s32 y0 = y[0] < y[1] ? y[0] : y[1], y1 = y[0] < y[1] ? y[1] : y[0];
+    x0 = x[2] < x0 ? x[2] : x0, x1 = x[2] > x1 ? x[2] : x1, x0 = x[3] < x0 ? x[3] : x0, x1 = x[3] > x1 ? x[3] : x1;
+    y0 = y[2] < y0 ? y[2] : y0, y1 = y[2] > y1 ? y[2] : y1, y0 = y[3] < y0 ? y[3] : y0, y1 = y[3] > y1 ? y[3] : y1;
+    return x1 - x0 <= 1023 && y1 - y0 <= 511;
+}
+
 /** A GP0 polygon; `under`: a fog pair's underlay to draw first (GpuGs_Commands), or NULL. */
 static u32 polygon(const u32* w, s32 n, const u32* under)
 {
@@ -980,6 +1023,7 @@ static u32 polygon(const u32* w, s32 n, const u32* under)
     s32  x[4], y[4], i, k = 0;
     u64x rgbaq[4], uv[4], xyz[4], prim, a;
     Prim p;
+    LP_BEGIN(LP_POLY_PARSE)
 
     if (n < words)
     {
@@ -1011,6 +1055,7 @@ static u32 polygon(const u32* w, s32 n, const u32* under)
         s_TexPage = (tpage & ~0x400u) | (s_TexPage & 0x400); /* textured polygons also set the current texture page (DFE stays: E1 only) */
     }
     p.semiMode = (tpage >> 5) & 3;
+#ifdef GS_FOG_PAIR_STATS
     {
 
 /* Fog pairs (PS2 Optimizations.md, option 1): a plain gouraud polygon followed by a
@@ -1027,20 +1072,77 @@ static u32 polygon(const u32* w, s32 n, const u32* under)
         memcpy(px, x, nv * 4);
         memcpy(py, y, nv * 4);
     }
+#endif
     p.dither   = ((s_TexPage >> 9) & 1) && (gouraud || (textured && !raw));
     if (!textured && !gouraud && !p.dither)
     {
         colorMask = 0xF8F8F8; /* as quantize() */
     }
-    a = textured ? 0x80ULL << 24 : 0;
-    for (i = 0; i < nv; i++)
+    a = (textured ? 0x80ULL << 24 : 0) | (0x3F800000ULL << 32);
+    if (raw)
     {
-        rgbaq[i] = (u64x)(raw ? 0x808080 : (rgb[i] & colorMask)) | a | (0x3F800000ULL << 32);
-        xyz[i]   = (u64x)((x[i] + 2048) << 4 & 0xFFFF) | ((u64x)((y[i] + 2048) << 4 & 0xFFFF) << 16);
+        colorMask = 0; /* RGBAQ 0x808080 (DECAL ignores it) */
+        a |= 0x808080;
     }
-    prim = prim_state(&p);
+    LP_END(LP_POLY_PARSE);
+    {
+        LP_BEGIN(LP_POLY_STATE)
+        prim = prim_state(&p);
+        LP_END(LP_POLY_STATE);
+    }
+    {
+    LP_BEGIN(LP_POLY_EMIT)
     s_StDate += s_CheckMask * (nv == 4 ? 2 : 1);
     s_StRtTex += (textured && ((tpage >> 7) & 3) >= 2) * (nv == 4 ? 2 : 1);
+    if (nv == 4 && quad_fits(x, y))
+    {
+        /* The common case: the quad as one strip, written straight into the packet; a fog pair's
+         * underlay first, in the same (textured) register layout so both share one GIF tag. The
+         * same register values as emit_poly below. */
+        u64x* o;
+        for (i = 0; i < 4; i++)
+        {
+            xyz[i] = (u64x)((x[i] + 2048) << 4 & 0xFFFF) | ((u64x)((y[i] + 2048) << 4 & 0xFFFF) << 16);
+        }
+        if (under)
+        {
+            s_StDate += s_CheckMask * 2;
+            o    = quad_loop(1);
+            *o++ = (prim & ~(u64x)((1 << 4) | (1 << 6))) | 4;
+            for (i = 0; i < 4; i++)
+            {
+                *o++ = (u64x)(under[i * 2] & 0xFFFFFF) | (0x40ULL << 24) | (0x3F800000ULL << 32);
+                *o++ = uv[i];
+                *o++ = xyz[i];
+            }
+        }
+        o    = quad_loop((int)textured);
+        *o++ = prim | 4;
+        if (textured)
+        {
+            for (i = 0; i < 4; i++)
+            {
+                *o++ = (u64x)(rgb[i] & colorMask) | a;
+                *o++ = uv[i];
+                *o++ = xyz[i];
+            }
+        }
+        else
+        {
+            for (i = 0; i < 4; i++)
+            {
+                *o++ = (u64x)(rgb[i] & colorMask) | a;
+                *o++ = xyz[i];
+            }
+        }
+    }
+    else
+    {
+    for (i = 0; i < nv; i++)
+    {
+        rgbaq[i] = (u64x)(rgb[i] & colorMask) | a;
+        xyz[i]   = (u64x)((x[i] + 2048) << 4 & 0xFFFF) | ((u64x)((y[i] + 2048) << 4 & 0xFFFF) << 16);
+    }
     if (under)
     {
         /* The fog pair's underlay (GpuGs_Commands): an opaque gouraud quad on the same corners, drawn
@@ -1055,9 +1157,14 @@ static u32 polygon(const u32* w, s32 n, const u32* under)
             urgbaq[i] = (u64x)(under[i * 2] & 0xFFFFFF) | (0x40ULL << 24) | (0x3F800000ULL << 32);
         }
         s_StDate += s_CheckMask * 2;
-        emit_poly(0, prim & ~(u64x)((1 << 4) | (1 << 6)), urgbaq, uv, xyz, x, y, 4);
+        /* In the textured register layout (UV written, ignored without TME), so the pair shares
+         * one GIF tag instead of switching layouts twice a pair. */
+        emit_poly(1, prim & ~(u64x)((1 << 4) | (1 << 6)), urgbaq, uv, xyz, x, y, 4);
     }
     emit_poly((int)textured, prim, rgbaq, uv, xyz, x, y, nv);
+    }
+    LP_END(LP_POLY_EMIT);
+    }
     return (u32)k;
 }
 
@@ -1257,26 +1364,43 @@ static void settings(u32 w)
             s_TexPage = w & 0x3FFF;
             break;
         case 0xE2:
-            s_TwMaskX = w & 31;
-            s_TwMaskY = (w >> 5) & 31;
-            s_TwOffX  = (w >> 10) & 31;
-            s_TwOffY  = (w >> 15) & 31;
+            if (s_TwMaskX != (w & 31) || s_TwMaskY != ((w >> 5) & 31) || s_TwOffX != ((w >> 10) & 31) ||
+                s_TwOffY != ((w >> 15) & 31))
+            {
+                s_TwMaskX = w & 31;
+                s_TwMaskY = (w >> 5) & 31;
+                s_TwOffX  = (w >> 10) & 31;
+                s_TwOffY  = (w >> 15) & 31;
+                s_StateGen++;
+            }
             break;
         case 0xE3:
-            s_AreaX1 = w & 0x3FF;
-            s_AreaY1 = (w >> 10) & 0x1FF;
+            if (s_AreaX1 != (s32)(w & 0x3FF) || s_AreaY1 != (s32)((w >> 10) & 0x1FF))
+            {
+                s_AreaX1 = w & 0x3FF;
+                s_AreaY1 = (w >> 10) & 0x1FF;
+                s_StateGen++;
+            }
             break;
         case 0xE4:
-            s_AreaX2 = w & 0x3FF;
-            s_AreaY2 = (w >> 10) & 0x1FF;
+            if (s_AreaX2 != (s32)(w & 0x3FF) || s_AreaY2 != (s32)((w >> 10) & 0x1FF))
+            {
+                s_AreaX2 = w & 0x3FF;
+                s_AreaY2 = (w >> 10) & 0x1FF;
+                s_StateGen++;
+            }
             break;
         case 0xE5:
             s_OffX = sext11(w);
             s_OffY = sext11(w >> 11);
             break;
         case 0xE6:
-            s_SetMask   = w & 1;
-            s_CheckMask = (w >> 1) & 1;
+            if (s_SetMask != (w & 1) || s_CheckMask != ((w >> 1) & 1))
+            {
+                s_SetMask   = w & 1;
+                s_CheckMask = (w >> 1) & 1;
+                s_StateGen++;
+            }
             break;
     }
 }
@@ -1309,7 +1433,15 @@ static void pend_flush(void)
 }
 
 /** @brief Executes a stream of GP0 words (one OT packet or DrawPrim). */
+static void GpuGs_CommandsImpl(const u32* w, s32 n);
 void GpuGs_Commands(const u32* w, s32 n)
+{
+    LP_BEGIN(LP_COMMANDS)
+    GpuGs_CommandsImpl(w, n);
+    LP_END(LP_COMMANDS);
+}
+
+static void GpuGs_CommandsImpl(const u32* w, s32 n)
 {
     init();
     while (n > 0)
@@ -1356,12 +1488,16 @@ void GpuGs_Commands(const u32* w, s32 n)
         }
         else if (cmd >= 0x40 && cmd < 0x60)
         {
+            LP_BEGIN(LP_LINES)
             used = lines(w, n);
+            LP_END(LP_LINES);
         }
         else if (cmd >= 0x60 && cmd < 0x80)
         {
             PROF_BEGIN("gs: rectangle (incl. state)")
+            LP_BEGIN(LP_RECT)
             used = rectangle(w, n);
+            LP_END(LP_RECT);
             PROF_END("gs: rectangle (incl. state)")
         }
         else if (cmd == 0x02)
@@ -1624,6 +1760,21 @@ void GpuGs_Stats(u32 frames)
            "texturing from VRAM, %u uploads, %u readbacks\n", s_StPrims / frames, s_StTex0 / frames, s_StClut / frames,
            s_StDate / frames, s_StRtTex / frames, s_StUploads / frames, s_StReadbacks / frames);
     s_StPrims = s_StTex0 = s_StClut = s_StDate = s_StRtTex = s_StUploads = s_StReadbacks = 0;
+#ifdef SH_PORT_LITEPROF
+    {
+        static const char* const NAMES[LP_COUNT] = { "DrawOTag", "GpuGs_Commands", "polygon: parse", "polygon: state",
+                                                     "polygon: emit", "rectangle", "lines", "flush (DMA)",
+                                                     "state: texture", "state: other", "mesh: light", "mesh: transform",
+                                                     "mesh: packets", "light: collect", "light: batch", "light: apply" };
+        for (a = 0; a < LP_COUNT; a++)
+        {
+            printf("liteprof: %-16s %5u kcycles %5u calls a frame\n", NAMES[a], g_LiteProf[a][0] / 1000 / frames,
+                   g_LiteProf[a][1] / frames);
+            g_LiteProf[a][0] = g_LiteProf[a][1] = 0;
+        }
+    }
+#endif
+#ifdef GS_FOG_PAIR_STATS
     printf("gs fog pairs per frame (plain opaque/semi x textured mode 0-3): %u %u %u %u / %u %u %u %u\n",
            s_StFogPair[0][0] / frames, s_StFogPair[0][1] / frames, s_StFogPair[0][2] / frames, s_StFogPair[0][3] / frames,
            s_StFogPair[1][0] / frames, s_StFogPair[1][1] / frames, s_StFogPair[1][2] / frames, s_StFogPair[1][3] / frames);
@@ -1634,4 +1785,5 @@ void GpuGs_Stats(u32 frames)
             s_StFogPair[a][m] = 0;
         }
     }
+#endif
 }
