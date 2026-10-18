@@ -53,6 +53,12 @@ static void load_modules(void)
     padInit(0);
 }
 
+/** Loads rom0:SIO2MAN and PADMAN (once): the memory card modules need SIO2MAN first (memcard_ps2.c). */
+void Port_PadModulesLoad(void)
+{
+    load_modules();
+}
+
 void PadInitDirect(unsigned char* pad1, unsigned char* pad2)
 {
     int p;

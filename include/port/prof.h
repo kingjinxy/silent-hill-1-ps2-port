@@ -50,6 +50,9 @@ enum
     LP_PL_APPLY,   /* Port_PointLight: pass 2 */
     LP_MAP_FX,     /* map6_s02 func_800D2364: the effect grid, whole function */
     LP_MAP_FX_BATCH, /* its Gte_RtpBatch part (Port_GridBatch) */
+    LP_SNOW_MOVE,  /* Particle_Update: the particle state/movement loop */
+    LP_SNOW_DRAW,  /* Particle_Update: the draw loop (Particle_SnowDraw / Particle_RainDraw) */
+    LP_SNOW_RTPS,  /* Particle_SnowDraw: the flake's RTPS and its stores (calls = flakes drawn) */
     LP_COUNT
 };
 #ifdef SH_PORT_LITEPROF

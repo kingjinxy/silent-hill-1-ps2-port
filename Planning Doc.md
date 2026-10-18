@@ -243,6 +243,9 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [x] map6_s02 func_800D2364 effect grid: Gte_RtpGrid lattice batch (exact; 1,179 → 653 k-cycles a frame, busy −12% / −19% in its two cutscenes)
 - [x] Gfx_MeshDrawPort fog, lit+fog, lit+black-fog and flat loops in locals with memos (exact; mesh packets −13% to −23% in the fogged maps, busy −2% to −3%)
 - [ ] Next candidates: character pipeline packets (func_8005AC50), snow particles
+- [x] Tried: character mesh packets in locals (exact, ~2%: reverted); point light per-vertex reuse measured (15% repeat visits: not worth it)
+- [x] Gameplay profile (attract demos, uncapped): 89-243 fps mean, slowest second 69 fps in PCSX2; same split as cutscenes plus snow particles outdoors. Profiler hang (full function table) fixed
+- [x] Snow particles measured in gameplay: 170-200k cycles a frame (6-8% of busy); a batched RTPS would save ~1.5% at most: not pursued
 - [ ] Hardware tests: `SH1_INTERLACE_FIELDS=1` (PS1-style field drawing for the 448i screens, broken in PCSX2) and `SH1_MODESWITCH=0/1/2` (video signal gaps on mode switches; film the TV)
 - [ ] 480p / 720p modes (2026-10-17 assessment: 480p fits in VRAM with a 2x render buffer and the 1:1 VRAM image; fill rate isn't the limit; the work is keeping the 2x image and the PS1 VRAM in step for effects that read the frame buffer; true 720p doesn't fit double-buffered)
 - [x] Benchmarks besides Kaufmann (#4): #36 CybilFightStart (map6_s04 func_800E1D50, 28.1 fps in the 2026-10-10 sweep) and #50 MapEvent_KaufmannBarFightCutscene (33.3); speed only, their pictures depend on timing
@@ -274,7 +277,11 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 
 - [x] libpad shim over `rom0:PADMAN` (libkpad recompiled with the game)
 - [ ] libcd shim: LBA reads from `SILENT.`/`HILL.` (sector offsets relative to container files)
-- [ ] Memory card: save format + `icon.sys`/icon, real title-ID folder
+- [x] Memory card (2026-10-17): libcard and the BIOS file functions over a PS1 card image per slot (src/port/psx_card.c), stored in one PS2 save folder `mcN:/BASLUS-00707SH1/` (CARD.MCD, icon.sys, SH1.ICO; src/port/ps2/memcard_ps2.c). Self-test passes in PCSX2 (create, write, list, read, erase, re-read)
+- [x] Memory card: in-game save and load (PCSX2, by hand); saves moved to the console by .psu (tools/port/mc_export_psu.py) and loaded on hardware (2026-10-18)
+- [ ] Memory card: the save loaded in the original game in DuckStation; the icon checked in the PS2 browser
+- [ ] Investigate: a hang after a remote restart (deploy) on the title screen, with vertical blanks stopped (2026-10-18; a cold boot was fine)
+- [ ] Memory card: real title-ID folder name once the title ID is settled
 
 ### Step 6 — Sound driver on the IOP
 

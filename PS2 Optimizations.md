@@ -407,3 +407,44 @@ Mesh check (packets and OT against the original; it now also counts meshes per p
 | Kaufmann map3_s00 (#4, lit + fog) | 393 → **344** | |
 
 Before: the all-cutscene sweep A (same build without this change). In these maps the larger cost is DrawOTag (1.6-1.7M in #0 and #43): every fogged face is two polygons (the fog pairs).
+
+### 2026-10-17: character mesh packets in locals (exact): tried, reverted
+
+func_8005AC50 (character mesh packets) rewritten like the world mesh loops: the face's indices and colour indices in locals, the scratch fields' last values written after the loop. Check build (packets, OT and the whole scratch struct against the original): 0 mismatches over 1.2M meshes (#0-4, #12, #36, #43, #50); Kaufmann dumps identical. But the loop only costs 110-130k cycles a frame (light counter; the instrumented profile had ~210k), and the change saved ~2%: Kaufmann 110 → 108, CybilFightStart 119 → 117, bar fight 131 → 129. The compiler already handled the original's scratch accesses well. Reverted.
+
+Point light, per-vertex reuse (not done): a vertex is visited once per normal that uses it, and only the normal's dot product differs between visits. But visits repeat a vertex only 15% of the time (CybilFightStart: 3.04M visits, 2.59M unique vertices), so sharing the distance, divide and depth cue would save ~100-150k cycles a frame at most.
+
+### 2026-10-17: gameplay profile (the five title-screen attract demos, PCSX2)
+
+Benchmark builds (SH1_BENCH=1) already run the attract demos uncapped: with SysFlag_DemoActive the main loop never waits for a vertical blank, and the demo's own present interval sets the time step, so it plays the same frames as at normal speed. The port now logs each demo's start and stop (demo.c: `attract demo N started` / `stopped (#k): F frames in V vertical blanks`). Runs go from boot until `stopped (#5)`.
+
+Benchmark build with light counters, k-cycles a frame:
+
+| demo (map) | mean fps | slowest second | idle | busy per frame | DrawOTag | point light | mesh transform | mesh packets |
+|---|---|---|---|---|---|---|---|---|
+| 0 (map2_s00) | 129.4 | 95 | 2% | 2,230 | 797 | 0 | 162 | 108 |
+| 1 (map2_s00) | 89.5 | 69 | 1% | 3,262 | 991 | 565 | 222 | 161 |
+| 2 (map1_s01) | 102.2 | 80 | 0% | 2,874 | 853 | 416 | 172 | 137 |
+| 3 (map1_s02) | 154.4 | 69 | 1% | 1,887 | 672 | 370 | 167 | 121 |
+| 4 (map1_s03) | 242.6 | 78 | 4% | 1,170 | 400 | 256 | 114 | 67 |
+
+- Every demo stays above 60 fps in every one-second window in PCSX2: the slowest second is 69 fps (demos 1 and 3).
+- The split is the cutscenes' (DrawOTag ~30%, point light ~17%, world mesh ~12%), plus snow particles outdoors.
+- Function profile (instrumented, medians): Particle_SnowDraw ~270k cycles a frame in demos 0-2 and Particle_Update/MovementUpdate besides; WorldEnv_LightTransform 90-200k; the character pipeline (func_8005A478/A900/AA08/AC50) ~300-430k together.
+
+Profiler fix: prof_fn.c's function table had 1,024 slots, never emptied of functions, and its lookup probed until it found a free slot. Gameplay touches more distinct functions than that, so the table filled and the game hung in __cyg_profile_func_exit: demo 1 here, and probably the 8 extra stalls of the all-cutscene profiling sweep. The table now has 8,192 slots, and a full table drops the sample instead of looping.
+
+### 2026-10-17: snow particles in gameplay: measured, little left
+
+Light counters in Particle_Update (`particles: move`, `particles: draw`) and around each flake's RTPS in Particle_SnowDraw (`snow: rtps`, calls = flakes drawn). Attract demos 0-2 (snow), benchmark build, k-cycles a frame:
+
+| demo | busy per frame | particles: move | particles: draw | of which RTPS | flakes drawn |
+|---|---|---|---|---|---|
+| 0 (map2_s00) | 2,242 | 78 | 119 | 75 | 198 |
+| 1 (map2_s00) | 3,263 | 63 | 114 | 69 | 182 |
+| 2 (map1_s01) | 2,713 | 65 | 108 | 67 | 178 |
+
+- The snow is 170-200k cycles a frame, 6-8% of busy time. The instrumented profile's ~270k for Particle_SnowDraw alone was inflated.
+- A flake's RTPS costs ~370 cycles: loading V0, the command with its full register file, the FIFO and FLAG, and the two reads.
+- A batch (Gte_RtpBatch, ~125-210 cycles a point) would save at most ~40k cycles a frame, ~1.5% of busy time. The movement (~350 cycles a flake: three RNG calls, position maths, a ground lookup when a flake lands) has no exact shortcut of that size.
+- Not pursued. The counters stay in: they're light-counter builds only, and the demo 0 dumps are identical with them on.

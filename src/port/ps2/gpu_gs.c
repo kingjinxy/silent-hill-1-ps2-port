@@ -1659,11 +1659,13 @@ void GpuGs_MoveImage(s32 sx, s32 sy, s32 dx, s32 dy, s32 w, s32 h)
 static u16 s_Readback[256 * VRAM_W] __attribute__((aligned(64)));
 
 /** Local-to-host transfer of the VRAM rectangle (x, y, w, h) into dst (rows of `stride` pixels).
- * x and w are rounded out to multiples of 8 pixels (16 bytes) for the transfer; at most
+ * x and w are rounded out to multiples of 64 pixels (128 bytes) for the transfer: the DMA takes the
+ * VIF1 FIFO's data in 8-quadword bursts, and on a real PS2 a transfer that isn't a whole number of
+ * bursts never ends (16x1 CLUT reads, 2 quadwords, stuck every time; PCSX2 doesn't care). At most
  * sizeof(s_Readback) bytes at a time (larger rectangles are read in bands). No wrapping. */
 static void download_rect(s32 x, s32 y, s32 w, s32 h, u16* dst, s32 stride)
 {
-    s32 x0 = x & ~7, tw = ((x + w + 7) & ~7) - x0;
+    s32 x0 = x & ~63, tw = ((x + w + 63) & ~63) - x0;
     s32 band = (s32)(sizeof(s_Readback) / 2) / tw, row;
     if (h > band)
     {
@@ -1826,7 +1828,8 @@ void GpuGs_Stats(u32 frames)
                                                      "polygon: emit", "rectangle", "lines", "flush (DMA)",
                                                      "state: texture", "state: other", "mesh: light", "mesh: transform",
                                                      "mesh: packets", "light: collect", "light: batch", "light: apply",
-                                                     "map fx (grid)", "map fx: batch" };
+                                                     "map fx (grid)", "map fx: batch", "particles: move",
+                                                     "particles: draw", "snow: rtps" };
         for (a = 0; a < LP_COUNT; a++)
         {
             printf("liteprof: %-16s %5u kcycles %5u calls a frame\n", NAMES[a], g_LiteProf[a][0] / 1000 / frames,

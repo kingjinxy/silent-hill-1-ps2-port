@@ -64,6 +64,8 @@ def main():
     ap.add_argument("--slowboot", action="store_true", help="boot discs through the BIOS (OSDSYS) instead of fast boot")
     ap.add_argument("--cdvd-verbose", action="store_true", help="log every disc read (CdvdVerboseReads)")
     ap.add_argument("--bios", help="BIOS file name in PCSX2's bios folder to use for this run")
+    ap.add_argument("--memcards", metavar="DIR", help="use this folder for PCSX2's memory card files during the run "
+                    "(slot 1: Mcd001.ps2; PCSX2 creates missing ones, unformatted), instead of the user's cards")
     ap.add_argument("--stall", type=float, default=15,
                     help="stop when no new frame has been shown for this many emulated seconds (crash), 0 = off")
     ap.add_argument("--gameplay", type=float, metavar="SECONDS",
@@ -88,6 +90,9 @@ def main():
         OVERRIDES["CdvdVerboseReads"] = "true"
     if args.bios:
         OVERRIDES["BIOS"] = args.bios
+    if args.memcards:
+        os.makedirs(args.memcards, exist_ok=True)
+        OVERRIDES["MemoryCards"] = os.path.abspath(args.memcards)
     recorder = None
     if args.spu2_wav:
         OVERRIDES["Global_Enable"] = "true"

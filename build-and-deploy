@@ -68,7 +68,7 @@ fi
 
 echo "== switching the server to the new ISO and restarting the game"
 if timeout 40 python3 tools/port/ps2_ctl.py deploy; then
-    echo "   done; if the PS2 doesn't come back within ~30 s, press RESET (it will load the new ISO)"
+    echo "   done; if the PS2 doesn't come back within ~30 s, power-cycle it (hold power to switch off) and start Neutrino again: it will load the new ISO"
 else
-    echo "   the PS2 didn't answer (frozen or off): press RESET; it will load the new ISO"
+    echo "   the PS2 didn't answer (frozen or off): power-cycle it and start Neutrino again; it will load the new ISO"
 fi

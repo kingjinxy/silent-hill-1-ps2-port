@@ -9,7 +9,7 @@ extern int printf(const char* fmt, ...);
 extern volatile int g_PortInInterrupt; /* src/port/ps2/libetc_ps2.c */
 
 #define DEPTH 256
-#define SLOTS 1024
+#define SLOTS 8192 /* distinct functions; a power of two (a gameplay run touches well over 1,024) */
 
 typedef struct
 {
@@ -67,9 +67,18 @@ __attribute__((no_instrument_function)) void __cyg_profile_func_exit(void* fn, v
         s_StackChild[s_Top - 1] += total;
     }
     h = ((unsigned int)fn >> 3) % SLOTS;
-    while (s_Fn[h].fn && s_Fn[h].fn != fn)
     {
-        h = (h + 1) % SLOTS;
+        /* Linear probing; a full table drops the sample instead of probing forever (with 1,024 slots,
+         * long gameplay runs filled it and the game hung here, 2026-10-17). */
+        unsigned int probes = 0;
+        while (s_Fn[h].fn && s_Fn[h].fn != fn)
+        {
+            h = (h + 1) % SLOTS;
+            if (++probes == SLOTS)
+            {
+                return;
+            }
+        }
     }
     s_Fn[h].fn = fn;
     s_Fn[h].cycles += (total - s_StackChild[s_Top]) >> 4;

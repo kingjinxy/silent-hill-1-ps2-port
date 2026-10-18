@@ -425,7 +425,14 @@ void Gfx_StringDrawInt(s32 lengthMin, s32 val) // 0x8004AD90
     while (val >= ATLAS_COLUMN_COUNT)
     {
         str--;
+#ifdef SH_PORT
+        // The decomp's `>> 32` matches the PS1 compiler's division by multiplication; on a 32-bit
+        // value it's undefined, and the EE's GCC makes the quotient 0 (every digit then went into
+        // the last one: "2:0U:0T" for 2:37:36).
+        quotient = val / ATLAS_COLUMN_COUNT;
+#else
         quotient = (val / ATLAS_COLUMN_COUNT) >> 32;
+#endif
         *str     = (val - (quotient * ATLAS_COLUMN_COUNT)) + '0';
 
         if (lengthMin > 0)

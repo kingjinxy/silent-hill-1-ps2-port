@@ -7,6 +7,9 @@
 #include "main/rng.h"
 #include "maps/shared.h"
 #include "maps/particle.h"
+#ifdef SH_PORT
+#include "port/prof.h"
+#endif
 
 // TODO: Find why removing these includes causes mismatch.
 #if defined(MAP0_S00)
@@ -1263,6 +1266,9 @@ bool Particle_Update(s_Particle* partHead)
     }
 #endif
 
+#ifdef SH_PORT
+    LP_BEGIN(LP_SNOW_MOVE)
+#endif
     for (pass = 0; pass < 2; pass++)
     {
         // Set particle density.
@@ -1362,6 +1368,10 @@ bool Particle_Update(s_Particle* partHead)
         updatePrev += g_ParticlesAddedCount[pass];
     }
 
+#ifdef SH_PORT
+    LP_END(LP_SNOW_MOVE);
+    LP_BEGIN(LP_SNOW_DRAW)
+#endif
     ////////////////////////////////////////////////////////////////////////////
 
     curPart = partHead;
@@ -1399,6 +1409,9 @@ bool Particle_Update(s_Particle* partHead)
         updatePrev += g_ParticlesAddedCount[pass];
     }
 
+#ifdef SH_PORT
+    LP_END(LP_SNOW_DRAW);
+#endif
     ////////////////////////////////////////////////////////////////////////////
 
     // Likely previous position for next particle system update.
@@ -2562,6 +2575,9 @@ void Particle_SnowDraw(s_Particle* part)
             particlePosQ8.vz = Q12_TO_Q8(localPart->position0_0.vz);
         }
 
+#ifdef SH_PORT
+        LP_BEGIN(LP_SNOW_RTPS)
+#endif
         gte_ldv0(&particlePosQ8);
         gte_rtps();
 
@@ -2577,6 +2593,9 @@ void Particle_SnowDraw(s_Particle* part)
 
         gte_stsxy(&polyFt3->x0);
         gte_stszotz(&zScreenStart);
+#ifdef SH_PORT
+        LP_END(LP_SNOW_RTPS);
+#endif
 
         if (D_800C39A0 == 1 || D_800C39A0 == 4)
         {

@@ -176,8 +176,20 @@ void Demo_GameRandSeedRestore(void) // 0x8008F370
 
 bool g_Demo_Play = false;
 
+#ifdef SH_PORT
+// Port: attract demo start/stop lines for profiling runs (displayed frames and vertical blanks between
+// them; in SH1_BENCH=1 builds the demo runs uncapped, so frames per vertical blank is the headroom).
+extern int Display_FrameCount(void); // src/port/ps2/display_ps2.c
+static s32 s_PortDemoFrame0, s_PortDemoVBlank0, s_PortDemoStops;
+#endif
+
 void Demo_Start(void) // 0x8008F398
 {
+#ifdef SH_PORT
+    s_PortDemoFrame0  = Display_FrameCount();
+    s_PortDemoVBlank0 = VSync(SyncMode_Count);
+    printf("attract demo %d started (file %d)\n", g_Demo_DemoId, g_Demo_DemoFileIdx);
+#endif
     g_Demo_Play         = true;
     g_SysWork.sysFlags |= SysFlag_DemoActive;
 
@@ -190,6 +202,14 @@ void Demo_Start(void) // 0x8008F398
 
 void Demo_Stop(void) // 0x8008f3f0
 {
+#ifdef SH_PORT
+    {
+        s32 frames = Display_FrameCount() - s_PortDemoFrame0, vbs = VSync(SyncMode_Count) - s_PortDemoVBlank0;
+        printf("attract demo %d stopped (#%d): %d frames in %d vertical blanks = %d.%02d fps\n", g_Demo_DemoId,
+               ++s_PortDemoStops, frames, vbs, frames * 5994 / (vbs > 0 ? vbs : 1) / 100,
+               frames * 5994 / (vbs > 0 ? vbs : 1) % 100);
+    }
+#endif
     g_Demo_Play         = false;
     g_SysWork.sysFlags &= ~SysFlag_DemoActive;
 

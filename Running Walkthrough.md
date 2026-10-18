@@ -1226,7 +1226,7 @@ If the PS2 seems stuck:
   - red: the EE-to-IOP SIF DMA is stuck;
   - yellow: no frame for 10 s;
   - black: the EE stopped (or nothing is wrong yet).
-- When the PS2 is stuck, `deploy` can't restart it; press RESET. The server switches to the newest build on `touch build/port/.udpfs_refresh` (deploy does this too).
+- When the PS2 is stuck, `deploy` can't restart it. RESET doesn't bring Neutrino back on this console: power-cycle it (hold the power button) and start Neutrino again from uLaunchELF. The server switches to the newest build on `touch build/port/.udpfs_refresh` (deploy does this too).
 
 ### Split Head, the display straight from VRAM, no EE copy of VRAM (2026-10-16/17)
 
@@ -1274,3 +1274,28 @@ All-cutscene profile (2026-10-17, PCSX2): two sweeps of the 52 Demo cutscenes, a
 map6_s02 effect grid (func_800D2364): each layer's first 284 points now go through `Gte_RtpGrid` (gte.c), a batched RTPS over a lattice that steps MAC1-3 by R·du and R·dv instead of multiplying; the last triple and two RTPS still use the GTE. Check build: 0 mismatches over 4.7M points. The function went 1,179 → 653 k-cycles a frame; busy time per frame −12% and −19% in map6_s02's two cutscenes.
 
 World mesh, remaining face loops: the fog, lit-and-fogged, lit-with-black-fog and flat loops of Gfx_MeshDrawPort now share `Port_FaceTest` and run in locals with the colour memos; the mesh check counts meshes per path (0 mismatches over 1.47M; the flat loop didn't run in the benchmarks). Mesh packets 617 → 478 k-cycles a frame in map2_s01, 481 → 399 in CafeCutscene; busy time −2% to −3%.
+
+Tried and reverted: func_8005AC50 (character mesh packets) in locals. Exact (packet, OT and scratch check: 0 mismatches over 1.2M meshes) but only ~2% of a 110-130k cycle loop. Also measured: the point light's vertex visits repeat a vertex 15% of the time, too little to share per-vertex work.
+
+Gameplay profile: the five title-screen attract demos, uncapped in benchmark builds (the demo's own timing, no vertical blank waits), now logged per demo (`attract demo N started/stopped`). In PCSX2 they average 89-243 fps, and the slowest second is 69 fps. The time splits as in the cutscenes, plus snow particles outdoors. The function profiler hung once its 1,024-slot table filled (prof_fn.c); now 8,192 slots and no endless probing.
+
+Snow particles in gameplay (attract demos 0-2): light counters show 170-200k cycles a frame for ~190 flakes (6-8% of busy time), of which ~70k is the flakes' RTPS. Batching those would save ~1.5% at most, so the snow is left as is. The counters stay (light-counter builds only).
+
+## Saving to the PS2 memory card (2026-10-17)
+
+The game's own save code (src/bodyprog/memcard.c) runs unchanged. Underneath it, the port now provides what the PS1 gave it:
+- **libcard and the BIOS file functions** (src/port/psx_card.c): `_card_info`, `_card_clear`, `_card_load` and the raw sector calls deliver the SwCARD/HwCARD events the game polls. `open`/`read`/`write`/`lseek`/`close`/`firstfile`/`nextfile`/`erase`/`rename`/`format` work on `buXY:` paths; memcard.c maps its calls to `Port_Bu*`, since the plain names belong to the PS2's C library.
+- **One PS1 card per PS1 slot,** a 128 KB image in the standard PS1 format (an emulator's .mcd), kept in EE memory. The game sees a 15-block PS1 card; its save file BASLUS-00707SILENT00 is one block of 11 save slots. Multitap slots report no card.
+- **On the PS2 card** (src/port/ps2/memcard_ps2.c, rom0:MCMAN/MCSERV with libmc): PS1 slot 1 is the card in port 1, slot 2 port 2. Everything is in one save folder, `BASLUS-00707SH1` (CARD.MCD, icon.sys, SH1.ICO, a flat icon made from the game's PS1 save icon), created at the first write. Writes go straight to the card. Card queries are asynchronous, because the game asks about every slot each frame: one query per slot at most every half second, its event delivered from TestEvent when it ends.
+- **Testing:** `pcsx2_run.py --memcards DIR` gives PCSX2 its own card folder for a run (PCSX2 creates unformatted cards). `SH1_MC_FORMAT=1` builds format an unformatted card in port 1 and leave a copy of the PS1 card at host:card1.mcd after every write. `SH1_MC_SELFTEST=1` runs the file functions once at the first card load. The self-test passes in PCSX2, and the host copy is a valid PS1 card image (checksums, directory, data).
+- Found on the way: the function profiler's table filled up in long runs and hung the game (prof_fn.c, fixed earlier today).
+- **Importing PS1 saves:** `SH1_MC_IMPORT=1` builds turn a PS1 card image at host:importN.mcd into the save when the PS2 card in port N has none. The two `.mcs` exports (BASLUS-00707SILENT00 and 01) were put into one image this way and imported into PCSX2's Mcd001.ps2, formatting the card first with `SH1_MC_FORMAT=1` (2026-10-18). A normal build then loads the image from that card.
+
+## Console test, 2026-10-18
+
+Build with the light counters, memory card saving, and everything since the last console test.
+- **The PS2 memory card works on hardware.** The card in port 1 was found, and the save folder pasted from a .psu (tools/port/mc_export_psu.py) loaded. The card in port 2 was found too, with no save folder yet.
+- **Stalls from tiny VRAM readbacks** (gpu_gs.c download_rect). Each new 16-colour CLUT entering the cache was read back from the GS as 16x1 pixels: 2 quadwords. On hardware, these reads never finished. The DMA takes the VIF1 FIFO's data in 8-quadword bursts, and a shorter transfer is never sent; PCSX2 doesn't model this. Each one waited ~1 s for the timeout, until the watchdog reported no frames for 10 s. Readbacks are now rounded out to 64-pixel boundaries (128-byte rows, whole bursts). There have been no stuck reads since, and Kaufmann's dumps are unchanged. This appeared once the EE copy of VRAM was gone (2026-10-17), since CLUTs are now read from the GS.
+- **Wrong digits** (save screen "Time: 2:0U:0T", "0F"; ammo "0>"). Gfx_StringDrawInt (text_draw.c and text_draw_jp.c) computed `(val / 10) >> 32`, the decomp's match for the PS1 compiler's multiply-high division. On a 32-bit value that's undefined, and the EE's GCC made the quotient 0, so each number came out as one "digit" holding its whole value. Now a plain division under SH_PORT.
+- **Loops cut short:** game code is now compiled with -fno-aggressive-loop-optimizations (ee_compile_check.sh). The decomp declares some arrays smaller than the PS1 code uses them; the loops run into the next variables, as on the PS1. GCC took the out-of-bounds access as proof that the loop stops earlier. The item screen's setup loop stopped after 7 of its 10 displayed items, so items 7-9 kept stale transforms; the lighting loop was cut the same way. The other flagged loops (GameFs_WeaponInfoUpdate's weapon animations, map6_s04, func_80066184) compiled unchanged. No such warnings remain.
+- **A hang after a remote restart** (ps2_ctl.py deploy) on the title screen. The vertical-blank count stopped, all threads were waiting, and the EE sat in the kernel. It didn't happen on a cold boot of the same build, so it's in the warm-restart path. To investigate if it recurs. Recovery: power-cycle and start Neutrino again; RESET doesn't bring Neutrino back on this console.

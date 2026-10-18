@@ -235,6 +235,11 @@ def main():
     # straight from VRAM, instead of a snapshot copy (src/port/ps2/gpu_gs.c): SH1_INTERLACE_FIELDS=1.
     # Broken in PCSX2 (2026-10-17); to test on hardware.
     dump += ["-DSH_PORT_INTERLACE_FIELDS"] if os.environ.get("SH1_INTERLACE_FIELDS") else []
+    # Test cards: an unformatted PS2 memory card in port 1 is formatted at the first card access
+    # (src/port/ps2/memcard_ps2.c; PCSX2 test runs with pcsx2_run.py --memcards): SH1_MC_FORMAT=1.
+    dump += ["-DSH_PORT_MC_FORMAT"] if os.environ.get("SH1_MC_FORMAT") else []
+    # A PS1 card image at host:importN.mcd becomes the save on a PS2 card without one (memcard_ps2.c): SH1_MC_IMPORT=1.
+    dump += ["-DSH_PORT_MC_IMPORT"] if os.environ.get("SH1_MC_IMPORT") else []
     # The Demo menu's cutscene list (src/port/demo_menu.c), found in the decomp's map code.
     run([sys.executable, "tools/port/cutscene_list.py", "--c", os.path.join(OUT, "demo_cutscenes.c")])
     for src in sorted(glob.glob("src/port/*.c")) + [os.path.join(OUT, "demo_cutscenes.c")]:
@@ -244,6 +249,8 @@ def main():
         solo = ["-DSH_PORT_XA_SOLO"] if os.environ.get("SH1_XA_SOLO") else []
         # Voiced text timer test (src/port/demo_menu.c): SH1_MSG_DEBUG=1.
         solo += ["-DSH_PORT_MSG_DEBUG"] if os.environ.get("SH1_MSG_DEBUG") else []
+        # Memory card self-test at the first card load (src/port/psx_card.c; test cards only): SH1_MC_SELFTEST=1.
+        solo += ["-DSH_PORT_MC_SELFTEST"] if os.environ.get("SH1_MC_SELFTEST") else []
         run([CC, "-c", *PORT_CFLAGS, *prof, *solo, *bench, src, "-o", obj])
         port_objs.append(obj)
     # PS2-side HAL code (src/port/ps2/): compiled against ps2sdk's headers, not the game's.
@@ -365,7 +372,7 @@ def main():
                     "-Wl,-zmax-page-size=128", "-Wl,--wrap=_write", "-Wl,--unresolved-symbols=report-all", "-o", elf,
                     combined, *port_objs, *extra, "-Wl,--start-group", recomp_lib, "-Wl,--end-group",
                     "configs/USA/relative_syms.ld", "configs/USA/port_relative_syms.ld", "configs/USA/port_syms.ld",
-                    "-L" + os.path.join(GSKIT, "lib"), "-lgskit", "-ldmakit", "-lcdvd", "-lpad", "-leedebug", "-lpatches"],
+                    "-L" + os.path.join(GSKIT, "lib"), "-lgskit", "-ldmakit", "-lcdvd", "-lpad", "-lmc", "-leedebug", "-lpatches"],
                    check=False)
 
     r = final_link([])

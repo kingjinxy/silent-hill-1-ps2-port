@@ -8,6 +8,31 @@
 #include "main/fsqueue.h"
 #include "bodyprog/memcard.h"
 
+#ifdef SH_PORT
+// Port: the PS1 BIOS file functions on "buXY:" paths (src/port/psx_card.c). The plain names belong to
+// the PS2's C library.
+long             Port_BuOpen(const char* path, unsigned long flags);
+long             Port_BuClose(long fd);
+long             Port_BuLseek(long fd, long offset, long whence);
+long             Port_BuRead(long fd, void* buf, long n);
+long             Port_BuWrite(long fd, void* buf, long n);
+struct DIRENTRY* Port_BuFirstFile(const char* pattern, struct DIRENTRY* de);
+struct DIRENTRY* Port_BuNextFile(struct DIRENTRY* de);
+long             Port_BuErase(const char* path);
+long             Port_BuRename(const char* oldPath, const char* newPath);
+long             Port_BuFormat(const char* path);
+#define open(path, flags)        Port_BuOpen((path), (flags))
+#define close(fd)                Port_BuClose(fd)
+#define lseek(fd, offset, whence) Port_BuLseek((fd), (offset), (whence))
+#define read(fd, buf, n)         Port_BuRead((fd), (buf), (n))
+#define write(fd, buf, n)        Port_BuWrite((fd), (buf), (n))
+#define firstfile(pattern, de)   Port_BuFirstFile((pattern), (de))
+#define nextfile(de)             Port_BuNextFile(de)
+#define erase(path)              Port_BuErase(path)
+#define rename(oldPath, newPath) Port_BuRename((oldPath), (newPath))
+#define format(path)             Port_BuFormat(path)
+#endif
+
 #ifndef PAD_HACK_IGNORE
     s32 __pad_bss_800B5484;
 #endif
