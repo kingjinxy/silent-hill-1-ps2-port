@@ -13,7 +13,8 @@ typedef struct
 extern const PortCutscene g_PortCutscenes[];  /* build/port/demo_cutscenes.c (tools/port/cutscene_list.py) */
 extern const int          g_PortCutsceneCount;
 
-int  Port_DemoMenuUpdate(void);   /* -2: nothing, -1: back, >= 0: cutscene chosen */
+#define PORT_DEMO_MOVIES (-3)
+int  Port_DemoMenuUpdate(void);   /* -2: nothing, -1: back, >= 0: cutscene chosen, PORT_DEMO_MOVIES: ALL MOVIES */
 void Port_DemoMenuDraw(void);
 int  Port_DemoChosen(void);       /* the cutscene being started or played (-1: none) */
 void Port_DemoBegin(int idx);
@@ -23,6 +24,8 @@ int  Port_DemoReturnToList(void); /* main menu: open the Demo list (once after a
 void Port_DemoRemote(int idx);    /* network request (agent_ps2.c "DM", tools/port/ps2_ctl.py demo) */
 int  Port_DemoRemoteTake(void);   /* main menu: the requested cutscene, or -1 */
 int  Port_DemoRemotePending(void);
+void Port_MoviesRemote(void);    /* every FMV in a row, from the main menu (host:demo.txt "movies") */
+void Port_MoviePlayAll(void);    /* src/screens/stream/stream.c: every FMV in a row */
 void Port_NewGameRemote(void);    /* network request (agent_ps2.c "NG", tools/port/ps2_ctl.py newgame) */
 int  Port_NewGameRemoteTake(void); /* main menu: 1 once after a request */
 int  Port_DemoAutoPress(int site, int waiting); /* Demo cutscenes: 1 when X should be pressed for the player */

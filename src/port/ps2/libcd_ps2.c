@@ -302,6 +302,21 @@ static void advance(int wait)
     }
 }
 
+int CdInit(void);
+
+/** HILL.'s place for the movie reader (movie_ps2.c): its first DVD sector, and the PS1 sector it
+ * starts at (PS1 sector n is raw sector n - ps1Start of the file). 0 when the disc isn't ready. */
+int Port_CdHill(unsigned int* lsn, unsigned int* ps1Start)
+{
+    if (!s_Ready && !CdInit())
+    {
+        return 0;
+    }
+    *lsn      = s_Hill.lsn;
+    *ps1Start = s_HillPs1Start;
+    return 1;
+}
+
 int CdInit(void)
 {
     if (s_Ready)

@@ -382,7 +382,7 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
         {
             s32 chosen = Port_DemoRemoteTake(); /* a request over the network (ps2_ctl.py demo) */
 
-            if (chosen < 0)
+            if (chosen == -1) /* nothing requested */
             {
                 chosen = Port_DemoMenuUpdate();
             }
@@ -390,6 +390,10 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
             if (chosen == -1)
             {
                 g_MainMenuState = MainMenuState_Main;
+            }
+            else if (chosen == PORT_DEMO_MOVIES)
+            {
+                Port_MoviePlayAll(); // every FMV, then back to the list
             }
             else if (chosen >= 0)
             {

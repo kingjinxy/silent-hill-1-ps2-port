@@ -240,6 +240,11 @@ def main():
     dump += ["-DSH_PORT_MC_FORMAT"] if os.environ.get("SH1_MC_FORMAT") else []
     # A PS1 card image at host:importN.mcd becomes the save on a PS2 card without one (memcard_ps2.c): SH1_MC_IMPORT=1.
     dump += ["-DSH_PORT_MC_IMPORT"] if os.environ.get("SH1_MC_IMPORT") else []
+    # Screen-read inventory (src/port/ps2/gpu_gs.c): every use of the screen's contents, logged once per case: SH1_SCREENREAD=1.
+    dump += ["-DSH_PORT_SCREENREAD"] if os.environ.get("SH1_SCREENREAD") else []
+    # 2x renderer prototype (src/port/ps2/gpu_gs.c, display_ps2.c): 320-wide progressive screens drawn
+    # at 640 x 2h and shown in 480i: SH1_HIRES=1.
+    dump += ["-DSH_PORT_HIRES"] if os.environ.get("SH1_HIRES") else []
     # The Demo menu's cutscene list (src/port/demo_menu.c), found in the decomp's map code.
     run([sys.executable, "tools/port/cutscene_list.py", "--c", os.path.join(OUT, "demo_cutscenes.c")])
     for src in sorted(glob.glob("src/port/*.c")) + [os.path.join(OUT, "demo_cutscenes.c")]:
@@ -251,6 +256,7 @@ def main():
         solo += ["-DSH_PORT_MSG_DEBUG"] if os.environ.get("SH1_MSG_DEBUG") else []
         # Memory card self-test at the first card load (src/port/psx_card.c; test cards only): SH1_MC_SELFTEST=1.
         solo += ["-DSH_PORT_MC_SELFTEST"] if os.environ.get("SH1_MC_SELFTEST") else []
+        solo += ["-DSH_PORT_SCREENREAD"] if os.environ.get("SH1_SCREENREAD") else []
         run([CC, "-c", *PORT_CFLAGS, *prof, *solo, *bench, src, "-o", obj])
         port_objs.append(obj)
     # PS2-side HAL code (src/port/ps2/): compiled against ps2sdk's headers, not the game's.

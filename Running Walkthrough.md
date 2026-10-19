@@ -1299,3 +1299,138 @@ Build with the light counters, memory card saving, and everything since the last
 - **Wrong digits** (save screen "Time: 2:0U:0T", "0F"; ammo "0>"). Gfx_StringDrawInt (text_draw.c and text_draw_jp.c) computed `(val / 10) >> 32`, the decomp's match for the PS1 compiler's multiply-high division. On a 32-bit value that's undefined, and the EE's GCC made the quotient 0, so each number came out as one "digit" holding its whole value. Now a plain division under SH_PORT.
 - **Loops cut short:** game code is now compiled with -fno-aggressive-loop-optimizations (ee_compile_check.sh). The decomp declares some arrays smaller than the PS1 code uses them; the loops run into the next variables, as on the PS1. GCC took the out-of-bounds access as proof that the loop stops earlier. The item screen's setup loop stopped after 7 of its 10 displayed items, so items 7-9 kept stale transforms; the lighting loop was cut the same way. The other flagged loops (GameFs_WeaponInfoUpdate's weapon animations, map6_s04, func_80066184) compiled unchanged. No such warnings remain.
 - **A hang after a remote restart** (ps2_ctl.py deploy) on the title screen. The vertical-blank count stopped, all threads were waiting, and the EE sat in the kernel. It didn't happen on a cold boot of the same build, so it's in the warm-restart path. To investigate if it recurs. Recovery: power-cycle and start Neutrino again; RESET doesn't bring Neutrino back on this console.
+  - Second time (2026-10-18, build 19:31:57): the same point. After the warm restart, the boot passes the Konami logo and the 640x448i mode switch and checks host:warp.txt. About 2 s later, at gameState 1 step 3, the log stops. Next would be the memory card notice and the intro movie, with another mode switch. Cold boots of the same builds are fine. Suspect: the full GS setup of a mode switch (SH1_MODESWITCH=0: GS reset + SetGsCrt) on the state the previous session left; to try SH1_MODESWITCH=1/2 after a warm restart.
+  - Third time (build 19:52:26): the same point (gameState 1 step 3, the Konami logo's fade). ps2_ctl.py ping: EE at pc 00081FE0 (kernel), game thread waiting on a semaphore, and **IOP DMA channel 10 (SIF0, IOP to EE) busy: CHCR 01000701**. The first hang's ping showed the same. So after a warm restart an IOP-to-EE transfer doesn't complete (sh1spu's status block, the log or sh1agent's mailbox), and the EE waits in the kernel. A better lead than the mode switch, which comes later. To investigate: which module sends it, and whether the EE's SIF0 receive (EE DMA channel 5) is set up again after the restart.
+
+## 2x rendering: what reads the screen (2026-10-18)
+
+Inventory build `SH1_SCREENREAD=1` (gpu_gs.c): logs every use of the screen's contents, with its texture page and CLUT or rectangle, the caller of LoadImage/StoreImage, and the frame. The screen means the last two display areas. Covered: textured polygons and sprites (by their UV range), copies from or into the screen, uploads into it and readbacks of it. Run over all 52 Demo-menu cutscenes, the five attract demos and the warp sweep (43/43 maps).
+
+Found (the source search covers maps the runs didn't reach):
+- **Feedback / motion-blur effects:** sprites or quads textured from the 15-bit pages over the frame buffers, drawing the other buffer back over the frame with blending. 16 sites in 13 functions:
+  - Screen_BackgroundMotionBlur (background_draw.c)
+  - sharedFunc_800CE688_1_s03 (unk_draw_m1s03.c: map1_s03, map5_s01, map6_s01, map6_s02)
+  - map1_s05 func_800D4D1C
+  - map4_s01 func_800D3420
+  - map4_s03 func_800D8FC0
+  - map6_s00 func_800EB11C
+  - map6_s02 func_800D2364 (x2)
+  - map6_s04 func_800E3EF4, func_800E558C
+  - map7_s00 func_800D1604 (x2)
+  - map7_s02 func_800DD2D4, func_800DE1FC (x2)
+  - map7_s03 func_800E3F30
+  - Seen in the runs: map6_s02's two cutscenes, map7_s02 func_800DE1FC, attract demo 0 (map2_s00) and map2_s01.
+- **Lens flare occlusion test** (water.c func_8008D78C / func_8008D850): an 8x8 copy from the screen at the light's projected position to (784 + 8 x buffer, 112), then a 2-pixel StoreImage2 next frame: the flare shows when they're white. The only CPU read of screen contents. Seen in many cutscenes: map1_s06, map4_s01, map5_s03, map6_s01, map7_s01/s02, the phone call.
+- **Nothing else:** no polygons textured from the screen, no uploads into it, no copies into it. (The log's StoreImage bands were the benchmark build's own frame dumps.)
+- **FMV movies:** don't use the screen in the port (movie_ps2.c shows them from their own 32-bit buffer).
+- **Menus and title (console, 2026-10-18,** inventory build with the game state logged per case). Visited: boot, the main menu, Load, the load status screen, Options, the inventory, the map, the save screen and gameplay.
+  - **None of the menus use the screen** (inventory, map, save, load, options, status).
+  - **The main load screen** draws the last frame back with Screen_BackgroundMotionBlur (already listed).
+  - **New kind: images uploaded into the frame-buffer area.** The Konami logo at boot, and the title screen's background, are 8-bit textures in VRAM at (64,0)-(192,512), inside the area of the frame buffers; the title's CLUT is at (224,15). The game uploads them there and draws sprites from them. They aren't screen contents. Under 2x they must keep sampling the 1:1 VRAM, so the renderer has to tell areas last drawn into (the 2x buffer holds them) from areas last uploaded (the 1:1 VRAM does).
+- **Not covered:** the credits (only at the end of the game).
+
+## 2x renderer prototype (2026-10-18)
+
+Build flag `SH1_HIRES=1` (src/port/ps2/gpu_gs.c, display_ps2.c); normal builds are unchanged.
+- **Hires buffer:** VRAM's frame-buffer area, x 0-319 and y 0-511, at twice the resolution: a 640x1024 PSMCT16 buffer at GS address 0, shared with the snapshot area and gsKit's frame buffer. To make room, the texture page cache drops from 37 to 27 slots (CACHE2_ADDR 0x140000).
+- **When it's on:** whenever the PS1 display is 320 wide and progressive (gameplay, cutscenes). The GS mode is then 640 x 2h interlaced (480i), scanning out the hires buffer at (2x, 2y).
+  - Mode changes turn it off before gsKit's setup (which clears the bottom of GS memory) and on again after.
+  - Movies turn it off: their buffer is in the same memory.
+- **Drawing:** primitives whose clip area lies inside the hires area are drawn into it, with coordinates and the clip area doubled. Clip areas that straddle its edge, such as the full-VRAM one at boot, are drawn at 1x and logged ("hires: clip area ... straddles").
+- **Feedback effects:** 15-bit pages over the area (motion blur, the load screen) are sampled from the hires buffer, with doubled UVs and the texture window adjusted.
+- **Keeping VRAM in step, lazily:**
+  - Uploads, fills and VRAM copies into the area are made in VRAM and scaled up into the hires buffer.
+  - Anything that reads the area scales the hires buffer down into VRAM first: texture page and CLUT cache misses, StoreImage, and copies from it (the lens-flare test).
+  - Scaling is a DECAL sprite, nearest pixel, with bit 15 kept. Uploaded images (the boot logo, the title, the font atlas at y 496-511 and its CLUT at (304,511)) survive the round trip exactly.
+- **Bug found while testing:** scaling down to the area's bottom edge put texel row 1024 in UV's 14-bit V field, which wrapped to 0. That overwrote the font atlas, and subtitles became cyan stripes. Fixed by scaling down in bands of 128 rows, with the texture based at each band's page row.
+- **PCSX2 results:**
+  - The Kaufmann cutscene (Demo 4) and the attract demos run at 2x with no crashes.
+  - Subtitles and the 3D scene are sharp, and the intro movie still plays.
+  - Frame rates in PCSX2 say nothing about the GS cost (4x the pixels); that needs the console.
+- **Prototype limits:**
+  - Lines stay 1 pixel wide.
+  - Vertices beyond about ±1024 1x pixels from the origin wrap in 2x (GS coordinate range).
+  - The output is 480i (480p is still tabled).
+  - The credits are untested.
+
+### 2x on hardware, first pass (2026-10-18)
+
+The Extra Options "Resolution" setting (x1/x2) switches the 2x renderer at run time:
+- **Where it lives:** options.c under SH_PORT, stored in config.unused_26, so it is saved with the options.
+- **Renderer side:** gpu_gs.c changes the GS memory layout between 37 and 27 page cache slots. display_ps2.c applies the option on the next frame.
+
+First console test: toggling worked, with full speed at 2x (60 frames per 60 vertical blanks, 33-56% idle). But the picture had errors, and text got worse with each toggle. Compared with DuckStation at 2x internal resolution (Vulkan renderer; tools/port/duckstation_cutscene.py --scale 2 --shots N screenshots through the F10 hotkey under XWayland), two bugs showed up:
+- **Room walls as flat bands** (in PCSX2 too, missed earlier). Doubling absolute coordinates overflowed the GS's 0-4095 vertex range for far-off vertices. Fixed: at 2x, vertices are sent relative to the PS1 drawing offset, doubled, with XYOFFSET moved to match (HR_X/HR_Y; E5 changes redo the state at 2x).
+- **Text corrupted by toggling** (hardware). Every toggle and every texture/CLUT cache miss near the frame buffers scaled the whole area down and up again, font atlas and CLUTs included. Fixed:
+  - Only 16x16 tiles actually drawn at 2x (the clip area at each state change) are scaled down.
+  - Uploaded data never makes the round trip.
+  - Scaling samples mid-texel (+1/8 texel up, +1/2 down), so it can't depend on the GS's sampling convention.
+
+### Debug Options page (2026-10-18)
+
+Port settings now have their own page, starting with Resolution (moved from Extra Options):
+- **Opening it:** Triangle on the main options screen.
+- **Look:** the same as Extra Options. It is that screen (same states, fades, drawing and controls) showing another list: options.c `s_PortDebugPage` and the `PORT_DEBUG_ENTRIES` table. A new entry needs a name, a highlight width, and its value and change cases (`Port_DebugEntryValue`, `Port_DebugEntryChange`).
+- **Button conflicts checked:**
+  - Triangle is one of the default Cancel buttons (all three default layouts: Triangle/Circle/Square). On the main options screen it now only opens Debug Options, and Cancel there is Circle/Square (OPTIONS_MAIN_CANCEL). This is temporary, until a better way in is chosen.
+  - Triangle is ignored while Start or Select is held (the soft reset combos: Select+Start, and Start+Triangle+Square).
+  - L1/L2/R1/R2 still open Extra Options.
+- **Tested in PCSX2:** title -> Option -> Triangle -> Resolution x1 -> x2 (the options screen itself goes 2x) -> Triangle back (stays in Options, cursor on Exit) -> R1 opens Extra Options without Resolution.
+
+## FMV playback: decoder prototype (2026-10-18)
+
+The movie player (src/screens/stream/stream.c) is skipped in the port (movie_main returns under SH_PORT). On the PS1 it streams with libcd (StSetRing/StSetStream/CdRead2), decodes each frame's bitstream on the CPU (DecDCTvlc) and with the MDEC (DecDCTin/DecDCTout, slices uploaded by a callback), and shows the result in 24-bit display mode. Plan: a port movie_main that reads the movie's raw sectors itself, decodes in C, shows frames from a 32-bit GS buffer, and starts the IOP's XA player (xa.c) on the movie's audio channel.
+
+The movies are in HILL. (raw 2336-byte sectors), found by their start sector in the file table (XA/C1_20670 the intro, C2_20670, M1_03500 the opening, M2-ME):
+- **Sectors:** video is file 0, channel 1 (submode 0x48); audio is file 1, channel 1 (submode 0x64, coding 0x01), about one sector in 10.
+- **Frames:** 9 video sectors each, at 320x208 and 15 fps.
+- **Video sector header:** 32 bytes: 0x0160, 0x8001, chunk, chunks, frame number, size, width, height.
+- **Frame header:** run-length code count, 0x3800, quantizer scale (1), version 2.
+
+Decoder (tools/port/str/strdec.c, plain C for the EE as well; tools/port/str/strdump.c tests it on the host):
+- **Bitstream:** version 2: 16-bit words read MSB-first; per macroblock Cr, Cb, Y1-Y4; per block a 10-bit DC, then MPEG-1 DCT coefficient codes with a 6+10-bit escape; macroblocks in 16-pixel columns.
+- **Reconstruction:** the PS1's default quantization table (MPEG's default intra matrix, DC 2), the inverse DCT (float for now), YCbCr to RGB.
+- **Result:** M1_03500 and C1_20670 decode without bitstream errors, and their frames look right (the jeep scene; the intro's sunset, Cybil, the night scene).
+- **Not yet checked:** a pixel comparison with DuckStation's MDEC output, which uses integer arithmetic with its own rounding.
+
+## FMV playback in the port (2026-10-18)
+
+movie_main (src/screens/stream/stream.c) now plays movies under SH_PORT with the game's own loop: Joy_Update, the skip button, the soft reset, the frame limit and the CD-audio volume calls. The PS2 side is src/port/ps2/movie_ps2.c:
+- **One reader, as the PS1's drive.** The IOP's XA reader (sh1spu xa.c) plays the movie's audio (file 1, channel 1) and forwards its video sectors (file 0) to the EE. Each sector's 2048 data bytes go by SIF DMA into a 256-sector ring, followed by a sector count (OP_XAFWD; the EE acknowledges with OP_XAACK every 16 sectors, and a full ring holds the reader up).
+  - A first version read the video itself from the EE. With the IOP's XA reader on the same drive, sceCdSync(1) reported the other reader's read as done: from the second chunk on, buffers held stale sectors (238 frames dropped) and the EE hung after 7 s.
+  - The reader waits while its audio queue is full, so the video arrives at the audio's pace.
+- **Frames:** assembled from the STR headers, decoded by src/port/ps2/strdec.c into 32-bit RGB, and shown from a PSMCT32 buffer in the snapshot area (gpu_gs.c GpuGs_MovieShow, display_ps2.c Display_PresentMovie). The display is 320x224 progressive, the 208-line picture centred. The PS1's VRAM and its 24-bit display mode aren't used, so movies don't need the 2x screen work either.
+- **Timing:** frame n is shown 4(n - 1) vertical blanks after the start: 10 sectors a frame at 150 sectors a second.
+- **Decoder speed:**
+  - The first version (bit-by-bit reads, a float matrix IDCT) managed ~10.5 fps.
+  - Now: a two-word bit window, an integer IDCT that skips empty columns and treats DC-only blocks as one value, and integer colour conversion. Output within 4 levels of the float version (49 dB PSNR), the same bits consumed.
+  - In PCSX2: ~9M EE cycles a frame (about half the 15 fps budget), a steady 15 fps, ~50% idle.
+- **Result (PCSX2):** the intro plays all 2060 frames with no dropped frames, then the main menu shows normally. Audio: the XA player decodes the soundtrack (levels in its diagnostics); not listened to yet.
+- **Still to do:** check the sound and lip sync by ear, test on hardware, compare the picture with DuckStation's MDEC output, and play the in-game movies (M1 the opening, M2-ME).
+
+## FMV decoder: bit-exact with DuckStation (2026-10-18)
+
+tools/port/duckstation_movie.py compares the decoder with the PS1 game in DuckStation:
+- **DuckStation side:** tools/port/gdb/movie_ps1.py breaks at PutDispEnv called from the stream overlay's movie loop. The frame on screen there is frame_cnt - 1, since strNextVlc has already fetched the next frame. It reads the whole VRAM through the game's StoreImage, as capture_ps1.py does.
+- **Port side:** the same frames from tools/port/str/strdump on the host. Per-channel statistics and side-by-side PNGs with a difference image go to build/port/cap.
+- **Setup:** DuckStation runs on its software renderer, muted. It played the regular intro, C1_20670 at sector 133127; the port in PCSX2 had played C2, because the memory-card settings differ.
+
+Progress, intro frames 100/300/600/900, share of channel values identical:
+- First version (ideal cosines, float colour): 45-59%, max difference 8-10 of 255.
+- With the MDEC's IDCT matrix as libpress uploads it, 11-bit coefficient saturation and Mednafen's colour rounding: 61-74%.
+- With the arithmetic DuckStation models: **100%**. Read from its source (src/core/mdec.cpp, DecodeRLE_New/IDCT_New/YUVToRGB_New), reimplemented here, not copied:
+  - Dequantization keeps 4 extra bits: DC (v * qt0) << 4, AC (floor(v * q * qt / 8)) << 4, a half step toward zero, saturated to -0x4000..0x3FFF.
+  - Each IDCT pass rounds with (sum + 0x20000) >> 18, floor, and saturates to 16 bits.
+  - The result wraps to 9 bits, then is clamped to -128..127.
+- **Data:** the libpress tables in the stream overlay match what strdec.c uses: the quantization table (MDEC command 0x40000001, luma = chroma = MPEG's default, DC 2) and the IDCT matrix (0x60000000, cos x 32768).
+- **Cost:** the exact arithmetic first cost ~17M EE cycles a frame in PCSX2, close to the 19.6M budget at 15 fps.
+  - Now each pass's sum is two 32-bit halves (each fits: |coefficient| <= 16384, |matrix| <= 32767), combined exactly with an average, as DuckStation does. Zero columns and rows are skipped, and a DC-only block is one value.
+  - ~11.5M cycles a frame (59% of the budget), 15 fps steady, ~35% idle.
+
+## All FMVs in a row (2026-10-18)
+
+- **The movies:** 21 of the 30 XA files: C1/C2 (intros), M1-ME (in-game), Z1, Z3, Z4, ZC and ZZ, file table entries 2053-2073 (C1_20670 to ZZ_14239). The 9 before them are voice audio only.
+- **Playing them all:** the Demo list's first row, ALL MOVIES, plays them one after another through the game's own open_main (stream.c Port_MoviePlayAll). Skip ends the current movie; the soft reset combo ends the run and returns to the list. The run marks the game state as the intro movie's while playing, because the game ignores the soft reset combo on the main menu.
+- **Test runs:** a `movies` line in host:demo.txt starts the same run once the main menu is up, with a log line per movie ("movie test: N of 21 ... played to frame F of F").
+- **First attempt:** title.c's Demo list code only read the menu when no remote request was pending, tested as `chosen < 0`, which also swallowed the new request value (-3).
+- **PCSX2:** all 21 play to their frame limits with no dropped frames.

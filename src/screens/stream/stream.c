@@ -150,6 +150,37 @@ void open_main(s32 file_idx, s16 num_frames) // 0x801E2AA4
     GsSwapDispBuff();
 }
 
+#ifdef SH_PORT
+// Port (the Demo list's ALL MOVIES, host:demo.txt "movies"): every FMV one after another, as the game
+// plays them (open_main, its frame limit). The XA files from C1_20670 to ZZ_14239 are the movies (the
+// ones before are voice audio). Skip ends the current movie; the soft reset combo ends the run (back
+// to the Demo list).
+void Port_MoviePlayAll(void)
+{
+    s32 idx;
+    s32 state = g_GameWork.gameState;
+
+    printf("movie test: %d movies\n", FILE_XA_ZZ_14239 - FILE_XA_C1_20670 + 1);
+    for (idx = FILE_XA_C1_20670; idx <= FILE_XA_ZZ_14239; idx++)
+    {
+        printf("movie test: %d of %d (file %d, %d blocks)\n", idx - FILE_XA_C1_20670 + 1,
+               FILE_XA_ZZ_14239 - FILE_XA_C1_20670 + 1, idx, g_FileTable[idx].blockCount);
+        // As the intro's state while playing: on the main menu the game ignores the soft reset combo.
+        g_GameWork.gameState = GameState_MovieIntro;
+        open_main(idx, 0);
+        printf("movie test: played to frame %d of %d\n", frame_cnt, max_frame);
+        if (MainLoop_ShouldWarmReset() > ResetType_None)
+        {
+            g_GameWork.gameState = state;
+            printf("movie test: stopped by a soft reset\n");
+            return;
+        }
+        g_GameWork.gameState = state;
+    }
+    printf("movie test: done\n");
+}
+#endif
+
 void movie_main(char* file_name, s32 f_size, s32 sector) // 0x801E2B9C
 {
     #define SEARCH_COUNT_MAX 10000
@@ -162,8 +193,47 @@ void movie_main(char* file_name, s32 f_size, s32 sector) // 0x801E2B9C
     s32     prev_frame_no;
 
 #ifdef SH_PORT
-    // TODO: CD streaming and MDEC aren't ported yet; skip the movie, as when its file isn't found.
-    return;
+    {
+        // Port: the movie is read, decoded and shown by src/port/ps2/movie_ps2.c (raw sectors from
+        // HILL., the frame decoder strdec.c, a 32-bit GS buffer instead of the PS1's 24-bit display
+        // mode; the audio through the IOP's XA player). The loop keeps the game's controls: the skip
+        // button, the soft reset and the frame limit. These movies are 10 sectors a frame (9 video,
+        // 1 audio).
+        extern int  Port_MovieOpen(s32 sector, s32 sectors);
+        extern s32  Port_MovieTick(void);
+        extern void Port_MovieClose(void);
+        s32         shown;
+
+        (void)file_name;
+        frame_cnt = 0;
+        max_frame = f_size;
+        if (sector == 0 || !Port_MovieOpen(sector, (f_size + 2) * 10))
+        {
+            return;
+        }
+        SsSetSerialAttr(0, 0, 1);
+        SsSetSerialVol(0, 80, 80);
+        do
+        {
+            Joy_Update();
+            shown = Port_MovieTick();
+            if (shown < 0)
+            {
+                break;
+            }
+            frame_cnt = shown;
+            if (frame_cnt >= max_frame)
+            {
+                break;
+            }
+            VSync(SyncMode_Wait);
+        }
+        while (!(g_Controller0->buttonFlags.clicked & g_GameWorkPtr->config.controllerConfig.skip) &&
+               MainLoop_ShouldWarmReset() <= ResetType_None);
+        SsSetSerialVol(0, 0, 0);
+        Port_MovieClose();
+        return;
+    }
 #endif
 
     frame_cnt = 0;

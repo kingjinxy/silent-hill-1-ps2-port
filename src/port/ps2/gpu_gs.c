@@ -49,6 +49,28 @@ typedef unsigned long long u64x;
 #define CACHE_SLOT 0x10000
 #define CACHE_SLOTS 37 /* 15 at CACHE_ADDR, 22 more from CACHE2_ADDR */
 #define CACHE2_ADDR 0xA0000 /* above SNAP_ADDR's 640x480x2 = 0x96000 */
+/* With the 2x option (GpuGs_HiresLayout), the hires buffer takes the bottom 1.25 MiB: 27 slots, the
+ * 12 others from CACHE2_HR_ADDR. */
+#define CACHE_SLOTS_HR 27
+#define CACHE2_HR_ADDR 0x140000 /* above HIRES_ADDR's 640x1024x2 */
+/* 2x renderer (the Extra Options "Resolution" setting; SH1_HIRES=1 forces it on): the PS1's frame
+ * buffer area, VRAM x 0-319, y 0-511, drawn at twice the resolution into a 640x1024 PSMCT16 buffer
+ * (shared with SNAP_ADDR and gsKit's frame buffer, neither used while it is on). On while the option
+ * is and the display is 320 wide and progressive (gameplay, cutscenes; GpuGs_Hires):
+ * - primitives drawn with a clip area inside the frame buffer area go to the hires buffer, with
+ *   doubled coordinates (s_Sh);
+ * - 15-bit texture pages over the area (feedback effects: motion blur, load screen) sample it with
+ *   doubled UVs (Prim.hr);
+ * - uploads, fills and VRAM copies into the area are made in VRAM and scaled up into it; reads of
+ *   the area (readbacks for the texture/CLUT caches, StoreImage, copies from it) scale it down into
+ *   VRAM first, so VRAM is only brought up to date when something reads it;
+ * - the display scans the hires buffer out in 480i (display_ps2.c). */
+#define HIRES_ADDR 0
+#define HIRES_FBP  (HIRES_ADDR / 8192)
+#define HIRES_TBP  (HIRES_ADDR / 256)
+#define HIRES_BW   10
+#define HR_W       320 /* the area mirrored, in VRAM pixels */
+#define HR_H       512
 /* Snapshot of single-buffered interlaced screens (GpuGs_DisplayShow), 640 wide, 16-bit; shared with
  * gsKit's frame buffer, which only its setup uses. */
 #define SNAP_ADDR  0
@@ -285,6 +307,22 @@ static u32 s_StateGen = 1;
 static s32 s_OffX, s_OffY;
 static u32 s_SetMask, s_CheckMask;
 
+static s32 s_Hires;    /* the hires buffer is on */
+static s32 s_HrLayout; /* GS memory laid out for it (the option is on; GpuGs_HiresLayout) */
+static u32 s_Sh;       /* 1: primitives are drawn into the hires buffer (coordinates doubled) */
+#define HR_SH s_Sh
+/* GS vertex coordinate (12.4, before << 4) of a PS1 one. At 2x, relative to the drawing offset (E5)
+ * and doubled, with XYOFFSET moved to match (state_other): the PS1's vertex range is +-1024 around
+ * the offset, which doubled still fits the GS's 0-4095 (absolute coordinates doubled didn't: room
+ * walls with far-off vertices wrapped into flat bands). */
+#define HR_X(x) (s_Sh ? (((x) - s_OffX) << 1) + 2048 : (x) + 2048)
+#define HR_Y(y) (s_Sh ? (((y) - s_OffY) << 1) + 2048 : (y) + 2048)
+/** Whether a 15-bit page `tpage` is sampled from the hires buffer. */
+#define HR_TEX(depth, tpage) (s_Hires && (depth) >= 2 && ((tpage) & 15) * 64 < HR_W)
+static void hr_target(void);
+static void hr_blit(int up, s32 x, s32 y, s32 w, s32 h);
+static void hr_mark(s32 x0, s32 y0, s32 x1, s32 y1);
+
 typedef struct
 {
     s32 x, y;
@@ -296,6 +334,7 @@ typedef struct
 {
     u32 textured, raw, semi, gouraud, dither;
     u32 tpage, clut, semiMode;
+    u32 hr; /* a 15-bit page sampled from the hires buffer (UVs doubled) */
 } Prim;
 
 static s32 sext11(u32 v)
@@ -314,11 +353,13 @@ typedef struct
 } Slot;
 
 static Slot s_Slots[CACHE_SLOTS];
+static s32  s_CacheSlots = CACHE_SLOTS; /* in use: CACHE_SLOTS_HR with the 2x layout */
 
 /** GS block address of page cache slot i. */
 static u32 slot_tbp(s32 i)
 {
-    return (u32)(i < 15 ? CACHE_ADDR + i * CACHE_SLOT : CACHE2_ADDR + (i - 15) * CACHE_SLOT) / 256;
+    return (u32)(i < 15 ? CACHE_ADDR + i * CACHE_SLOT
+                        : (s_HrLayout ? CACHE2_HR_ADDR : CACHE2_ADDR) + (i - 15) * CACHE_SLOT) / 256;
 }
 
 typedef struct
@@ -356,7 +397,7 @@ static void cache_invalidate(s32 x, s32 y, s32 w, s32 h)
 {
     s32 i;
     s_Epoch++;
-    for (i = 0; i < CACHE_SLOTS; i++)
+    for (i = 0; i < s_CacheSlots; i++)
     {
         s32 px, py, pw;
         if (s_Slots[i].key < 0)
@@ -441,7 +482,7 @@ static void cache_fill(s32 x, s32 y, s32 w, s32 h, u16 c)
         return;
     }
 #endif
-    for (i = 0; i < CACHE_SLOTS; i++)
+    for (i = 0; i < s_CacheSlots; i++)
     {
         s32 px, py, pw, x0, x1, y0, y1, depth, scale;
         if (s_Slots[i].key < 0)
@@ -520,7 +561,7 @@ static u32 cache_get(u32 depth, u32 tpage)
         return slot_tbp(i);
     }
     /* A free slot, else the least recently used one. */
-    for (i = 0; i < CACHE_SLOTS; i++)
+    for (i = 0; i < s_CacheSlots; i++)
     {
         if (s_Slots[i].key < 0)
         {
@@ -622,7 +663,7 @@ static void init(void)
         return;
     }
     Display_EnsureInit();
-    for (i = 0; i < CACHE_SLOTS; i++)
+    for (i = 0; i < s_CacheSlots; i++)
     {
         s_Slots[i].key = -1;
     }
@@ -663,12 +704,18 @@ static u64x dimx(void)
 static void base_state(void)
 {
     /* Unchanged since the last call unless something else rewrote GS state (s_Epoch). */
-    static u32 doneEpoch = ~0u;
-    if (doneEpoch == s_Epoch && s_RegValid[R_FRAME])
+    static u32 doneEpoch = ~0u, doneSh;
+    if (doneEpoch == s_Epoch && doneSh == HR_SH && s_RegValid[R_FRAME])
     {
         return;
     }
     doneEpoch = s_Epoch;
+    doneSh    = HR_SH;
+    if (s_Sh)
+    {
+        set(R_FRAME, (u64x)HIRES_FBP | ((u64x)HIRES_BW << 16) | ((u64x)PSM_CT16 << 24));
+    }
+    else
     set(R_FRAME, (u64x)VRAM_FBP | ((u64x)VRAM_BW << 16) | ((u64x)PSM_CT16 << 24));
     set(R_ZBUF, (u64x)(CACHE_ADDR / 8192) | (1ULL << 32)); /* Z writes masked, never tested */
     set(R_XYOFFSET, (u64x)(2048 << 4) | ((u64x)(2048 << 4) << 32));
@@ -736,7 +783,8 @@ static u64x prim_state(const Prim* p)
     SCANMSK_CHECK();
 
     /* The drawing settings are covered by s_StateGen. */
-    key = p->textured | (p->raw << 1) | (p->semi << 2) | (p->semiMode << 3) | (p->gouraud << 5) | (p->dither << 6);
+    key = p->textured | (p->raw << 1) | (p->semi << 2) | (p->semiMode << 3) | (p->gouraud << 5) | (p->dither << 6) |
+          (p->hr << 7);
     if (memoEpoch != s_Epoch || memoGen != s_StateGen || memoKey != key)
     {
         LP_BEGIN(LP_STATE_OTHER)
@@ -763,6 +811,15 @@ static u64x prim_state(const Prim* p)
             texTpage = p->tpage & 0x19F;
             texClut  = p->clut & 0xFFFF;
             texRaw   = p->raw;
+            if (memoEpoch != s_Epoch)
+            {
+                /* A cache miss read the hires area: its scale-down (hr_blit) rewrote the frame buffer,
+                 * scissor and test registers. */
+                memoPrim  = state_other(p);
+                memoEpoch = s_Epoch;
+                tex_state(p); /* state_other leaves TEX0 alone; this re-sets it (CLAMP included above) */
+                texEpoch = s_Epoch;
+            }
         }
     }
     return memoPrim;
@@ -800,6 +857,13 @@ static void tex_state(const Prim* p)
         e->tex0 = (u64x)(VRAM_TBP + ((py / 64) * VRAM_BW + px / 64) * 32) | ((u64x)VRAM_BW << 14) |
                   ((u64x)PSM_CT16 << 20);
         e->tex0 |= (8ULL << 26) | (8ULL << 30) | (1ULL << 34) | ((u64x)(p->raw ? 1 : 0) << 35); /* 256x256, TCC, TFX */
+        if (p->hr)
+        {
+            /* The page's 512x512 in the hires buffer (pages there are 64 pixels wide, as in VRAM). */
+            e->tex0 = (u64x)(HIRES_TBP + ((py * 2 / 64) * HIRES_BW + px * 2 / 64) * 32) | ((u64x)HIRES_BW << 14) |
+                      ((u64x)PSM_CT16 << 20) | (9ULL << 26) | (9ULL << 30) | (1ULL << 34) |
+                      ((u64x)(p->raw ? 1 : 0) << 35);
+        }
         e->key = key;
         e->gen = s_TexGen;
     }
@@ -843,13 +907,27 @@ static u64x state_other(const Prim* p)
     u32  test = (1 << 16) | (1 << 17);            /* ZTE on, ZTST always */
 
     base_state();
+    if (s_Sh)
+    {
+        scissor(s_AreaX1 * 2, s_AreaY1 * 2, s_AreaX2 * 2 + 1, s_AreaY2 * 2 + 1);
+        set(R_XYOFFSET, (u64x)(((2048 - 2 * s_OffX) << 4) & 0xFFFF) | ((u64x)(((2048 - 2 * s_OffY) << 4) & 0xFFFF) << 32));
+        hr_mark(s_AreaX1, s_AreaY1, s_AreaX2, s_AreaY2); /* VRAM's copy of the clip area is stale from here */
+    }
+    else
     scissor(s_AreaX1, s_AreaY1, s_AreaX2, s_AreaY2);
 
     if (p->textured)
     {
+        /* Texture window: REGION_REPEAT, (u & mask) | offset; for hires pages in doubled texels,
+         * (2u + f & 2 mask + 1) | 2 offset. */
+        u32 mu = 0xFF & ~(s_TwMaskX * 8), fu = (s_TwOffX & s_TwMaskX) * 8;
+        u32 mv = 0xFF & ~(s_TwMaskY * 8), fv = (s_TwOffY & s_TwMaskY) * 8;
+        if (p->hr)
+        {
+            mu = mu * 2 + 1, fu *= 2, mv = mv * 2 + 1, fv *= 2;
+        }
         prim |= 1 << 4; /* TME */
-        set(R_CLAMP, 3 | (3 << 2) | ((u64x)(0xFF & ~(s_TwMaskX * 8)) << 4) | ((u64x)((s_TwOffX & s_TwMaskX) * 8) << 14) |
-                         ((u64x)(0xFF & ~(s_TwMaskY * 8)) << 24) | ((u64x)((s_TwOffY & s_TwMaskY) * 8) << 34));
+        set(R_CLAMP, 3 | (3 << 2) | ((u64x)mu << 4) | ((u64x)fu << 14) | ((u64x)mv << 24) | ((u64x)fv << 34));
         test |= 1 | (7 << 1); /* alpha test: drop alpha 0 (texel 0x0000) */
     }
     if (s_CheckMask)
@@ -918,7 +996,7 @@ static void emit(const Prim* p, u64x prim, const Vtx* const* v, int n)
         {
             *q++ = (u64x)(v[i]->u << 4) | ((u64x)(v[i]->v << 4) << 16);
         }
-        *q++ = (u64x)((v[i]->x + 2048) << 4 & 0xFFFF) | ((u64x)((v[i]->y + 2048) << 4 & 0xFFFF) << 16);
+        *q++ = (u64x)(HR_X(v[i]->x) << 4 & 0xFFFF) | ((u64x)(HR_Y(v[i]->y) << 4 & 0xFFFF) << 16);
     }
 }
 
@@ -1052,6 +1130,126 @@ static inline int quad_fits(const s32* x, const s32* y)
     return x1 - x0 <= 1023 && y1 - y0 <= 511;
 }
 
+#ifdef SH_PORT_SCREENREAD
+/* Screen-read inventory (SH1_SCREENREAD=1): every use of the screen's contents, logged once per
+ * distinct case with a count, to find the code that a 2x render buffer would have to handle: textured
+ * primitives whose texels come from a screen area (their UV range, not the whole page), VRAM copies
+ * from or into one, and LoadImage/StoreImage on one (with the game's caller). Screen areas: the last
+ * two display areas (GpuGs_DisplayShow), i.e. the double-buffered frames. */
+unsigned int g_PortGpuCaller; /* libgpu_port.c: the game's caller of LoadImage/StoreImage */
+unsigned int g_PortSrContext; /* libgpu_port.c: gameState << 16 | gameStateSteps[0], at each DrawOTag */
+static s32   s_ScrRect[2][4];
+static int   s_ScrCount;
+static u32   s_SrFrame;
+
+typedef struct
+{
+    u32 kind, a, b, c, count;
+} SrKey;
+
+static SrKey s_SrKeys[1024];
+static int   s_SrN;
+static const char* const SR_KIND[] = { "", "polygon texels", "sprite texels", "copy from screen", "copy into screen",
+                                       "LoadImage into screen", "StoreImage of screen" };
+
+static int sr_hit(s32 x0, s32 y0, s32 x1, s32 y1)
+{
+    int i;
+    for (i = 0; i < s_ScrCount; i++)
+    {
+        const s32* r = s_ScrRect[i];
+        if (x0 < r[0] + r[2] && r[0] < x1 && y0 < r[1] + r[3] && r[1] < y1)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void sr_note(u32 kind, u32 a, u32 b, u32 c, s32 x0, s32 y0, s32 x1, s32 y1)
+{
+    int i;
+    for (i = 0; i < s_SrN; i++)
+    {
+        SrKey* k = &s_SrKeys[i];
+        if (k->kind == kind && k->a == a && k->b == b && k->c == c)
+        {
+            k->count++;
+            return;
+        }
+    }
+    if (s_SrN >= (int)(sizeof(s_SrKeys) / sizeof(s_SrKeys[0])))
+    {
+        static int full;
+        if (!full++)
+        {
+            printf("screenread: case table full (%d cases); later new cases aren't logged\n", s_SrN);
+        }
+        return;
+    }
+    {
+        SrKey* k = &s_SrKeys[s_SrN++];
+        k->kind  = kind;
+        k->a     = a;
+        k->b     = b;
+        k->c     = c;
+        k->count = 1;
+    }
+    printf("screenread: %s: %08x %08x %08x, VRAM (%d,%d)-(%d,%d); frame %u; screen %d,%d %dx%d; game state %u step %u\n",
+           SR_KIND[kind], a, b, c, x0, y0, x1, y1, s_SrFrame, s_ScrRect[0][0], s_ScrRect[0][1], s_ScrRect[0][2],
+           s_ScrRect[0][3], g_PortSrContext >> 16, g_PortSrContext & 0xFFFF);
+}
+
+/** A textured primitive's texel rectangle: page `tpage`, UVs u0-u1, v0-v1 (inclusive). */
+static void sr_texels(u32 kind, u32 cmd, u32 tpage, u32 clut, u32 u0, u32 u1, u32 v0, u32 v1)
+{
+    u32 depth = (tpage >> 7) & 3, div = depth == 0 ? 4 : depth == 1 ? 2 : 1;
+    s32 px = (s32)(tpage & 15) * 64, py = (s32)((tpage >> 4) & 1) * 256;
+    s32 x0 = px + (s32)(u0 / div), x1 = px + (s32)(u1 / div) + 1, y0 = py + (s32)v0, y1 = py + (s32)v1 + 1;
+    if (sr_hit(x0, y0, x1, y1))
+    {
+        sr_note(kind, cmd, tpage & 0x1FF, clut, x0, y0, x1, y1);
+    }
+}
+
+static void sr_screen(s32 x, s32 y, s32 w, s32 h)
+{
+    s_SrFrame++;
+    if (s_ScrCount && s_ScrRect[0][0] == x && s_ScrRect[0][1] == y && s_ScrRect[0][2] == w && s_ScrRect[0][3] == h)
+    {
+        return;
+    }
+    s_ScrRect[1][0] = s_ScrRect[0][0];
+    s_ScrRect[1][1] = s_ScrRect[0][1];
+    s_ScrRect[1][2] = s_ScrRect[0][2];
+    s_ScrRect[1][3] = s_ScrRect[0][3];
+    s_ScrRect[0][0] = x;
+    s_ScrRect[0][1] = y;
+    s_ScrRect[0][2] = w;
+    s_ScrRect[0][3] = h;
+    if (s_ScrCount < 2)
+    {
+        s_ScrCount++;
+    }
+}
+
+/** Every 30 s of frames: the cases seen so far and how often. */
+static void sr_summary(void)
+{
+    int i;
+    if ((s_SrFrame % 1800) != 0 || !s_SrN)
+    {
+        return;
+    }
+    printf("screenread summary (frame %u): %d cases\n", s_SrFrame, s_SrN);
+    for (i = 0; i < s_SrN; i++)
+    {
+        SrKey* k = &s_SrKeys[i];
+        printf("screenread summary:   %-22s %08x %08x %08x  x%u\n", SR_KIND[k->kind], k->a, k->b, k->c, k->count);
+    }
+}
+#endif
+
 /** A GP0 polygon; `under`: a fog pair's underlay to draw first (GpuGs_Commands), or NULL. `shape`:
  * the command's gouraud, quad and textured bits (cmd & 0x1C), a constant in each copy (polygon()), so
  * the vertex loops unroll and the per-vertex branches go. */
@@ -1067,6 +1265,9 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
     s32  x[4], y[4], i, k = 0;
     u64x rgbaq[4], uv[4], xyz[4], prim, a;
     Prim p;
+#ifdef SH_PORT_SCREENREAD
+    u32 srU0 = 255, srU1 = 0, srV0 = 255, srV1 = 0;
+#endif
     LP_BEGIN(LP_POLY_PARSE)
 
     if (n < words)
@@ -1083,6 +1284,12 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
         if (textured)
         {
             u32 t = w[k++];
+#ifdef SH_PORT_SCREENREAD
+            srU0 = (t & 0xFF) < srU0 ? (t & 0xFF) : srU0;
+            srU1 = (t & 0xFF) > srU1 ? (t & 0xFF) : srU1;
+            srV0 = ((t >> 8) & 0xFF) < srV0 ? ((t >> 8) & 0xFF) : srV0;
+            srV1 = ((t >> 8) & 0xFF) > srV1 ? ((t >> 8) & 0xFF) : srV1;
+#endif
             uv[i] = (u64x)((t & 0xFF) << 4) | ((u64x)(((t >> 8) & 0xFF) << 4) << 16);
             if (i == 0) clut = t >> 16;
             if (i == 1) tpage = (s_TexPage & ~0x1FFu) | ((t >> 16) & 0x1FF);
@@ -1099,6 +1306,20 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
         s_TexPage = (tpage & ~0x400u) | (s_TexPage & 0x400); /* textured polygons also set the current texture page (DFE stays: E1 only) */
     }
     p.semiMode = (tpage >> 5) & 3;
+    p.hr       = textured && HR_TEX((tpage >> 7) & 3, tpage);
+    if (p.hr)
+    {
+        for (i = 0; i < nv; i++)
+        {
+            uv[i] <<= 1; /* both fields: u fits its 14 bits doubled */
+        }
+    }
+#ifdef SH_PORT_SCREENREAD
+    if (textured)
+    {
+        sr_texels(1, cmd, tpage, clut, srU0, srU1, srV0, srV1);
+    }
+#endif
 #ifdef GS_FOG_PAIR_STATS
     {
 
@@ -1146,7 +1367,7 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
         u64x* o;
         for (i = 0; i < 4; i++)
         {
-            xyz[i] = (u64x)((x[i] + 2048) << 4 & 0xFFFF) | ((u64x)((y[i] + 2048) << 4 & 0xFFFF) << 16);
+            xyz[i] = (u64x)(HR_X(x[i]) << 4 & 0xFFFF) | ((u64x)(HR_Y(y[i]) << 4 & 0xFFFF) << 16);
         }
         if (under)
         {
@@ -1185,7 +1406,7 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
     for (i = 0; i < nv; i++)
     {
         rgbaq[i] = (u64x)(rgb[i] & colorMask) | a;
-        xyz[i]   = (u64x)((x[i] + 2048) << 4 & 0xFFFF) | ((u64x)((y[i] + 2048) << 4 & 0xFFFF) << 16);
+        xyz[i]   = (u64x)(HR_X(x[i]) << 4 & 0xFFFF) | ((u64x)(HR_Y(y[i]) << 4 & 0xFFFF) << 16);
     }
     if (under)
     {
@@ -1245,6 +1466,7 @@ static u32 rectangle(const u32* w, s32 n)
     p.semiMode = (s_TexPage >> 5) & 3;
     p.dither   = 0;
     p.clut     = 0;
+    p.hr       = 0;
 
     read_rgb(w[k++], &a);
     if (k >= n) return n;
@@ -1286,6 +1508,17 @@ static u32 rectangle(const u32* w, s32 n)
     b.y = a.y + rh;
     b.u = a.u + rw;
     b.v = a.v + rh;
+    p.hr = p.textured && HR_TEX((p.tpage >> 7) & 3, p.tpage);
+    if (p.hr)
+    {
+        a.u *= 2, a.v *= 2, b.u *= 2, b.v *= 2;
+    }
+#ifdef SH_PORT_SCREENREAD
+    if (p.textured)
+    {
+        sr_texels(2, cmd, p.tpage, p.clut, a.u, (a.u + rw - 1) & 0xFF, a.v, (a.v + rh - 1) & 0xFF);
+    }
+#endif
     prim = prim_state(&p);
     {
         const Vtx* v[2];
@@ -1312,6 +1545,7 @@ static u32 lines(const u32* w, s32 n)
     p.dither   = (s_TexPage >> 9) & 1;
     p.tpage    = s_TexPage;
     p.clut     = 0;
+    p.hr       = 0;
     prim       = prim_state(&p);
 
     read_rgb(w[k++], &prev);
@@ -1359,6 +1593,32 @@ static void fill_rect(s32 x, s32 y, s32 w, s32 h, u32 rgb)
     {
         return;
     }
+    u32 sh = s_Sh; /* restored at the end */
+    if (s_Hires && x < HR_W && y < HR_H)
+    {
+        /* The hires buffer's part, then VRAM's (base_state's FRAME follows s_Sh). */
+        s32 x1 = x + w < HR_W ? x + w : HR_W, y1 = y + h < HR_H ? y + h : HR_H;
+        s_Sh   = 1;
+        base_state();
+        scissor(0, 0, HR_W * 2 - 1, HR_H * 2 - 1);
+        set(R_TEST, (1 << 16) | (1 << 17));
+        set(R_FBA, 0);
+        set(R_DTHE, 0);
+        SCANMSK_CHECK();
+        read_rgb(rgb, &a);
+        a.x = x, a.y = y, a.u = a.v = 0;
+        b   = a;
+        b.x = x1, b.y = y1;
+        {
+            /* VRAM coordinates: no drawing offset (HR_X), XYOFFSET as base_state set it. */
+            const Vtx* v[2] = { &a, &b };
+            s32        ox = s_OffX, oy = s_OffY;
+            s_OffX = s_OffY = 0;
+            emit(&p, 6 | (1 << 8), v, 2);
+            s_OffX = ox, s_OffY = oy;
+        }
+    }
+    s_Sh = 0;
     base_state();
     scissor(0, 0, VRAM_W - 1, VRAM_H - 1);
     set(R_TEST, (1 << 16) | (1 << 17));
@@ -1379,6 +1639,8 @@ static void fill_rect(s32 x, s32 y, s32 w, s32 h, u32 rgb)
         emit(&p, 6 | (1 << 8), v, 2);
     }
     cache_fill(x, y, w, h, (u16)(((rgb & 0xFF) >> 3) | ((((rgb >> 8) & 0xFF) >> 3) << 5) | ((((rgb >> 16) & 0xFF) >> 3) << 10)));
+    s_Sh = sh;
+    s_Epoch++; /* base_state's memo: FRAME is VRAM's, whatever s_Sh says */
 }
 
 static void fill(const u32* w)
@@ -1391,10 +1653,21 @@ static void fill(const u32* w)
 /** GS local-to-local copy inside the VRAM buffer. */
 static void move(s32 sx, s32 sy, s32 dx, s32 dy, s32 w, s32 h)
 {
+#ifdef SH_PORT_SCREENREAD
+    if (sr_hit(sx, sy, sx + w, sy + h))
+    {
+        sr_note(3, 0, (u32)dx | ((u32)dy << 16), (u32)w | ((u32)h << 16), sx, sy, sx + w, sy + h); /* by destination: a moving source (the lens flare test) is one case */
+    }
+    if (sr_hit(dx, dy, dx + w, dy + h))
+    {
+        sr_note(4, (u32)sx | ((u32)sy << 16), (u32)dx | ((u32)dy << 16), (u32)w | ((u32)h << 16), dx, dy, dx + w, dy + h);
+    }
+#endif
     if (sx + w > VRAM_W || dx + w > VRAM_W || sy + h > VRAM_H || dy + h > VRAM_H)
     {
         return; /* TODO: wrapping copies */
     }
+    hr_blit(0, sx, sy, w, h); /* a source in the hires area: VRAM brought up to date first */
     ad(R_BITBLTBUF, (u64x)VRAM_TBP | ((u64x)VRAM_BW << 16) | ((u64x)PSM_CT16 << 24) | ((u64x)VRAM_TBP << 32) |
                         ((u64x)VRAM_BW << 48) | ((u64x)PSM_CT16 << 56));
     ad(R_TRXPOS, (u64x)sx | ((u64x)sy << 16) | ((u64x)dx << 32) | ((u64x)dy << 48));
@@ -1402,6 +1675,7 @@ static void move(s32 sx, s32 sy, s32 dx, s32 dy, s32 w, s32 h)
     ad(R_TRXDIR, 2);
     ad(R_TEXFLUSH, 0);
     cache_invalidate(dx, dy, w, h);
+    hr_blit(1, dx, dy, w, h);
 }
 
 static void vram_copy(const u32* w)
@@ -1440,6 +1714,7 @@ static void settings(u32 w)
                 s_AreaX1 = w & 0x3FF;
                 s_AreaY1 = (w >> 10) & 0x1FF;
                 s_StateGen++;
+                hr_target();
             }
             break;
         case 0xE4:
@@ -1448,11 +1723,19 @@ static void settings(u32 w)
                 s_AreaX2 = w & 0x3FF;
                 s_AreaY2 = (w >> 10) & 0x1FF;
                 s_StateGen++;
+                hr_target();
             }
             break;
         case 0xE5:
-            s_OffX = sext11(w);
-            s_OffY = sext11(w >> 11);
+            if (s_OffX != sext11(w) || s_OffY != sext11(w >> 11))
+            {
+                s_OffX = sext11(w);
+                s_OffY = sext11(w >> 11);
+                if (s_Sh)
+                {
+                    s_StateGen++; /* XYOFFSET follows the offset at 2x (HR_X) */
+                }
+            }
             break;
         case 0xE6:
             if (s_SetMask != (w & 1) || s_CheckMask != ((w >> 1) & 1))
@@ -1588,6 +1871,12 @@ static void GpuGs_CommandsImpl(const u32* w, s32 n)
 /** LoadImage: `src` (rows of `stride` pixels) to the VRAM buffer's rectangle. */
 void GpuGs_LoadImage(s32 x, s32 y, s32 w, s32 h, const u16* src, s32 stride)
 {
+#ifdef SH_PORT_SCREENREAD
+    if (sr_hit(x, y, x + w, y + h))
+    {
+        sr_note(5, (u32)x | ((u32)y << 16), (u32)w | ((u32)h << 16), g_PortGpuCaller, x, y, x + w, y + h);
+    }
+#endif
     pend_flush();
     s32 row, col;
     init();
@@ -1619,18 +1908,21 @@ void GpuGs_LoadImage(s32 x, s32 y, s32 w, s32 h, const u16* src, s32 stride)
             }
             upload(VRAM_TBP, VRAM_BW, PSM_CT16, x, y + row, w, n, s_Staging, (u32)(w * 2 * n));
         }
-        return;
     }
-    /* Other widths: a row at a time, padded to 16 bytes (the GS drops the excess). */
-    for (row = 0; row < h; row++)
+    else
     {
-        u16* dst = (u16*)s_Staging;
-        for (col = 0; col < w; col++)
+        /* Other widths: a row at a time, padded to 16 bytes (the GS drops the excess). */
+        for (row = 0; row < h; row++)
         {
-            dst[col] = src[row * stride + col];
+            u16* dst = (u16*)s_Staging;
+            for (col = 0; col < w; col++)
+            {
+                dst[col] = src[row * stride + col];
+            }
+            upload(VRAM_TBP, VRAM_BW, PSM_CT16, x, y + row, w, 1, s_Staging, (u32)((w * 2 + 15) & ~15));
         }
-        upload(VRAM_TBP, VRAM_BW, PSM_CT16, x, y + row, w, 1, s_Staging, (u32)((w * 2 + 15) & ~15));
     }
+    hr_blit(1, x, y, w, h);
 }
 
 void GpuGs_ClearImage(s32 x, s32 y, s32 w, s32 h, u32 rgb)
@@ -1663,7 +1955,15 @@ static u16 s_Readback[256 * VRAM_W] __attribute__((aligned(64)));
  * VIF1 FIFO's data in 8-quadword bursts, and on a real PS2 a transfer that isn't a whole number of
  * bursts never ends (16x1 CLUT reads, 2 quadwords, stuck every time; PCSX2 doesn't care). At most
  * sizeof(s_Readback) bytes at a time (larger rectangles are read in bands). No wrapping. */
+static void download_from(u32 tbp, u32 bw, s32 x, s32 y, s32 w, s32 h, u16* dst, s32 stride);
 static void download_rect(s32 x, s32 y, s32 w, s32 h, u16* dst, s32 stride)
+{
+    hr_blit(0, x, y, w, h);
+    download_from(VRAM_TBP, VRAM_BW, x, y, w, h, dst, stride);
+}
+
+/** download_rect from any 16-bit buffer (tbp: block address, bw: width / 64). */
+static void download_from(u32 tbp, u32 bw, s32 x, s32 y, s32 w, s32 h, u16* dst, s32 stride)
 {
     s32 x0 = x & ~63, tw = ((x + w + 63) & ~63) - x0;
     s32 band = (s32)(sizeof(s_Readback) / 2) / tw, row;
@@ -1671,7 +1971,7 @@ static void download_rect(s32 x, s32 y, s32 w, s32 h, u16* dst, s32 stride)
     {
         for (row = 0; row < h; row += band)
         {
-            download_rect(x, y + row, w, h - row < band ? h - row : band, dst + row * stride, stride);
+            download_from(tbp, bw, x, y + row, w, h - row < band ? h - row : band, dst + row * stride, stride);
         }
         return;
     }
@@ -1683,7 +1983,7 @@ static void download_rect(s32 x, s32 y, s32 w, s32 h, u16* dst, s32 stride)
         GpuGs_Flush();
         GpuGs_Sync();
         *GS_CSR = 2; /* clear FINISH, then wait for this transfer's FINISH before turning the bus around */
-        ad(R_BITBLTBUF, (u64x)VRAM_TBP | ((u64x)VRAM_BW << 16) | ((u64x)PSM_CT16 << 24));
+        ad(R_BITBLTBUF, (u64x)tbp | ((u64x)bw << 16) | ((u64x)PSM_CT16 << 24));
         ad(R_TRXPOS, (u64x)x0 | ((u64x)y << 16));
         ad(R_TRXREG, (u64x)tw | ((u64x)h << 32));
         ad(R_FINISH, 0);
@@ -1726,6 +2026,12 @@ static void download_rect(s32 x, s32 y, s32 w, s32 h, u16* dst, s32 stride)
 /** StoreImage: the VRAM buffer's rectangle into `dst` (w pixels a row), split at the VRAM edges. */
 void GpuGs_StoreImage(s32 x, s32 y, s32 w, s32 h, u16* dst)
 {
+#ifdef SH_PORT_SCREENREAD
+    if (sr_hit(x, y, x + w, y + h))
+    {
+        sr_note(6, (u32)x | ((u32)y << 16), (u32)w | ((u32)h << 16), g_PortGpuCaller, x, y, x + w, y + h);
+    }
+#endif
     s32 w1, h1;
     if (w <= 0 || h <= 0)
     {
@@ -1743,6 +2049,260 @@ void GpuGs_StoreImage(s32 x, s32 y, s32 w, s32 h, u16* dst)
     if (h1 < h) download_rect(x, 0, w1, h - h1, dst + h1 * w, w);
     if (w1 < w && h1 < h) download_rect(0, 0, w - w1, h - h1, dst + h1 * w + w1, w);
     PROF_END("gs: StoreImage (VRAM readback)")
+}
+
+/* --- 2x renderer prototype (see HIRES_ADDR) ---------------------------------------------------*/
+
+/** s_Sh from the clip area: drawing goes to the hires buffer when the area lies inside its part of
+ * VRAM. An area straddling its edge is drawn into VRAM (lost under the hires area): logged once. */
+static void hr_target(void)
+{
+    u32 sh = s_Hires && s_AreaX2 < HR_W && s_AreaY2 < HR_H;
+    if (s_Hires && !sh && s_AreaX1 < HR_W && s_AreaY1 < HR_H)
+    {
+        static int logged;
+        if (logged++ < 8)
+        {
+            printf("hires: clip area (%d,%d)-(%d,%d) straddles the 2x area: drawn at 1x\n", (int)s_AreaX1,
+                   (int)s_AreaY1, (int)s_AreaX2, (int)s_AreaY2);
+        }
+    }
+    if (sh != s_Sh)
+    {
+        s_Sh = sh;
+        s_Epoch++;
+    }
+}
+
+/* Tiles (16x16 VRAM pixels) of the hires area drawn into since VRAM was last brought up to date:
+ * one word per tile row, a bit per tile column. Only these are scaled down for reads: everything
+ * else in VRAM is already right (uploaded data, such as the font atlas and CLUTs below the frame
+ * buffers, never makes a scale round trip). */
+#define HR_TILE 16
+static u32 s_HrDirty[HR_H / HR_TILE];
+
+/** Marks the tiles of VRAM's rectangle (x0, y0)-(x1, y1) (inclusive) as drawn in the hires buffer. */
+static void hr_mark(s32 x0, s32 y0, s32 x1, s32 y1)
+{
+    s32 r;
+    u32 bits;
+    x1 = x1 < HR_W - 1 ? x1 : HR_W - 1;
+    y1 = y1 < HR_H - 1 ? y1 : HR_H - 1;
+    if (x0 > x1 || y0 > y1)
+    {
+        return;
+    }
+    bits = ((2u << (x1 / HR_TILE)) - 1) & ~((1u << (x0 / HR_TILE)) - 1);
+    for (r = y0 / HR_TILE; r <= y1 / HR_TILE; r++)
+    {
+        s_HrDirty[r] |= bits;
+    }
+}
+
+/** Common sprite state for the scaling blits; `up`: drawing into the hires buffer. */
+static void hr_blit_state(int up)
+{
+    pend_flush();
+    s_Epoch++;
+    if (up)
+    {
+        set(R_FRAME, (u64x)HIRES_FBP | ((u64x)HIRES_BW << 16) | ((u64x)PSM_CT16 << 24));
+        scissor(0, 0, HR_W * 2 - 1, HR_H * 2 - 1);
+    }
+    else
+    {
+        set(R_FRAME, (u64x)VRAM_FBP | ((u64x)VRAM_BW << 16) | ((u64x)PSM_CT16 << 24));
+        scissor(0, 0, VRAM_W - 1, VRAM_H - 1);
+    }
+    set(R_XYOFFSET, (u64x)(2048 << 4) | ((u64x)(2048 << 4) << 32));
+    set(R_PRMODECONT, 1);
+    set(R_TEST, (1 << 16) | (1 << 17));
+    set(R_FBA, 0);
+    set(R_DTHE, 0);
+    set(R_TEX1, 0);
+    set(R_CLAMP, 0);
+    set(R_TEXA, 0x40 | (1 << 15) | ((u64x)0x80 << 32));
+    SCANMSK_CHECK();
+    ad(R_TEXFLUSH, 0);
+}
+
+/** Scales the dirty tiles of the hires area in (x0, y0)-(x1, y1) (exclusive) down into VRAM (each
+ * 2x2's top-left pixel) and marks them clean. Texel coordinates are offset by half a texel (8), so
+ * the sample sits mid-texel whether the GS samples pixels at their corner or their centre. In tile
+ * rows (16 VRAM rows): the texture is based at the row's page row, since UV's 14-bit fields stop at
+ * texel 1023.9375 and the area's bottom edge is texel row 1024. */
+static void hr_down(s32 x0, s32 y0, s32 x1, s32 y1)
+{
+    s32 r, c, started = 0;
+    for (r = y0 / HR_TILE; r * HR_TILE < y1; r++)
+    {
+        u32 want = s_HrDirty[r] & ((x1 >= HR_W ? (1u << (HR_W / HR_TILE)) - 1 : (2u << ((x1 - 1) / HR_TILE)) - 1) &
+                                   ~((1u << (x0 / HR_TILE)) - 1));
+        s32 ty = r * HR_TILE, base = (ty & ~31) * 2;
+        if (!want)
+        {
+            continue;
+        }
+        if (!started)
+        {
+            hr_blit_state(0);
+            started = 1;
+        }
+        set(R_TEX0, (u64x)(HIRES_TBP + (base / 64) * HIRES_BW * 32) | ((u64x)HIRES_BW << 14) | ((u64x)PSM_CT16 << 20) |
+                        (10ULL << 26) | (9ULL << 30) | (1ULL << 34) | (1ULL << 35)); /* TCC, DECAL */
+        for (c = 0; c < HR_W / HR_TILE; c++)
+        {
+            s32 c1 = c, tx, tx1;
+            if (!(want & (1u << c)))
+            {
+                continue;
+            }
+            while (c1 + 1 < HR_W / HR_TILE && (want & (1u << (c1 + 1))))
+            {
+                c1++;
+            }
+            tx  = c * HR_TILE;
+            tx1 = (c1 + 1) * HR_TILE;
+            ad(R_PRIM, 6 | (1 << 4) | (1 << 8));
+            ad(R_RGBAQ, 0x80808080ULL | (0x3F800000ULL << 32));
+            ad(R_UV, (u64x)((tx * 2 << 4) + 8) | ((u64x)(((ty * 2 - base) << 4) + 8) << 16));
+            ad(R_XYZ2, (u64x)((2048 + tx) << 4) | ((u64x)((2048 + ty) << 4) << 16));
+            ad(R_RGBAQ, 0x80808080ULL | (0x3F800000ULL << 32));
+            ad(R_UV, (u64x)((tx1 * 2 << 4) + 8) | ((u64x)((((ty + HR_TILE) * 2 - base) << 4) + 8) << 16));
+            ad(R_XYZ2, (u64x)((2048 + tx1) << 4) | ((u64x)((2048 + ty + HR_TILE) << 4) << 16));
+            c = c1;
+        }
+        s_HrDirty[r] &= ~want;
+    }
+    if (started)
+    {
+        ad(R_TEXFLUSH, 0);
+        s_Epoch++; /* prim_state again: state_other marks the clip area drawn again */
+    }
+}
+
+/** Scales VRAM's (x0, y0)-(x1, y1) (exclusive) up into the hires buffer (each pixel doubled; texel
+ * coordinates offset by an eighth of a texel, so both 2x pixels sample mid-texel under either GS
+ * sampling convention). Tiles it covers whole are clean afterwards. */
+static void hr_up(s32 x0, s32 y0, s32 x1, s32 y1)
+{
+    s32 r;
+    hr_blit_state(1);
+    set(R_TEX0, (u64x)VRAM_TBP | ((u64x)VRAM_BW << 14) | ((u64x)PSM_CT16 << 20) | (10ULL << 26) | (9ULL << 30) |
+                    (1ULL << 34) | (1ULL << 35)); /* 1024x512, TCC, DECAL */
+    ad(R_PRIM, 6 | (1 << 4) | (1 << 8));
+    ad(R_RGBAQ, 0x80808080ULL | (0x3F800000ULL << 32));
+    ad(R_UV, (u64x)((x0 << 4) + 2) | ((u64x)((y0 << 4) + 2) << 16));
+    ad(R_XYZ2, (u64x)((2048 + x0 * 2) << 4) | ((u64x)((2048 + y0 * 2) << 4) << 16));
+    ad(R_RGBAQ, 0x80808080ULL | (0x3F800000ULL << 32));
+    ad(R_UV, (u64x)((x1 << 4) + 2) | ((u64x)((y1 << 4) + 2) << 16));
+    ad(R_XYZ2, (u64x)((2048 + x1 * 2) << 4) | ((u64x)((2048 + y1 * 2) << 4) << 16));
+    ad(R_TEXFLUSH, 0);
+    s_Epoch++;
+    {
+        s32 c0 = (x0 + HR_TILE - 1) / HR_TILE, c1 = x1 / HR_TILE; /* whole tiles: columns [c0, c1) */
+        u32 bits = c1 > c0 ? ((1u << c1) - 1) & ~((1u << c0) - 1) : 0;
+        for (r = (y0 + HR_TILE - 1) / HR_TILE; (r + 1) * HR_TILE <= y1; r++)
+        {
+            s_HrDirty[r] &= ~bits;
+        }
+    }
+}
+
+/** The hires area's part of VRAM's rectangle (x, y, w, h): `up` scales VRAM's contents (just
+ * written: uploads, fills' VRAM side, copies) up into the hires buffer; otherwise VRAM is brought up
+ * to date from it before a read. */
+static void hr_blit(int up, s32 x, s32 y, s32 w, s32 h)
+{
+    s32 x1 = x + w < HR_W ? x + w : HR_W, y1 = y + h < HR_H ? y + h : HR_H;
+    if (!s_Hires || x >= x1 || y >= y1)
+    {
+        return;
+    }
+    if (up)
+    {
+        hr_up(x, y, x1, y1);
+    }
+    else
+    {
+        hr_down(x, y, x1, y1);
+    }
+}
+
+/** Turns the hires buffer on or off (display_ps2.c, on video mode changes: off before gsKit's setup,
+ * which clears the bottom of GS memory). On: the area scaled up from VRAM; off: scaled down into it. */
+void GpuGs_Hires(int on)
+{
+    if (!on == !s_Hires || (on && !s_HrLayout))
+    {
+        return;
+    }
+    pend_flush();
+    init();
+    if (on)
+    {
+        s_Hires = 1;
+        hr_blit(1, 0, 0, HR_W, HR_H);
+    }
+    else
+    {
+        hr_blit(0, 0, 0, HR_W, HR_H);
+        GpuGs_Flush();
+        GpuGs_Sync();
+        s_Hires = 0;
+        cache_invalidate(0, 0, HR_W, HR_H);
+    }
+    hr_target();
+    s_TexGen++;
+    s_StateGen++;
+    s_Epoch++;
+    s_RegValid[R_TEX0] = 0;
+    printf("hires: %s\n", on ? "on (2x)" : "off");
+}
+
+/** The 2x option (display_ps2.c): GS memory for the hires buffer or for the 10 more texture page
+ * cache slots it would take. The hires buffer is off when this is called. Every cached page goes
+ * (their slots move). */
+void GpuGs_HiresLayout(int on)
+{
+    s32 i;
+    on = on != 0;
+    if (on == s_HrLayout)
+    {
+        return;
+    }
+    GpuGs_Hires(0);
+    pend_flush();
+    init();
+    GpuGs_Flush();
+    GpuGs_Sync();
+    for (i = 0; i < CACHE_SLOTS; i++)
+    {
+        if (s_Slots[i].key >= 0)
+        {
+            s_PageMap[s_Slots[i].key] = 0;
+            s_Slots[i].key            = -1;
+        }
+    }
+    s_HrLayout         = on;
+    s_CacheSlots       = on ? CACHE_SLOTS_HR : CACHE_SLOTS;
+    s_TexGen++;
+    s_Epoch++;
+    s_RegValid[R_TEX0] = 0;
+    printf("hires: option %s\n", on ? "on" : "off");
+}
+
+int GpuGs_HiresOn(void)
+{
+    return s_Hires;
+}
+
+/** StoreImage from the hires buffer (frame dumps): (x, y, w, h) in its own pixels. */
+void GpuGs_StoreHires(s32 x, s32 y, s32 w, s32 h, u16* dst)
+{
+    pend_flush();
+    init();
+    download_from(HIRES_TBP, HIRES_BW, x, y, w, h, dst, w);
 }
 
 /* --- Display ----------------------------------------------------------------------------------*/
@@ -1786,6 +2346,10 @@ static void display_copy(u32 fbp, u32 fbw, u32 psm, s32 x, s32 y, s32 w, s32 h)
  * 15, the PS1 mask bit, would otherwise be read as alpha). */
 void GpuGs_DisplayShow(s32 x, s32 y, s32 w, s32 h, s32 interlace480, s32 blank)
 {
+#ifdef SH_PORT_SCREENREAD
+    sr_screen(x, y, w, h);
+    sr_summary();
+#endif
     u64x dispfb;
     if (interlace480 != s_Interlace480 || (y & 1) != (s_DispY & 1))
     {
@@ -1793,6 +2357,13 @@ void GpuGs_DisplayShow(s32 x, s32 y, s32 w, s32 h, s32 interlace480, s32 blank)
         s_DispY        = y;
         s_MaskDirty    = 1;
     }
+    if (s_Hires)
+    {
+        GpuGs_Flush();
+        dispfb = (u64x)HIRES_FBP | ((u64x)HIRES_BW << 9) | ((u64x)PSM_CT16 << 15) | ((u64x)((x * 2) & 2047) << 32) |
+                 ((u64x)((y * 2) & 2047) << 43);
+    }
+    else
 #ifndef SH_PORT_INTERLACE_FIELDS
     if (interlace480 && !(s_TexPage & 0x400))
     {
@@ -1808,6 +2379,41 @@ void GpuGs_DisplayShow(s32 x, s32 y, s32 w, s32 h, s32 interlace480, s32 blank)
     }
     *(volatile u64x*)0x12000000 = (blank ? 0 : 1) | (1 << 2) | (1 << 5) | (0xFFULL << 8); /* PMODE: EN1, MMOD (ALP) */
     *(volatile u64x*)0x12000070 = dispfb;                                                   /* DISPFB1 */
+}
+
+/** A movie frame (movie_ps2.c): `rgba` (w x h, 32-bit) uploaded into the snapshot area as a PSMCT32
+ * buffer `fbw` x 64 pixels wide, at line `top` (the lines above and below were cleared to black when
+ * `clear`), and shown from there. Movies bypass the PS1's VRAM and its 24-bit display mode. */
+void GpuGs_MovieShow(const u32* rgba, s32 w, s32 h, s32 top, s32 lines, s32 clear, s32 blank)
+{
+    const s32 FBW = (w + 63) / 64, BAND = (s32)(sizeof(s_ImgPkt) - 32) / (w * 4);
+    s32       y;
+    pend_flush();
+    init();
+    s_Epoch++;
+    if (clear)
+    {
+        /* Black: draw a sprite over the whole buffer. */
+        set(R_FRAME, (u64x)(SNAP_ADDR / 8192) | ((u64x)FBW << 16) | ((u64x)PSM_CT32 << 24));
+        set(R_XYOFFSET, (u64x)(2048 << 4) | ((u64x)(2048 << 4) << 32));
+        scissor(0, 0, FBW * 64 - 1, lines - 1);
+        set(R_TEST, (1 << 16) | (1 << 17));
+        set(R_FBA, 0);
+        set(R_DTHE, 0);
+        ad(R_PRIM, 6);
+        ad(R_RGBAQ, 0x80000000ULL | (0x3F800000ULL << 32));
+        ad(R_XYZ2, (u64x)(2048 << 4) | ((u64x)(2048 << 4) << 16));
+        ad(R_XYZ2, (u64x)((2048 + FBW * 64) << 4) | ((u64x)((2048 + lines) << 4) << 16));
+        GpuGs_Flush();
+    }
+    for (y = 0; y < h; y += BAND)
+    {
+        s32 n = h - y < BAND ? h - y : BAND;
+        upload(SNAP_ADDR / 256, (u32)FBW, PSM_CT32, 0, top + y, w, n, rgba + y * w, (u32)(w * n * 4));
+    }
+    GpuGs_Sync();
+    *(volatile u64x*)0x12000000 = (blank ? 0 : 1) | (1 << 2) | (1 << 5) | (0xFFULL << 8); /* PMODE: EN1, MMOD (ALP) */
+    *(volatile u64x*)0x12000070 = (u64x)(SNAP_ADDR / 8192) | ((u64x)FBW << 9) | ((u64x)PSM_CT32 << 15); /* DISPFB1 */
 }
 
 /** Prints and clears the statistics (averaged over `frames`). */

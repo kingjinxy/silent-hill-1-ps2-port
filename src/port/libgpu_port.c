@@ -123,12 +123,24 @@ int ClearImage2(RECT* rect, u_char r, u_char g, u_char b)
 
 int LoadImage(RECT* rect, u_long* p)
 {
+#ifdef SH_PORT_SCREENREAD
+    {
+        extern unsigned int g_PortGpuCaller; /* ps2/gpu_gs.c: screen-read inventory */
+        g_PortGpuCaller = (unsigned int)(unsigned long)__builtin_return_address(0);
+    }
+#endif
     GpuGs_LoadImage(rect->x, rect->y, rect->w, rect->h, (const u16*)p, rect->w);
     return 0;
 }
 
 int StoreImage(RECT* rect, u_long* p)
 {
+#ifdef SH_PORT_SCREENREAD
+    {
+        extern unsigned int g_PortGpuCaller; /* ps2/gpu_gs.c: screen-read inventory */
+        g_PortGpuCaller = (unsigned int)(unsigned long)__builtin_return_address(0);
+    }
+#endif
     GpuGs_StoreImage(rect->x, rect->y, rect->w, rect->h, (u16*)p);
     return 0;
 }
@@ -162,6 +174,12 @@ void DrawOTag(u_long* p)
 
 static void DrawOTagImpl(u_long* p)
 {
+#ifdef SH_PORT_SCREENREAD
+    {
+        extern unsigned int g_PortSrContext; /* ps2/gpu_gs.c: the screen-read inventory's context */
+        g_PortSrContext = ((u32)g_GameWork.gameState << 16) | (u32)(g_GameWork.gameStateSteps[0] & 0xFFFF);
+    }
+#endif
     u32 addr  = (u32)(unsigned long)p & 0xFFFFFF;
     u32 start = addr;
     s32 steps = 0;
@@ -285,6 +303,8 @@ DISPENV* PutDispEnv(DISPENV* env)
     /* The game swaps display buffers with PutDispEnv once per frame: present the new display area. */
     if (s_DispMask)
     {
+        extern int g_PortHiresOption; /* display_ps2.c: the 2x renderer */
+        g_PortHiresOption = g_GameWork.config.unused_26 != 0; /* Extra Options "Resolution" (options.c) */
         PROF_BEGIN("gs: Display_PresentGs")
         Display_PresentGs(env->disp.x, env->disp.y, env->disp.w, env->disp.h, env->isrgb24, env->isinter);
         PROF_END("gs: Display_PresentGs")

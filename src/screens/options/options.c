@@ -40,6 +40,54 @@ static s32 g_ExtraOptionsMenu_SelectedBloodColorEntry;
 
 static s32 g_ExtraOptionsMenu_BulletMultMax;
 
+#ifdef SH_PORT
+/* Port: a Debug Options page for port settings, opened with Triangle on the main options screen. It is
+ * the extra options screen (its states, fades, drawing and controls) showing another list
+ * (s_PortDebugPage). Entries are kept in the config's unused byte(s), so they are saved with the
+ * other options:
+ *   Resolution: x1, or the GS renderer's 2x mode (libgpu_port.c, gpu_gs.c HIRES_ADDR); unused_26.
+ * TEMPORARY: Triangle is also one of the default Cancel buttons; on the main options screen it now
+ * only opens this page (Circle and Square still cancel). To be replaced by a better way in. */
+static s32 s_PortDebugPage; /* the extra options screen shows the debug list */
+
+static const struct
+{
+    const char* name;
+    s32         width; /* selection highlight length, as SELECTION_HIGHLIGHT_WIDTHS */
+} PORT_DEBUG_ENTRIES[] = {
+    { "Resolution", 118 },
+};
+#define PORT_DEBUG_COUNT ((s32)(sizeof(PORT_DEBUG_ENTRIES) / sizeof(PORT_DEBUG_ENTRIES[0])))
+#define PORT_ENTRY_WIDTH(widths, i) (s_PortDebugPage ? PORT_DEBUG_ENTRIES[i].width : (widths)[i])
+
+/** Left/right on debug entry `i`. */
+static void Port_DebugEntryChange(s32 i)
+{
+    if (!(g_Controller0->buttonFlags.clicked & (ControllerFlag_LStickHighRight | ControllerFlag_LStickHighLeft)))
+    {
+        return;
+    }
+    Sd_SfxPlay(Sfx_MenuMove, Q8(0.0f), Q8(0.25f));
+    switch (i)
+    {
+        case 0:
+            g_GameWork.config.unused_26 = !g_GameWork.config.unused_26;
+            break;
+    }
+}
+
+/** Debug entry `i`'s value. */
+static const char* Port_DebugEntryValue(s32 i)
+{
+    switch (i)
+    {
+        case 0:
+            return g_GameWork.config.unused_26 ? "x2" : "x1";
+    }
+    return "";
+}
+#endif
+
 // ========================================
 // MAIN AND EXTRA OPTION SCREEN
 // ========================================
@@ -120,6 +168,9 @@ void GameState_Options_Update(void) // 0x801E2D44
             }
 
             g_ExtraOptionsMenu_EntryCount = (g_GameWork.config.extraOptionsEnabled) ? 8 : 6;
+#ifdef SH_PORT
+            s_PortDebugPage = 0;
+#endif
 
             Game_StateStepSet(0, OptionsMenuState_MainOptions);
             break;
@@ -273,6 +324,13 @@ void Options_ExtraOptionsMenu_Control(void) // 0x801E318C
         }
 
         // Handle config change.
+#ifdef SH_PORT
+        if (s_PortDebugPage)
+        {
+            Port_DebugEntryChange(g_ExtraOptionsMenu_SelectedEntry);
+        }
+        else
+#endif
         switch (g_ExtraOptionsMenu_SelectedEntry)
         {
             case ExtraOptionsMenuEntry_WeaponCtrl:
@@ -418,6 +476,12 @@ void Options_ExtraOptionsMenu_Control(void) // 0x801E318C
 void Options_MainOptionsMenu_Control(void) // 0x801E3770
 {
     #define SOUND_VOL_STEP 8
+#ifdef SH_PORT
+    // Port: Triangle opens Debug Options here instead of cancelling (TEMPORARY, see s_PortDebugPage).
+    #define OPTIONS_MAIN_CANCEL (g_GameWorkPtr->config.controllerConfig.cancel & ~ControllerFlag_Triangle)
+#else
+    #define OPTIONS_MAIN_CANCEL g_GameWorkPtr->config.controllerConfig.cancel
+#endif
 
     s32 audioType;
     s32 vol;
@@ -485,7 +549,7 @@ void Options_MainOptionsMenu_Control(void) // 0x801E3770
         case MainOptionsMenuEntry_Exit:
             // Exit menu to gameplay.
             if (g_Controller0->buttonFlags.clicked & (g_GameWorkPtr->config.controllerConfig.enter |
-                                                      g_GameWorkPtr->config.controllerConfig.cancel))
+                                                      OPTIONS_MAIN_CANCEL))
             {
                 Sd_SfxPlay(Sfx_MenuCancel, Q8(0.0f), Q8(0.25f));
                 Game_StateStepSet(0, OptionsMenuState_Leave);
@@ -628,6 +692,21 @@ void Options_MainOptionsMenu_Control(void) // 0x801E3770
 
     vol = 0;
 
+#ifdef SH_PORT
+    // Port: Triangle opens Debug Options (not while Start/Select are held: soft reset combos).
+    if ((g_Controller0->buttonFlags.clicked & ControllerFlag_Triangle) &&
+        !(g_Controller0->buttonFlags.held & (ControllerFlag_Start | ControllerFlag_Select)) &&
+        g_GameWork.gameStateSteps[0] != OptionsMenuState_EnterExtraOptions)
+    {
+        Sd_SfxPlay(Sfx_MenuConfirm, Q8(0.0f), Q8(0.25f));
+        s_PortDebugPage               = 1;
+        g_ExtraOptionsMenu_EntryCount = PORT_DEBUG_COUNT;
+        ScreenFade_Start(true, false, false);
+        Game_StateStepSet(0, OptionsMenuState_EnterExtraOptions);
+        return;
+    }
+#endif
+
     if (g_Controller0->buttonFlags.clicked & (ControllerFlag_L2 | ControllerFlag_R2 |
                                               ControllerFlag_L1 | ControllerFlag_R1))
     {
@@ -645,7 +724,7 @@ void Options_MainOptionsMenu_Control(void) // 0x801E3770
     // Reset selection cursor.
     if (((g_GameWork.gameStateSteps[0] != OptionsMenuState_EnterExtraOptions && g_MainOptionsMenu_SelectedEntry != MainOptionsMenuEntry_Exit) &&
          !(g_Controller0->buttonFlags.clicked & g_GameWorkPtr->config.controllerConfig.enter)) &&
-        (g_Controller0->buttonFlags.clicked & g_GameWorkPtr->config.controllerConfig.cancel))
+        (g_Controller0->buttonFlags.clicked & OPTIONS_MAIN_CANCEL))
     {
         Sd_SfxPlay(Sfx_MenuCancel, Q8(0.0f), Q8(0.25f));
 
@@ -654,6 +733,7 @@ void Options_MainOptionsMenu_Control(void) // 0x801E3770
     }
 
     #undef SOUND_VOL_STEP
+    #undef OPTIONS_MAIN_CANCEL
 }
 
 void Options_MainOptionsMenu_BgmVolumeBarDraw(void) // 0x801E3F68
@@ -781,13 +861,24 @@ void Options_ExtraOptionsMenu_EntryStringsDraw(void) // 0x801E416C
     Gfx_StringColorSet(StringColorId_White);
     Gfx_StringPositionSet(STR_POS.vx, STR_POS.vy);
     Gfx_StringLayerIdxSet(OPTIONS_ENTRY_STRING_LAYER_IDX);
+#ifdef SH_PORT
+    Gfx_StringDraw(s_PortDebugPage ? "DEBUG_OPTIONS" : EXTRA_OPTIONS_STR, DEFAULT_MAP_MESSAGE_LENGTH);
+#else
     Gfx_StringDraw(EXTRA_OPTIONS_STR, DEFAULT_MAP_MESSAGE_LENGTH);
+#endif
 
     // Draw entry strings.
     for (i = 0; i < g_ExtraOptionsMenu_EntryCount; i++)
     {
         Gfx_StringPositionSet(LINE_BASE_X, LINE_BASE_Y + (i * LINE_OFFSET_Y));
         Gfx_StringLayerIdxSet(OPTIONS_ENTRY_STRING_LAYER_IDX);
+#ifdef SH_PORT
+        if (s_PortDebugPage)
+        {
+            Gfx_StringDraw(PORT_DEBUG_ENTRIES[i].name, DEFAULT_MAP_MESSAGE_LENGTH);
+            continue;
+        }
+#endif
         Gfx_StringDraw(ENTRY_STRS[i], DEFAULT_MAP_MESSAGE_LENGTH);
     }
 
@@ -898,9 +989,17 @@ void Options_ExtraOptionsMenu_SelectionHighlightDraw(void) // 0x801E4450
     // Set active selection highlight position references.
     if (g_Options_SelectionHighlightTimer == 0)
     {
+#ifdef SH_PORT
+        selectionHighlightFrom.vx = PORT_ENTRY_WIDTH(SELECTION_HIGHLIGHT_WIDTHS, g_ExtraOptionsMenu_PrevSelectedEntry) + (65536 + HIGHLIGHT_OFFSET_X);
+#else
         selectionHighlightFrom.vx = SELECTION_HIGHLIGHT_WIDTHS[g_ExtraOptionsMenu_PrevSelectedEntry] + (65536 + HIGHLIGHT_OFFSET_X); // TODO
+#endif
         selectionHighlightFrom.vy = ((u16)g_ExtraOptionsMenu_PrevSelectedEntry * LINE_OFFSET_Y)      - HIGHLIGHT_OFFSET_Y;
+#ifdef SH_PORT
+        selectionHighlightTo.vx   = PORT_ENTRY_WIDTH(SELECTION_HIGHLIGHT_WIDTHS, g_ExtraOptionsMenu_SelectedEntry) + (65536 + HIGHLIGHT_OFFSET_X);
+#else
         selectionHighlightTo.vx   = SELECTION_HIGHLIGHT_WIDTHS[g_ExtraOptionsMenu_SelectedEntry]     + (65536 + HIGHLIGHT_OFFSET_X); // TODO
+#endif
         selectionHighlightTo.vy   = ((u16)g_ExtraOptionsMenu_SelectedEntry * LINE_OFFSET_Y)          - HIGHLIGHT_OFFSET_Y;
     }
 
@@ -1162,6 +1261,31 @@ void Options_ExtraOptionsMenu_ConfigDraw(void) // 0x801E4B2C
     Gfx_StringColorSet(StringColorId_White);
 
     // Draw left/right arrows for subset of options.
+#ifdef SH_PORT
+    if (s_PortDebugPage)
+    {
+        /* As Bullet_Adjust's (its short values at the same x), moved to the selected entry's line. */
+        s32                 dy   = (g_ExtraOptionsMenu_SelectedEntry - ExtraOptionsMenuEntry_BulletMult) * STR_OFFSET_Y;
+        const s_Triangle2d* fr   = &FRONT_ARROWS[ExtraOptionsMenuEntry_BulletMult * 2];
+        const s_Triangle2d* bk   = &BACK_ARROWS[ExtraOptionsMenuEntry_BulletMult * 2];
+        s_Triangle2d        f[2] = { fr[0], fr[1] }, b[2] = { bk[0], bk[1] };
+        for (i = 0; i < 2; i++)
+        {
+            f[i].vertex0.vy += dy, f[i].vertex1.vy += dy, f[i].vertex2.vy += dy;
+            b[i].vertex0.vy += dy, b[i].vertex1.vy += dy, b[i].vertex2.vy += dy;
+            Options_Selection_ArrowDraw(&f[i], true, false);
+        }
+        if (g_Controller0->buttonFlags.held & ControllerFlag_LStickHighLeft)
+        {
+            Options_Selection_ArrowDraw(&b[0], false, false);
+        }
+        if (g_Controller0->buttonFlags.held & ControllerFlag_LStickHighRight)
+        {
+            Options_Selection_ArrowDraw(&b[1], false, false);
+        }
+    }
+    else
+#endif
     if (g_ExtraOptionsMenu_SelectedEntry < (u32)ExtraOptionsMenuEntry_Count)
     {
         // Draw flashing left/right arrows.
@@ -1184,6 +1308,14 @@ void Options_ExtraOptionsMenu_ConfigDraw(void) // 0x801E4B2C
     // Draw entry strings.
     for (j = 0; j < g_ExtraOptionsMenu_EntryCount; j++)
     {
+#ifdef SH_PORT
+        if (s_PortDebugPage)
+        {
+            Gfx_StringPositionSet(230, STR_BASE_Y + (STR_OFFSET_Y * j));
+            Gfx_StringDraw(Port_DebugEntryValue(j), 10);
+            continue;
+        }
+#endif
         switch (j)
         {
             case ExtraOptionsMenuEntry_WeaponCtrl:

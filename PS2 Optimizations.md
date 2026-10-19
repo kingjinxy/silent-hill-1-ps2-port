@@ -237,7 +237,7 @@ A new-game snow scene (PCSX2, profiling build, 60 fps, 28% idle): `Particle_Upda
 
 ### 2026-10-17: GS memory and display: kept
 
-- GS memory map (4 MB): 0x000000 gsKit's frame buffer / the 448i snapshot (640x480x16 at most), 0x0A0000-0x2F0000 texture page cache (37 slots of 64 KB), 0x2F0000 CLUT cache (128 rows), 0x300000 the PS1's VRAM (1024x512x16, drawn to and scanned out directly).
+- GS memory map (4 MB): 0x000000 gsKit's frame buffer / the 448i snapshot (640x480x16 at most), 0x0A0000-0x2F0000 texture page cache (37 slots of 64 KB), 0x2F0000 CLUT cache (128 rows), 0x300000 the PS1's VRAM (1024x512x16, drawn to and scanned out directly). With `SH1_HIRES=1` (the 2x prototype): 0x000000-0x140000 is the hires buffer (640x1024x16), and the page cache is 27 slots from 0x140000.
 - No per-frame display copy (the GS's display reads the VRAM image), except a 16-bit snapshot for single-buffered 448i screens.
 - No EE copy of VRAM: the CPU mirror loops for clears and copies are gone (a 320x224 clear is 72k pixel writes a frame; 143k on the 448i screens), ~3 MB of EE RAM free. Steady play does 0 readbacks (fills patch cached pages and CLUTs).
 

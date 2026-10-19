@@ -8,6 +8,10 @@
  * are skipped, and nothing else from earlier progress is set up. Once the player has had control for
  * a second (gameplay, no cutscene flag), the game soft-resets (Game_WarmBoot) back to the main menu,
  * which then opens the list again.
+ *
+ * The first row, ALL MOVIES, plays every FMV one after another (src/screens/stream/stream.c
+ * Port_MoviePlayAll): skip ends the current movie, a soft reset the whole run. Also from host:demo.txt
+ * ("movies", PCSX2 test runs) once the main menu runs.
  */
 
 #include "game.h"
@@ -26,8 +30,8 @@
 #define LIST_Y     44
 #define ROW_HEIGHT 18
 
-static int s_Selected;
-static int s_Top;
+static int s_Selected = -1; /* -1: ALL MOVIES */
+static int s_Top      = -1;
 static int s_Chosen = -1;  /* cutscene being started or played */
 static int s_EventPending; /* waiting for Event_Update to start it */
 static int s_Started;
@@ -43,14 +47,15 @@ int Port_DemoMenuUpdate(void)
 
     g_SysWork.gameStateStepCounter = 0; /* no attract demo or intro movie while the list is open */
 
+    /* Rows: -1 (ALL MOVIES), then the cutscenes 0 .. count - 1. */
     if (pulsed & ControllerFlag_LStickHighUp)
     {
-        s_Selected = (s_Selected + g_PortCutsceneCount - 1) % g_PortCutsceneCount;
+        s_Selected = (s_Selected + 1 + g_PortCutsceneCount) % (g_PortCutsceneCount + 1) - 1;
         SD_Call(Sfx_MenuMove);
     }
     if (pulsed & ControllerFlag_LStickHighDown)
     {
-        s_Selected = (s_Selected + 1) % g_PortCutsceneCount;
+        s_Selected = (s_Selected + 2) % (g_PortCutsceneCount + 1) - 1;
         SD_Call(Sfx_MenuMove);
     }
     if (s_Selected < s_Top)
@@ -64,7 +69,7 @@ int Port_DemoMenuUpdate(void)
     if (clicked & g_GameWorkPtr->config.controllerConfig.enter)
     {
         SD_Call(Sfx_MenuStartGame);
-        return s_Selected;
+        return s_Selected < 0 ? PORT_DEMO_MOVIES : s_Selected;
     }
     if (clicked & g_GameWorkPtr->config.controllerConfig.cancel)
     {
@@ -88,7 +93,7 @@ void Port_DemoMenuDraw(void)
     {
         /* The font draws '_' as a space. */
         line[0] = i == s_Selected ? '[' : '_';
-        for (k = 1, s = g_PortCutscenes[i].name; *s && k < (int)sizeof(line) - 2; s++)
+        for (k = 1, s = i < 0 ? "ALL MOVIES" : g_PortCutscenes[i].name; *s && k < (int)sizeof(line) - 2; s++)
         {
             line[k++] = *s == '_' ? '-' : *s;
         }
@@ -194,6 +199,8 @@ static int s_SweepCur = -1; /* the one playing */
 static int s_SweepTimeout;  /* vertical blanks */
 static int s_SweepAt;       /* vertical blank count when it was requested */
 static int s_SweepEnd;      /* one past the last to play */
+static int s_MoviesWanted; /* host:demo.txt "movies": every FMV, once the main menu runs */
+void       Port_MoviesRemote(void);
 
 static void sweep_tick(void)
 {
@@ -205,13 +212,23 @@ static void sweep_tick(void)
     {
         int first, timeout, last;
         checked = 1;
-        if (Port_DemoSweepConfig(&first, &timeout, &last))
+        int config = Port_DemoSweepConfig(&first, &timeout, &last);
+        if (config == 2)
+        {
+            s_MoviesWanted = 1; /* requested once the main menu runs (below) */
+        }
+        else if (config)
         {
             s_SweepEnd     = last + 1 < g_PortCutsceneCount ? last + 1 : g_PortCutsceneCount;
             s_Sweep        = first;
             s_SweepTimeout = timeout * 60;
             printf("demo sweep: from %d of %d, %d s each\n", first, g_PortCutsceneCount, timeout);
         }
+    }
+    if (s_MoviesWanted && g_GameWork.gameState == GameState_MainMenu)
+    {
+        s_MoviesWanted = 0;
+        Port_MoviesRemote();
     }
     if (s_Sweep < 0)
     {
@@ -372,15 +389,33 @@ int Port_NewGameRemoteTake(void)
     return r;
 }
 
-int Port_DemoRemotePending(void)
+/** Every FMV in a row (host:demo.txt "movies"): through the Demo list once the main menu runs. */
+static volatile int s_RemoteMovies;
+
+void Port_MoviesRemote(void)
 {
-    return s_Remote >= 0;
+    printf("movie test: requested\n");
+    s_RemoteMovies = 1;
+    if (g_GameWork.gameState != GameState_MainMenu)
+    {
+        g_SysWork.sysFlags |= SysFlag_DoWarmReset;
+    }
 }
 
-/** The main menu: a cutscene requested over the network, or -1. */
+int Port_DemoRemotePending(void)
+{
+    return s_Remote >= 0 || s_RemoteMovies;
+}
+
+/** The main menu: a cutscene requested over the network, PORT_DEMO_MOVIES, or -1. */
 int Port_DemoRemoteTake(void)
 {
-    int r    = s_Remote;
+    int r = s_Remote;
+    if (s_RemoteMovies)
+    {
+        s_RemoteMovies = 0;
+        return PORT_DEMO_MOVIES;
+    }
     s_Remote = -1;
     return r;
 }

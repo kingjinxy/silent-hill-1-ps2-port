@@ -29,11 +29,20 @@ static int s_Mode[3] = { -1, -1, -1 }; /* current width, lines, interlaced */
  * frame buffer's stale contents, and the first frames in a new mode can be half drawn. */
 #define MODE_SWITCH_BLANK_FRAMES 3
 static int s_BlankFrames;
+static int s_MovieShown; /* a movie frame is in the snapshot area (Display_PresentMovie) */
 
 extern void GpuGs_StateLost(void);
 extern void GpuGs_Sync(void); /* gpu_gs.c: its GIF sends run in the background; gsKit uses the same channel */
 extern void Port_VBlankReinstall(void); /* libetc_ps2.c */
 extern void GpuGs_DisplayShow(int x, int y, int w, int h, int interlace480, int blank);
+extern void GpuGs_Hires(int on);
+extern void GpuGs_HiresLayout(int on);
+extern int  GpuGs_HiresOn(void);
+extern void GpuGs_StoreHires(int x, int y, int w, int h, unsigned short* dst);
+
+/* The 2x renderer option (gpu_gs.c HIRES_ADDR): the Extra Options "Resolution" setting, set by
+ * libgpu_port.c before each frame; SH1_HIRES=1 builds force it on. */
+int g_PortHiresOption;
 
 
 /* How a video mode change after the first is made (SH1_MODESWITCH, port_link.py):
@@ -185,8 +194,15 @@ void Display_RequestDump(void)
 static unsigned short s_DumpBand[DUMP_BAND * VRAM_W] __attribute__((aligned(64)));
 extern void GpuGs_StoreImage(int x, int y, int w, int h, unsigned short* dst); /* gpu_gs.c */
 
-/** Writes VRAM's rectangle (x, y, w, h) to host:<what>_<frame>.ppm. */
+/** Writes VRAM's rectangle (x, y, w, h) to host:<what>_<frame>.ppm (`hires`: the hires buffer's,
+ * in its own pixels). */
+static void dump_rect_from(int hires, const char* what, int x, int y, int w, int h);
 static void dump_rect(const char* what, int x, int y, int w, int h)
+{
+    dump_rect_from(0, what, x, y, w, h);
+}
+
+static void dump_rect_from(int hires, const char* what, int x, int y, int w, int h)
 {
     char  name[64];
     FILE* f;
@@ -202,6 +218,11 @@ static void dump_rect(const char* what, int x, int y, int w, int h)
     for (row = 0; row < h; row += DUMP_BAND)
     {
         int n = h - row < DUMP_BAND ? h - row : DUMP_BAND;
+        if (hires)
+        {
+            GpuGs_StoreHires(x, y + row, w, n, s_DumpBand);
+        }
+        else
         GpuGs_StoreImage(x, y + row, w, n, s_DumpBand);
         for (i = 0; i < w * n; i++)
         {
@@ -215,6 +236,56 @@ static void dump_rect(const char* what, int x, int y, int w, int h)
     }
     fclose(f);
     printf("display: wrote %s (%dx%d)\n", name, w, h);
+}
+
+/** A movie frame (movie_ps2.c): the display in `w` x `lines` progressive mode, showing `rgba` (w x h)
+ * centred vertically from a 32-bit buffer (gpu_gs.c GpuGs_MovieShow). */
+void Display_PresentMovie(const unsigned int* rgba, int w, int h, int lines)
+{
+    extern void GpuGs_MovieShow(const unsigned int* rgba, int w, int h, int top, int lines, int clear, int blank);
+    int         clear = 0;
+    GpuGs_Hires(0); /* the movie's buffer is in the hires buffer's memory */
+    if (w != s_Mode[0] || lines != s_Mode[1] || s_Mode[2] != 0)
+    {
+        init(w, lines, 0);
+    }
+    if (!s_MovieShown)
+    {
+        clear        = 1; /* the first frame: black borders above and below */
+        s_MovieShown = 1;
+    }
+    s_Frame++;
+    if (s_DumpRequested)
+    {
+        /* Scripted dumps (input_ps2.c): the decoded movie frame itself. */
+        char  name[48];
+        FILE* f;
+        int   i;
+        s_DumpRequested = 0;
+        sprintf(name, "host:frame_%04d.ppm", s_Frame);
+        f = fopen(name, "wb");
+        if (f)
+        {
+            fprintf(f, "P6\n%d %d\n255\n", w, h);
+            for (i = 0; i < w * h; i++)
+            {
+                fwrite(&rgba[i], 1, 3, f);
+            }
+            fclose(f);
+            printf("display: wrote %s (movie)\n", name);
+        }
+    }
+    GpuGs_MovieShow(rgba, w, h, (lines - h) / 2, lines, clear, s_BlankFrames > 0);
+    if (s_BlankFrames > 0)
+    {
+        s_BlankFrames--;
+    }
+}
+
+/** The movie has ended: the next movie clears its borders again. */
+void Display_MovieEnd(void)
+{
+    s_MovieShown = 0;
 }
 
 int Display_FrameCount(void)
@@ -239,9 +310,21 @@ void Display_PresentGs(int x, int y, int w, int h, int rgb24, int isinter)
     }
     if (w > 640) w = 640;
     if (h > 480) h = 480;
-    if (w != s_Mode[0] || h != s_Mode[1] || interlaced != s_Mode[2])
     {
-        init(w, h, interlaced);
+        /* 2x: 320-wide progressive screens drawn at 640 x 2h, shown in 480i (gpu_gs.c HIRES_ADDR). */
+        int hires;
+#ifdef SH_PORT_HIRES
+        g_PortHiresOption = 1;
+#endif
+        GpuGs_HiresLayout(g_PortHiresOption); /* no-op unless the option changed */
+        hires = g_PortHiresOption && w == 320 && h <= 256 && !interlaced && !rgb24;
+        int gw = hires ? 640 : w, gh = hires ? h * 2 : h, gi = hires ? 1 : interlaced;
+        if (gw != s_Mode[0] || gh != s_Mode[1] || gi != s_Mode[2])
+        {
+            GpuGs_Hires(0); /* scaled down into VRAM before gsKit's setup clears its memory */
+            init(gw, gh, gi);
+        }
+        GpuGs_Hires(hires);
     }
     if (rgb24)
     {
@@ -269,6 +352,12 @@ void Display_PresentGs(int x, int y, int w, int h, int rgb24, int isinter)
         {
             continue;
         }
+        if (GpuGs_HiresOn())
+        {
+            dump_rect_from(1, "frame", x * 2, y * 2, w * 2, h * 2);
+            dump_rect_from(1, "hires", 0, 0, 640, 1024);
+        }
+        else
         dump_rect("frame", x, y, w, h);
         dump_rect("vram", 0, 0, VRAM_W, VRAM_H);
     }

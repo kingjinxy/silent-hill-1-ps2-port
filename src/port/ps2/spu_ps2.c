@@ -38,6 +38,8 @@ extern void Port_EventDeliver(unsigned long cls, unsigned long spec); /* libapi_
 #define OP_XA    5
 #define OP_XASTOP 6
 #define OP_SHUTDOWN 7
+#define OP_XAFWD 8
+#define OP_XAACK 9
 
 #define CHUNK    16384 /* sample upload per command */
 #define MAX_REGS 512
@@ -297,6 +299,41 @@ void Port_XaStart(unsigned int hillLsn, unsigned int index, unsigned int file, u
     s_Packet[1] = hillLsn;
     s_Packet[2] = index;
     s_Packet[3] = file | (chan << 8);
+    send(16);
+    unlock();
+}
+
+/** The next XA stream is a movie: its video sectors also come to the EE (xa.c xa_forward), into
+ * `ring` (`sectors` x 2048 bytes, 64-byte aligned); the count of sectors sent goes into the 16-byte
+ * block `count`. */
+void Port_XaForward(void* ring, unsigned int sectors, void* count)
+{
+    if (!s_On)
+    {
+        return;
+    }
+    lock();
+    flush_regs();
+    s_Packet[0] = OP_XAFWD;
+    s_Packet[1] = (u32)ring & 0x1FFFFFFF;
+    s_Packet[2] = sectors;
+    s_Packet[3] = (u32)count & 0x1FFFFFFF;
+    send(16);
+    unlock();
+}
+
+/** The EE has used `used` forwarded movie sectors (a running count): the IOP may refill them. */
+void Port_XaAck(unsigned int used)
+{
+    if (!s_On)
+    {
+        return;
+    }
+    lock();
+    flush_regs();
+    s_Packet[0] = OP_XAACK;
+    s_Packet[1] = used;
+    s_Packet[2] = s_Packet[3] = 0;
     send(16);
     unlock();
 }

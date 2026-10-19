@@ -15397,3 +15397,10763 @@ Two runs of the same build give identical frames, so the cutscene benchmark is d
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "PS2 Optimizations.md" <<'EOF'  ### 2026-10-10: pair fusion (option 1, exact): kept  gpu_gs.c GpuGs_Comma
 
+## Claude
+
+Pair fusion works and is committed (`76b43e10c`). It cuts GS conversion time by 19% and lifts the Kaufmann cutscene from **50.2 to 55.3 fps** in PCSX2, with the fogged scenery pixel-identical.
+
+| | GS conversion (k-cycles/frame) | Frame rate |
+|---|---|---|
+| Separate polygons (before) | 2,928 | 50.2 fps |
+| **Pair fusion (now)** | **2,366** | **55.3 fps** |
+| Underlays dropped (ceiling, wrong picture) | 2,233 | 56.6 fps |
+
+That recovers 82% of what dropping the fog underlays entirely would save, without changing the picture.
+
+**How it works:** each fog pair (the opaque fog quad under the additive textured quad) is converted as one unit. The textured quad's GS state is set once, and the two quads differ only in their primitive type register, so nothing switches between them. The fog quad's alpha is 0x40 instead of 0, which passes the texture alpha test without changing what's written to the frame buffer.
+
+**How I checked it's identical:**
+- I built a deterministic cutscene benchmark (`tools/port/bench_cutscene.sh`). It steps a cutscene with a fixed time step and dumps a frame every 200 frames.
+- Two runs of the same build: identical.
+- Fused against separate polygons: every fogged surface is identical, including walls, floors and the desk. The only differences are subtitle rollout and character poses tied to it. Those come from voice lines loading from disc in real time, which no frame step can fix, and they'd differ between any two builds that run at different speeds.
+
+**Fix along the way:** the earlier PCSX2 black screen was my first benchmark attempt freezing a timing loop. It's fixed, and the benchmark change now affects only the sound driver's voice timing, in benchmark builds.
+
+**`build-and-deploy`:** the script you asked for is included in this commit. The PS1 build still passes all 50 checksums.
+
+**Next options** (in `PS2 Optimizations.md`):
+1. **Native C for the character renderer** (libgs's `GsSortObject4J` and `GsTMDfast*`, which still run as recompiled MIPS). This targets the ~2.8M-cycle game update, now the larger half of the frame.
+2. **More GS conversion savings:** per-polygon parsing and packing, and the ~540 texture/CLUT switches per frame.
+3. **Scratchpad on the EE's SPR:** small and broad.
+
+Which would you like next?
+
+## User
+
+Let's go with 1
+
+## Claude
+
+Measuring first: how much of the 2.8M-cycle game update is spent in libgs's recompiled object renderer. Finding where the game calls it:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "GsSortObject4J\|GsSortObject4\b" src --include=*.c | grep -v "^src/port/recomp" | head; grep -rln "rc_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1 SH1_EXTRA_CFLAGS=-finstrument-functions;
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -a "proffn" build/port/fn_prof.log | sed -n 1,12p | cut -c1-120
+
+## Claude
+
+My parser misread the address format ("0x…"). Fixing it:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import re,subprocess,os,collections L=open('build/port/fn_prof.log',errors='replace').read().s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import re,collections L=open('build/port/fp_pair.log',errors='replace').read().splitlines() s=
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -a "gtesites" build/port/fp_pair.log | head -2 | cut -c1-120; python3 - <<'EOF' import re,subprocess,os,bis
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -an "func_800D0CF8 started" build/port/fp_pair.log | cut -d: -f1); tail -n +$n build/port/fp_pair.log |
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import re,subprocess,os,bisect,collections L=open('build/port/fp_pair.log',errors='replace').r
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ~/ps2dev/ee/bin/mips64r5900el-ps2-elf-nm -n build/port/sh1.elf | awk '$1>="00129000" && $1<="00129b10"' | tail -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import re,subprocess,os,bisect,collections L=open('build/port/fn_prof.log',errors='replace').r
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "func_8005A900\|func_8005AA08" src/bodyprog --include=*.c | grep "//" | head -3; f=$(grep -rln "func_80
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^static\|^[a-z].*(" src/port/gte.c | grep -i "rtp\|divide\|unr\|nct\|ncs\|nc_\|small\|mvmva\|^static in
+
+## Claude
+
+There's already a batch API, `Gte_RtpBatch`. Reading it, along with `rtp_small` and `Gte_CmdRtpt`:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 856,990p src/port/gte.c; sed -n 1300,1436p src/port/gte.c
+
+## Claude
+
+`Gte_RtpBatch` already does exactly this. It transforms an array of vertices in place, bit-exact to RTPS/RTPT, without touching the GTE registers. Checking where it's used now:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Gte_RtpBatch" src include --include=*.c --include=*.h | grep -v "^src/port/gte.c" | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 530,640p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat include/port/gte.h | grep -n "Gte_DataWrite\|Gte_Data\b\|define gte_FetchScreen0_1_2_XYZ\|gte_LoadVector0_1_
+
+## Claude
+
+Writing the port version of `func_8005A900`; the PS1 build keeps the original:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/gfx/bodyprog_80056D8C.c'; s=open(p).read() a='void func_8005A900(s_MeshHeader*
+
+## Claude
+
+Next, NCT. Reading the exact normal-colour helper in `gte.c`, which a batch version would reuse:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1045,1110p src/port/gte.c; grep -n "static.*cmd_begin\|static.*cmd_end\|^static.*ctrl_refresh\|m_ll\[\|m_
+
+## Claude
+
+The batch needs the exact NCT command word, for its `sf` and `lm` bits. Checking how the port's `gte_nct` issues it, and the normal format the function reads:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "define gte_nct\b\|define gte_nct(" include | head -3; grep -rn "} s_Normal;" -B6 include | head -10
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/gte.c'; s=open(p).read() s+=''' /** Batched NC (normal colour) with sf = 1, lm = 1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/gfx/bodyprog_80056D8C.c'; s=open(p).read() a='''    CVECTOR   color;     s_Nor
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/gfx/bodyprog_80056D8C.c'; s=open(p).read() # RTPT check a='''    if (n > 3)   
+
+## Claude
+
+The check is enabled with `SH1_EXTRA_CFLAGS=-DSH_PORT_CHECK_BATCH`. Building that and running the Kaufmann cutscene in PCSX2, after confirming the PS1 build:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; make -j8 build < /dev/null 2>&1 | grep -c ": OK"; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1 S
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_PROF=1 SH1_NO_RECOMP=1; unset SH1_EXTRA_CFLAGS SH1_BENCH; bash 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='PS2 Optimizations.md'; s=open(p).read() s=s.replace('''2. **Native C for libgs's model rend
+
+## Claude
+
+The character meshes now transform and light in exact GTE batches. The game update is 8% cheaper and the Kaufmann cutscene reaches **57.3 fps** in PCSX2, up from 55.3. Committed as `a9dbc1fdc`, with the PS1 build still at 50 OK.
+
+**A correction to my plan first:** option 1 assumed characters were drawn by libgs's renderer (`GsSortObject4J`/`GsTMDfast*`). They aren't: the game calls those only from the item screens. Characters and world are drawn by the game's own C code. I fixed this in `PS2 Optimizations.md`, and profiled the game update to find the real costs instead.
+
+**What the profile showed:** the biggest GTE costs in the game update are the character renderer's per-command emulation:
+- `func_8005A900`: 221 RTPT commands a frame, about 1,400 cycles each;
+- `func_8005AA08`: 220 NCT commands a frame (vertex lighting), about 840 cycles each.
+
+**What changed:**
+- **Vertex transform:** all vertex triples but the last now go through the existing exact batch transform, as the world mesh code already did. I also fixed a subtle register detail the world version skips: the GTE's depth FIFO now ends up exactly as on the PS1.
+- **Lighting:** a new exact batch (`Gte_NcBatch`) does NCT's arithmetic without the emulator's register file.
+- **The last command of each loop still runs on the real GTE emulator,** so the GTE's state afterwards is identical.
+
+**Verified exact:** a check build compared every result against the GTE emulator through the whole cutscene. That was 2.16 million character vertices and 2.15 million normals, with **0 mismatches**.
+
+| | Game update (k-cycles) | RTPT | NCT | Frame rate |
+|---|---|---|---|---|
+| Before | 2,849 | 379 | 185 | 55.3 fps |
+| After | 2,621 | 109 | 29 | 57.3 fps |
+
+Combined with pair fusion, the Kaufmann cutscene went from **50.2 to 57.3 fps** today in PCSX2, with identical output.
+
+**Next candidates in the game update:**
+- **Bone matrix MVMVAs:** 318 a frame in `Vw_MultiplyAndTransformMatrix`, 178k cycles. These are the same kind of exact batch.
+- **Snow particle RTPS:** 115k cycles.
+- **The remaining ~1.9M cycles of plain game C code:** this needs PROF sections to break it down, because the instrumented build distorts small functions too much.
+
+Shall I continue with the bone matrices?
+
+## User
+
+I used Gemini to implement the bone matrix MVMVAs. Check its work. Review the conversation MD as necessary.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git status --short | head; git log --oneline -3; git diff --stat
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git diff src/bodyprog/view/vw_calc.c "PS2 Optimizations.md" "Planning Doc.md" "Running Walkthrough.md"; wc -l "G
+
+## Claude
+
+I'll check the change itself first, and the test claims after that.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Vw_MultiplyAndTransformMatrix(" src --include=*.c | grep -v "^src/bodyprog/view/vw_calc.c:296" | head 
+
+## Claude
+
+You've hit your weekly limit · resets 8am (America/Chicago)
+
+## User
+
+Last time I was playing through the game and creating a log before it crashed on console, in the first boss fight. Do we still have those logs?
+
+- tool `Bash`: Look for playthrough logs
+
+- tool `Bash`: Search notes for boss fight log mentions
+
+- tool `Bash`: Find recent log files anywhere
+
+## Claude
+
+The udpfs server log is the likely console log. Let me check it and other build/port logs.
+
+- tool `Bash`: Inspect port logs and udpfs log
+
+- tool `Bash`: Show start and end of ps2.log
+
+- tool `Bash`: Resolve crash PC to function
+
+## Claude
+
+Yes, the logs are still here. The PS2 console log is [build/port/ps2.log](build/port/ps2.log) (42 MB, last written Oct 11 at 12:59). There's also a parsed copy, [ps2_log.out](build/port/ps2_log.out), and the network file-server log, [udpfs_server.log](build/port/udpfs_server.log).
+
+The crash is at the end of `ps2.log`:
+
+```
+CRASH: addr store at pc=001EF850 badvaddr=FFFF9840 ra=001EF7CC sp=01FFE930
+CRASH: a0=00000000 a1=00490000 a2=00489850 a3=00000002 v0=00000002 v1=00020002
+CRASH: s0=00000066 s1=01FFEAB0 s2=01FFEAAC s3=01FFE9C4 s4=FFFFFDF1 s5=00000001 s6=00588108 s7=00489840
+```
+
+- **Where it crashed:** I looked up the crash address in the current `sh1.elf`. It falls in `sharedFunc_800D3388_1_s05` in `map1_s05.c`, which is the map for the first boss fight. That ELF was built at 11:35 on Oct 11, before the 12:59 crash, so it should be the same build you were running.
+- **What went wrong:** the game tried to write to address `FFFF9840`. That looks like a small negative offset (s4 = `FFFFFDF1`, a negative value) added to a null or zero base.
+- **After the crash:** the game stopped producing frames at frame 199162, but the system kept running. Heartbeats and sound continued, and the watchdog reported "no frame for 10 s". The crash handler also kept the machine's state, so `ps2_ctl.py md` could still read its memory then. That only helps if the console hasn't been restarted since.
+
+Do you want me to dig into `sharedFunc_800D3388_1_s05` next and find the cause?
+
+## User
+
+The console has been restarted since then. Let's try to dig into the issue.
+
+- tool `Bash`: Find source and disassemble crash site
+
+- tool `Bash`: Disassemble whole function, find slot writes
+
+- tool `Bash`: Read the C function
+
+- tool `Bash`: Find other instances and port ifdef convention
+
+- tool `Bash`: See SH_PORT usage in game code
+
+## Claude
+
+I'm fixing both copies of the pattern. The original lines stay as they are for the PS1 build, which has to keep matching the original game's code.
+
+- tool `Bash`: Apply fix to both sites
+
+- tool `Bash`: Find the build command
+
+- tool `Bash`: Read build section
+
+- tool `Bash`: Build port ELF and ISO without deploying
+
+## Claude
+
+The fix compiles and the build succeeded (new `sh1.elf` and ISO in `build/port/`). I haven't deployed it to the console.
+
+**What I found**
+
+- `sharedFunc_800D3388_1_s05` in [split_head.c](src/maps/characters/split_head.c#L1379) works out where the Split Head boss can push the player. Inside it, the code that rearranges its local list of collision edges reaches entries of the local array `sp38` with this:
+  ```c
+  ptr0 = &sp18[i * 16] + 32;
+  ```
+  That's a leftover from decompiling: on the PS1, `sp38` sits exactly 32 bytes after `sp18` on the stack, so the result lands on `sp38[i]`.
+- GCC on the PS2 places these locals differently, so those copies write over other values the function keeps on the stack. One of them was the saved address of a global (0x490000). It turned into 0, and the store at the end of the function hit `0 - 26560` = `FFFF9840`. That matches the `badvaddr` in your log exactly.
+- This only runs when the player overlaps the boss's collision area, which is why it only crashed during that fight.
+
+**Fix**
+
+Both copies of the pattern (lines 1438 and 1518) now use `&sp38[i]` / `&sp38[k]` directly under `#ifdef SH_PORT`. The original lines stay in place for the PS1 build, so the code that matches the original game is unchanged.
+
+**Not yet tested on the console.** To try it, run `./build-and-deploy --no-build`. That serves the new ISO and restarts the game on the PS2. Then play the Split Head fight, especially getting pushed against or around it. If you send me the log afterwards, I can check it.
+
+## User
+
+<ide_opened_file>The user opened the file /home/alex/Documents/silent-hill-1-ps2-port/PS2 Optimizations.md in the IDE. This may or may not be related to the current task.</ide_opened_file>
+
+Another issue I noticed in the fight was that Harry was unable to aim properly at the boss during the fight, which made it very difficult to shoot at its open mouth. Harry's aim seemed to be calculated wrong.
+
+## Claude
+
+I'll check whether the aiming has the same kind of stack-layout problem, starting with the rest of the Split Head code and then the player's targeting code.
+
+- tool `Bash`: Find other stack-layout pointer hacks
+
+## Claude
+
+That pattern only appears in those two places, which are already fixed, so the aiming problem has a different cause. Next I'm looking at how the game picks the aim target.
+
+- tool `Bash`: Search aim/target code
+
+- tool `Bash`: Aim references in player_control.c
+
+- tool `Bash`: Read target lock aim code
+
+## Claude
+
+The vertical aim at the boss's mouth is probably driven by `g_Player_FlexRotationX`. Next I'm finding where it's calculated.
+
+- tool `Bash`: Find FlexRotationX assignments
+
+- tool `Bash`: Read flex rotation code
+
+## Claude
+
+Harry's vertical aim comes from `playerProps.field_122`, which the target-lock function `func_8005CD38` fills in. I'm reading that next.
+
+- tool `Bash`: Locate targeting function
+
+- tool `Bash`: Read targeting functions
+
+- tool `Bash`: Read the collision offset function
+
+## Claude
+
+That's a strong lead: `sp20[unkIdx + 4].vy` reads past the end of `sp20` and relies on the same PS1 stack-layout trick. I'm checking the declarations to confirm.
+
+- tool `Bash`: Read declarations and find similar indexing
+
+- tool `Bash`: Apply fix and rebuild
+
+## Claude
+
+I found the likely cause of the bad aiming: it's the same kind of bug as the crash, and I've fixed it. The build succeeds, but I haven't tested it on the console.
+
+**Why the aim was off:** Harry aims at the middle of the enemy's hitbox. For Split Head, the hitbox height is set in `sharedFunc_800D2D74_1_s05` in [split_head.c](src/maps/characters/split_head.c#L1363), which reads `sp20[unkIdx + 4]`. `sp20` only has 4 entries. On the PS1, reading past its end landed on the next local array, `sp50`, so this was really `sp50[unkIdx]`. On the PS2 it reads whatever happens to be on the stack.
+
+That garbage feeds into the hitbox height, and Harry's vertical aim angle is calculated toward the middle of that height. So the height he aimed at was effectively random. It also sets the vertical size of the area your shots have to hit, so even shots that looked on target could miss.
+
+**Fix:** under `#ifdef SH_PORT` it now reads `sp50[unkIdx]` directly, and the original line is kept for the PS1 build.
+
+Both Split Head fixes (the crash and the aim) are in the new ISO. Run `./build-and-deploy --no-build` to put it on the console, then try the fight again.
+
+These two were the only cases of this pattern I could find in the Split Head code. Other enemies' code might have the same kind of hidden out-of-bounds read, which my search wouldn't reliably catch. If you want, I can check the whole codebase for this kind of bug, using compiler warnings and a wider pattern search.
+
+## User
+
+Let's mark down checking the whole codebase for these kinds of assumptions as a todo, but I'm tabling it for now. Now, read the Gemini Conversation. I was able to implement the bone matrix transforms, with Gemini, but I wanted Claude to take a look at it for any potential fixes.
+
+- tool `Bash`: Read Gemini conversation, diff, planning doc headings
+
+- tool `Bash`: Read conversation text without tool lines
+
+- tool `Bash`: Show code diff and doc diffs
+
+- tool `Bash`: Check ldlvl macro and callers
+
+- tool `Bash`: Check IR write semantics and caller contexts
+
+- tool `Bash`: Look for callers using leftover GTE state
+
+- tool `Bash`: Inspect suspicious callers
+
+## Claude
+
+Two real problems found, plus a few smaller notes. I'm fixing both and adding your todo. First, let me find where the todo should go and check whether Gemini recorded your "come back to step 1" note.
+
+- tool `Bash`: Check notes and open todos
+
+- tool `Bash`: Apply review fixes, add todo, rebuild
+
+## Claude
+
+I reviewed Gemini's bone-matrix change in [vw_calc.c](src/bodyprog/view/vw_calc.c#L296), fixed two bugs in it, and added your todo. The build succeeds; I haven't rerun the mismatch check.
+
+**Todo added:** a new open item in [Planning Doc.md](Planning%20Doc.md) to check the whole codebase for code that relies on the PS1 stack layout, marked as tabled on 2026-10-16. I also removed a stray blank line Gemini had left in the middle of that checklist.
+
+**Fixed: translation could come out wrong.** The original loads `inMat->t` into 16-bit GTE registers, so on the PS1 only the low 16 bits of each value are used. Gemini's version used the full 32-bit values. The two agree only while bone positions stay within ±32767. That held in the Kaufmann cutscene, which is why the check found 0 mismatches. Larger world coordinates, such as those passed in through `Vw_CoordToViewSpaceMatrix`, could differ from the original. The C code now cuts the values to 16 bits like the original does. I also made the final addition wrap around the same way the GTE does; before, an overflow there was technically undefined in C.
+
+**Fixed: inline assembly didn't declare all the registers it changes.** The SIMD multiply instruction (`PHMADH`) also writes the CPU's multiply-result registers, HI and LO, and the assembly block didn't declare that. If GCC ever kept a multiply result there across the block, it would silently get a wrong value. I added `"hi", "lo"` to the clobber list.
+
+**Checked and fine:**
+- The SIMD math is correct. Each 32-bit lane sums two products, and the `-0x8000` guard it uses before the SIMD path is enough to prevent overflow.
+- Passing the same matrix as input and output is safe, because the result is built in a temporary and copied at the end.
+- The new code doesn't leave the rotation and translation matrices set in the GTE, which the original did. I looked at the callers, and each one sets its own matrices before using the GTE, so nothing depends on what was left behind.
+
+**Notes:**
+- **Missing check result:** the 0-mismatch check only ever ran in the Kaufmann cutscene. To catch the translation case, it should be rerun in an open-world area with `-DSH_PORT_CHECK_BATCH`.
+- **Speedup never measured:** Gemini never answered your question about how much faster this is. The conversation ends while it's still running the profile.
+- **Not much real SIMD:** only the 3×3 matrix multiply uses SIMD. Packing the values into the SIMD registers and the translation are plain scalar code. Most of the gain probably comes from skipping the GTE emulator, not from the SIMD itself.
+- **Your step 1 note was never recorded:** Gemini didn't write down your request to come back to portable C later. In practice it's mostly done already, since the exact portable C version is in the same function as the fallback.
+
+Do you want me to run that open-world check, and measure the speedup against the commit before Gemini's change?
+
+## User
+
+Yes
+
+- tool `Bash`: Look at benchmark and build tooling
+
+- tool `Bash`: Learn pcsx2_run and warp usage
+
+- tool `Bash`: Read warp sweep docs
+
+- tool `Bash`: Read warp sweep script header
+
+- tool `Bash`: Read profile method and sweep log location
+
+- tool `Bash`: Find profiling run command
+
+- tool `Bash`: Read profiling command and result
+
+- tool `Bash`: Read profiling header and output format
+
+- tool `Bash`: Write the test script
+
+- tool `Bash`: Check flags and drop unsupported one
+
+- tool `Bash`: Use heartbeat and realtime flags
+
+- tool `Bash`: Run check sweep and before/after profiles
+
+## Claude
+
+The test script is running in the background. It runs the check sweep through all 43 maps, then profiles the Kaufmann cutscene with the old version and then the new one. When it's done I'll report the mismatch count from every map and the before/after cost and frame rate.
+
+- tool `Bash`: Read results
+
+- tool `Bash`: Inspect sweep log and profile run
+
+- tool `Bash`: Why sweep warps didn't trigger
+
+- tool `Bash`: Rerun check sweep through all maps
+
+- tool `Bash`: Average cutscene profile before vs after
+
+## Claude
+
+The speedup is measured. Over 117 s of the Kaufmann cutscene, averaged across every profile report:
+
+| | game update (kcycles/frame) | GTE MVMVA | fps |
+|---|---|---|---|
+| before | 2,666 | 178 | 57.0 |
+| after | 2,581 | 79 | 57.8 |
+
+That's about 85k cycles a frame saved, or 3% of the game update. The remaining 79k of MVMVA comes from other call sites. The open-world check sweep is still running.
+
+- tool `Bash`: Read sweep results
+
+- tool `Bash`: Update docs and rebuild normal ISO
+
+## Claude
+
+Both checks are done, and the bone-matrix change with my two fixes from the review holds up.
+
+**Open-world check:** I built with `-DSH_PORT_CHECK_BATCH`, which compares the new code against the emulated GTE on every call, and ran the warp sweep through all 43 maps for 15 s each. All 43 passed, with 0 mismatches over about 491,000 calls. The frame rates in that sweep don't mean anything: the check build does every calculation twice, and many maps sit on a fade during their 15 s.
+
+My first sweep attempt was invalid. A leftover `build/port/demo.txt` from an earlier session sent the game into a Demo cutscene sweep instead of the warps. It's gone now, and the numbers above come from the clean rerun.
+
+**Speedup**, measured in PCSX2 on the Kaufmann cutscene with a profiling build at real-time speed, averaged over 117 s:
+
+| | game update (kcycles/frame) | GTE MVMVA | fps |
+|---|---|---|---|
+| before Gemini's change | 2,666 | 178 | 57.0 |
+| after | 2,581 | 79 | 57.8 |
+
+That saves about 85k cycles a frame, or 3% of the game update, and adds about 0.8 fps. The 79k of MVMVA left comes from other call sites. The likely next ones are `WorldEnv_LightTransform` and `func_8006B318`.
+
+I recorded the review fixes, the sweep result and this table under Gemini's entry in [PS2 Optimizations.md](PS2%20Optimizations.md). The current ISO is the normal build again, with the Split Head fixes included. Nothing is committed yet.
+
+## User
+
+Alright, let's move to the remaining MVMA sites
+
+## Claude
+
+I'll start by finding where the remaining MVMVA calls come from in the profile I just ran.
+
+- tool `Bash`: Find GTE call site lines
+
+## Claude
+
+Those addresses belong to the profiling build, so I'm rebuilding it to look them up by name, and adding up each site's calls across the whole cutscene.
+
+- tool `Bash`: Aggregate and resolve MVMVA call sites
+
+## Claude
+
+Two functions account for nearly all of it: `func_8006B318` (84 MVMVA a frame) and `WorldEnv_LightTransform` (72 MVMVA + 36 GPF). Reading both.
+
+- tool `Bash`: Locate the two functions
+
+- tool `Bash`: Read both functions
+
+- tool `Bash`: Rest of function and macro definitions
+
+- tool `Bash`: Survey GTE emulator MVMVA path and macro users
+
+- tool `Bash`: Read GTE emulator fast paths
+
+- tool `Bash`: Read control-write and refresh path
+
+- tool `Bash`: Read inline control write and cmd helpers
+
+- tool `Bash`: List dirty flag usages and register names
+
+- tool `Bash`: Find direct control register writers
+
+## Claude
+
+Only reads happen outside the emulator, so the change stays inside `gte.h` and `gte.c`. Implementing it:
+
+- tool `Bash`: Implement per-register dirty bits
+
+- tool `Bash`: Read GTE test instructions
+
+- tool `Bash`: Run GTE bit-exactness checks on host
+
+## Claude
+
+The emulator's bit-exactness test still passes: seeds 0–5, 0 of 2,720 tests differ on each. Now I'm profiling the Kaufmann cutscene with the change, the same way as before.
+
+- tool `Bash`: Profile cutscene with per-register dirty bits
+
+## Claude
+
+The profile is running in the background. While it runs, I'm looking at the two call sites more closely.
+
+**What's taking the time:**
+- **`func_8006B318`** (collision, 84 MVMVA a frame): it loads two rows of the rotation matrix from a subcell's direction and runs two `rtv0` to project the character's offsets onto that direction.
+- **`WorldEnv_LightTransform`** (72 MVMVA + 36 GPF a frame): it sets the rotation matrix, then runs `rtv0`, `gpf12` and `rtv0` once per model.
+
+**Change being measured:** before this change, every rotation write made the next command unpack all three GTE matrices and redo the range checks. Now `ctrl_refresh` redoes only the groups whose registers were written. It's exact: the GTE bit-exactness test still finds no differences on seeds 0–5. It also helps every other command that follows a matrix write, not just these two.
+
+**Possible next step:** a direct C rewrite of the two functions, skipping the emulator entirely. That has a catch. The original leaves results in GTE registers (MAC, IR and FLAG, plus half-written rotation rows), and later code might read them. Unless a check shows nothing does, a rewrite would have to recreate that state exactly. I'll decide once the profile shows how much the change above saved.
+
+- tool `Bash`: Compare profiles
+
+## Claude
+
+The per-register dirty bits gave a small, exact gain. I'm recording it and rebuilding the normal ISO.
+
+- tool `Bash`: Document result and rebuild normal ISO
+
+## Claude
+
+I sped up the remaining MVMVA work with one exact change to the GTE emulator. It's a small gain: about 1% of the game update.
+
+**Where the remaining MVMVA comes from** (calls per frame in the Kaufmann cutscene):
+- `func_8006B318`, in collision: 84
+- `WorldEnv_LightTransform`, in lighting: 72, plus 36 GPF
+- `rc_RotTrans`: 7
+
+Both main functions write the rotation matrix before each command. In the emulator, any matrix write made the next command unpack all three GTE matrices and recheck the translation ranges. That overhead cost more than the MVMVA arithmetic, which already had a fast path.
+
+**Change** ([gte.c](src/port/gte.c#L106), [gte.h](include/port/gte.h#L121)): the emulator now records which registers were written, and only redoes the matrices or range checks those registers affect. This speeds up every command that follows a matrix write, not only these two functions. The GTE bit-exactness test still passes: 0 of 2,720 tests differ on each of seeds 0–5.
+
+**Measured** in PCSX2 on the Kaufmann cutscene, profiling build at real-time speed, averaged over 117 s:
+
+| | game update (kcycles/frame) | GTE MVMVA | GTE RTPS | fps |
+|---|---|---|---|---|
+| before | 2,581 | 79 | 115 | 57.8 |
+| after | 2,556 | 55 | 108 | 58.0 |
+
+**What I didn't do:** rewrite `func_8006B318` and `WorldEnv_LightTransform` in plain C. That would save at most about 2% more of the game update. To stay exact, it would also have to recreate the values the original leaves behind in GTE registers, because later code may read them. I don't think that's worth it now. The two-row collision code in [ray.c](src/bodyprog/collision/ray.c#L540) and [collision.c](src/bodyprog/collision/collision.c#L1672) would need the same treatment.
+
+**Recommendation:** about 1.9M cycles a frame of the game update is game C code that hasn't been profiled by section yet. That, plus about 2.2M in `DrawOTag`, is where real gains are left. RTPS from snow particles is another smaller target at about 108k.
+
+The results are written up in [PS2 Optimizations.md](PS2%20Optimizations.md). The ISO is back to the normal build, and nothing is committed. Which should I go after next?
+
+## User
+
+Let's go with RTPS from the snow particles
+
+- tool `Bash`: Locate snow draw function
+
+- tool `Bash`: Read Particle_SnowDraw
+
+- tool `Bash`: Read rest of Particle_SnowDraw
+
+## Claude
+
+Each snow particle runs one RTPS. Next I'm reading how RTPS is emulated, and how `Gte_RtpBatch` (already used for meshes) avoids the per-call cost.
+
+- tool `Bash`: Locate RTPS code
+
+- tool `Bash`: Read rtp_small and Gte_RtpBatch
+
+- tool `Bash`: Read the particle loop
+
+- tool `Bash`: Find enclosing function and PROF usage
+
+- tool `Bash`: See PROF usage and function start
+
+- tool `Bash`: Find Particle_Update callers
+
+- tool `Bash`: Check includes and call site
+
+- tool `Bash`: Profile particle system cost in cutscene
+
+## User
+
+[Request interrupted by user for tool use]
+
+## User
+
+Start PCSX2 and then let me take control so I can start a new game. The Kaufmann cutscene is now somewhat limitng what we can test, because the frame rate is so much better. I will choose a different cutscene to profile. While I play the new game, profile the particle system cost.
+
+## Claude
+
+I'll add the particle profiling sections, build a profiling ISO, and launch PCSX2 at normal speed with no demo or warp files, so it boots to the title screen for you.
+
+- tool `Bash`: Add particle PROF sections, build profiling ISO
+
+- tool `Bash`: Remove stray demo.txt, inspect loop end
+
+- tool `Bash`: Inspect following lines
+
+## Claude
+
+The earlier interrupted command had already applied the profiling sections before it was stopped, and it also left a `demo.txt` that I've just removed. Checking that nothing got added twice:
+
+- tool `Bash`: Verify profiling edits in particle.c
+
+- tool `Bash`: Build profiling ISO
+
+- tool `Bash`: Launch PCSX2 for interactive play with profiling log
+
+## Claude
+
+PCSX2 is running, so you can take over now. It should boot to the title screen; no demo or warp file is set, and the earlier stray `demo.txt` is deleted.
+
+- **Build:** a profiling build with two new sections, `particle: Particle_Update` (the whole snow/rain system) and `particle: draw loop` (snow and rain drawing, which is where the RTPS happens). Both show up next to the usual profile lines and GTE call-site counts.
+- **Log:** everything goes to `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/play.out`. The profile is printed every 120 frames, so I can split the results by timestamp, for example the opening cutscene versus walking around in the snow.
+- **No time limit:** I turned off the 15 s no-new-frames check, so pausing or sitting in menus won't end the run. If the game actually crashes or freezes, close PCSX2 or tell me.
+
+When you're done, close PCSX2 and tell me roughly what you did, and which cutscene you want to use as the new benchmark. I'll then split out the particle cost by section.
+
+## User
+
+This is a typical scene as far as the snowfall goes. What kinds of measurements can you make? I'll get to the benchmark cutscene later.
+
+## Claude
+
+I'll read the most recent profile reports from the running game.
+
+- tool `Bash`: Summarize latest profile reports
+
+- tool `Bash`: Check log contents
+
+## Claude
+
+The run script only writes its output when PCSX2 exits, but PCSX2 also logs to a file as it runs. Reading that instead:
+
+- tool `Bash`: Find PCSX2 live log
+
+- tool `Bash`: Find where pcsx2_run reads the log
+
+- tool `Bash`: Read PCSX2 temp log and summarize
+
+## Claude
+
+Here's what this snow scene costs. It's from the last 6 profile reports (about 12 s of play), running at a steady 60 fps with 29% of the EE idle. Numbers are thousands of CPU cycles per frame. A frame has about 4,900k at 60 fps.
+
+| section | kcycles/frame | share |
+|---|---|---|
+| Game update (all game logic) | 1,647 | |
+| ↳ **Particle system (`Particle_Update`)** | **348** | **21% of the game update** |
+|   ↳ snow drawing loop | 258 | |
+|   ↳ particle movement and spawning (the rest) | ~90 | |
+| Drawing (`DrawOTag`, turning PS1 packets into GS packets) | 1,787 | |
+
+GTE call sites: the top site does **299 RTPS a frame**, almost certainly the snow, since it falls in the particle code. That's far more than the 117 in the Kaufmann cutscene. All RTPS together cost 243k a frame.
+
+So snow is a real target here. It's about a fifth of the game update, and the drawing loop is three quarters of that.
+
+**Measurements I can take:**
+
+1. **Timed sections (`PROF_BEGIN`/`PROF_END`)** around any part of the code, with cycles per frame, calls per frame and the longest single call. I can split the drawing loop into its RTPS, the position clamping (`Particle_BoundaryClamp`), the depth colour (`func_80055A50`), and building the packets. I can also split movement from spawning.
+2. **GTE call sites:** commands per frame by caller address, which I map to function names.
+3. **Function-level profile** (`-finstrument-functions`): exclusive cycles for every function. It inflates small functions, but it's good for finding hotspots that don't have a timed section.
+4. **Frame rate and idle time** from the heartbeat, measured in emulated time, so emulator speed doesn't affect it.
+5. **Drawing stats:** primitives, texture changes, CLUT loads and fog pairs per frame. Each snowflake is one extra triangle (`POLY_FT3`) for the drawing side to translate.
+6. **Exactness checks** (`-DSH_PORT_CHECK_BATCH`): if I batch the snow RTPS, every result can be compared against the emulated GTE.
+
+One caveat: the profiling build sends every GTE command through the general dispatcher, which makes RTPS look more expensive than in a normal build. For the real saving I'd compare frame rate and idle time in a normal build.
+
+**Suggested next step:** add finer sections inside `Particle_SnowDraw` (RTPS, clamping, colour, packets) and in the movement loop, then have you stand in this same spot again. That shows whether batching the RTPS or something else in the snow code is the bigger win. Want me to set that up? I'd need to restart PCSX2 for the new build.
+
+## Claude
+
+PCSX2 has closed, and the full log of that session is saved in `play.out` in my scratchpad. I'll wait for your answer before setting up the finer snow profiling.
+
+## User
+
+Yes, let's do that
+
+- tool `Bash`: Add finer snow profiling sections
+
+- tool `Bash`: Read movement loop head
+
+- tool `Bash`: Wrap movement loop and build profiling ISO
+
+- tool `Bash`: Inspect movement loop end
+
+- tool `Bash`: Wrap movement loop and rebuild
+
+## Claude
+
+The profiling build with the finer snow sections is ready; launching PCSX2 for you now.
+
+- tool `Bash`: Launch PCSX2 for interactive profiling session
+
+## Claude
+
+PCSX2 is running with the new profiling build, so you can take over.
+
+Get back to the same snowy spot and stay there for 10–20 s. The memory card shows as unformatted in the log, so you'll likely need to start a new game again. Tell me when you're there and I'll read the live log; there's no need to close PCSX2 first.
+
+The new sections are:
+- `particle: movement loop`: moving and spawning particles
+- `snow: position (clamp)`: keeping flakes inside the snow area
+- `snow: RTPS`: projecting each flake to the screen
+- `snow: colour (func_80055A50)`: depth colour for each flake
+
+The rest of `particle: draw loop` is building each flake's draw packet.
+
+## User
+
+Alright, we're in the profling scene
+
+- tool `Bash`: Summarize live profile
+
+- tool `Bash`: Check clamp section and profiler overhead
+
+## Claude
+
+I'm keeping PCSX2 open in case you want to try something else in this scene. These are averages over the last 5 profile reports (about 10 s), at 60 fps with 28% of the EE idle. Numbers are thousands of CPU cycles per frame:
+
+| section | kcycles/frame | calls/frame |
+|---|---|---|
+| **`Particle_Update` (whole snow system)** | **393** | 1 |
+| ↳ movement loop (moving and spawning) | 86 | |
+| ↳ draw loop | 305 | |
+|   ↳ **snow RTPS** | **191** | 298 |
+|   ↳ colour (`func_80055A50`) | 19 | 298 |
+|   ↳ position (clamp) | 9 | 298 |
+|   ↳ the rest: building each flake's packet, plus the profiler's own overhead | ~86 | |
+
+The 393k total is higher than the 348k from last session, partly because the extra sections add their own profiling overhead.
+
+**Takeaways:**
+- **RTPS is most of the snow drawing:** about 640 cycles per flake in this build. The profiling build makes RTPS look worse than it is, because it skips the direct fast path. In a normal build it's probably about half that, still roughly 90k cycles a frame.
+- **Clamping and colour are cheap:** under 30k together, so they're not worth optimizing.
+- **Movement, at 86k, is the second target.** I haven't broken it down yet.
+- **Drawing the snow costs more again:** each flake is also one more triangle for `DrawOTag` to translate, inside the 1,790k drawing total. That cost isn't in the table.
+
+**Proposal: batch the snow RTPS** (port-only, exact):
+1. First pass: compute every visible flake's position and transform them all in one `Gte_RtpBatch` call. That removes the per-call overhead (command setup, register reads and writes, flag handling) and keeps the matrix in registers.
+2. Second pass: build the packets from the precomputed results. The last flake still goes through the real RTPS, so the GTE registers end up exactly as the original leaves them. That's the same approach the character meshes use.
+3. Verify with a `-DSH_PORT_CHECK_BATCH` build that compares every result against the emulated GTE. Then measure frame rate and idle time in a normal (non-profiling) build in this same scene, so the profiler's overhead doesn't distort the result.
+
+I'd expect it to save about 50–80k cycles a frame in a normal build, roughly 3–5% of the game update. The snow code has per-map `#if` branches, so the change needs care, but it stays inside `Particle_SnowDraw` and the loop that calls it.
+
+Should I go ahead with the batch? I can break down the movement loop next, or in parallel if you're staying in this scene.
+
+## Claude
+
+PCSX2 has closed; the session's log is saved as `play2.out` in my scratchpad. The snow-system numbers above are complete. I haven't started on the RTPS batch. That, and breaking down the movement loop, are waiting on your go-ahead.
+
+## User
+
+Let's proceed
+
+## Claude
+
+I'll start by checking the two things the batch depends on: how many particles there can be, and whether anything between the snow RTPS calls (like `func_80055A50`) uses the GTE.
+
+- tool `Bash`: Check particle count, func_80055A50, GTE headers
+
+## Claude
+
+`func_80055A50` doesn't use the GTE. Next I'm checking that `Particle_BoundaryClamp` doesn't either, then putting `particle.c` back to its original state before adding the batch.
+
+- tool `Bash`: Check clamp for GTE use, restore original particle.c
+
+## Claude
+
+Now I'm writing the batch. It's all port-only; the PS1 build keeps the original code.
+
+- tool `Bash`: Implement batched snow RTPS
+
+## Claude
+
+Building it. Then I'll run the check build through the warp sweep to see if any of the maps it visits exercises the snow.
+
+- tool `Bash`: Build check build with snow batch
+
+- tool `Bash`: Confirm batch code is compiled in
+
+## Claude
+
+The batch code is compiled into the snow maps. Now running the check-build warp sweep through all 43 maps.
+
+- tool `Bash`: Run check sweep with snow batch
+
+- tool `Bash`: Write before/after benchmark script
+
+- tool `Bash`: Benchmark cutscene without and with snow batch
+
+## Claude
+
+The benchmark is running in the background. It builds and plays the Kaufmann cutscene twice, without and then with the snow batch, then compares the frame dumps.
+
+The batch is in place, and the check build found 0 mismatches over more than 60,000 snow flakes in the warp sweep. The original `particle.c` is restored automatically between runs. I'll report the frame rates and the pixel comparison when it finishes.
+
+- tool `Bash`: Compute benchmark results
+
+## Claude
+
+Two problems: one of the ten frame dumps differs by 50 pixels, and the frame rate didn't improve (50.16 vs 50.03 fps). First I'm looking at where the differing pixels are.
+
+- tool `Bash`: Inspect differing pixels
+
+## Claude
+
+The pixel difference has nothing to do with the snow. It's a 10×10 block at the bottom of the screen (y = 192–201) where one run shows a white-and-black subtitle glyph and the other shows the scene. So text appeared at slightly different times. The two runs also took slightly different numbers of vertical blanks (8,092 vs 8,097) for the same 6,335 frames, which suggests the voice and subtitle timing isn't fully deterministic. The other nine dumps are identical, and the check build had already shown every flake matches.
+
+**The batch gives no measurable speedup.** In this cutscene, 50.16 fps before and 50.03 after is within noise, and so is idle time (5.2% vs 4.6%).
+
+| Kaufmann cutscene, benchmark build | fps | EE idle |
+|---|---|---|
+| without the batch | 50.16 | 5.2% |
+| with the batch | 50.03 | 4.6% |
+
+**Why the profile misled us:** the profiling build sends every GTE command through the general dispatcher and times each one, which roughly doubles RTPS's apparent cost. In a normal build each snow RTPS already uses the direct fast path. The per-call overhead the batch removes is probably around 100–150 cycles per flake. That's about 15k cycles a frame for the cutscene's 117 flakes, or about 0.3% of a frame, which is below what this benchmark can detect. Even in your 298-flake scene it would only be about 1%.
+
+**My recommendation is to revert the batch.** It adds about 120 lines of port code to a decompiled function, including a two-pass mode and code that recreates the GTE register state, for a gain we can't measure. I've kept a copy in my scratchpad in case it's ever needed. I'd also add a short note to [PS2 Optimizations.md](PS2%20Optimizations.md), so future profiles of GTE commands are read with this in mind.
+
+The bigger costs in your snow scene were elsewhere:
+- **`DrawOTag` at about 1.8M:** translating the PS1 draw packets for the GS, including each flake's triangle.
+- **The particle movement loop at 86k**, which I haven't broken down yet. It's plain C code, so the profile numbers there are more trustworthy.
+
+Should I revert the batch and write up the finding? And after that, do you want to look at the movement loop or `DrawOTag`?
+
+## User
+
+Yes. Explain the potential benefits of optimizing the movement loop and DrawOTag?
+
+- tool `Bash`: Revert batch, document, rebuild, read DrawOTag notes
+
+## Claude
+
+The batch is reverted and the normal ISO rebuilt. To ground the explanation, I'm rereading the earlier DrawOTag analysis in the optimization notes.
+
+- tool `Bash`: Read architecture and options notes
+
+## Claude
+
+I reverted the snow batch and rebuilt the normal ISO. I also added a short entry to [PS2 Optimizations.md](PS2%20Optimizations.md): what was tried, the 0-mismatch check, the benchmark showing no gain, and the warning that profiling builds roughly double the apparent cost of GTE commands. A copy of the batch is saved in my scratchpad.
+
+At 60 fps the EE has about 4,915k cycles per frame. In your snow scene it was using about 72% of that: 1,692k for the game update, 1,790k for `DrawOTag`, plus smaller items. That scene already holds 60 fps, so the benefit of either option shows up in heavier places. Those include the end of the alley (34–55 fps), map5_s00 (about 39 fps), and the Kaufmann cutscene on real hardware (50–55 fps).
+
+## Movement loop: small benefit
+
+- **Size:** 86k cycles a frame, about 1.7% of the frame. It's plain C, so this profile number is reliable.
+- **Realistic gain:** halving it would save about 40k cycles, under 1% of a frame and not visible as fps. It would apply to every snow and rain map, and rain maps may spawn more particles. Rain uses a density of 10 against snow's 3, but I haven't measured a rain scene.
+- **Constraint:** the loop uses the game's random number sequence, so any rewrite has to produce exactly the same values in the same order. That limits how much it can change.
+- **Verdict:** worth a quick breakdown only if a rain map turns out much heavier. Otherwise it's not worth the risk.
+
+## DrawOTag: the biggest remaining target
+
+`DrawOTag` walks the PS1 ordering table and turns every PS1 primitive into GS packets. It's 1.8M cycles in your scene and 2.2–2.6M in the cutscene, about 36–50% of the frame. From earlier profiles:
+- **Polygon setup** (converting coordinates, colours and UVs into GS vertex data): about 1.6M. This is the bulk.
+- **State changes per primitive:** about 540 texture-page (TEX0) changes and as many CLUT reloads a frame, because textures alternate in draw order.
+- **Snow's real cost probably sits here,** not in RTPS. Each of the 298 flakes is one more triangle to convert, plausibly 100–150k cycles. I haven't measured that yet; a probe could.
+
+Options from the plan, roughly by return for the effort:
+
+1. **Overlap the CPU and GS (double display list):** build frame N+1's packets while frame N is still being sent. This doesn't make the conversion cheaper; it stops the CPU waiting on the GS. On hardware this could be a sizeable win. An earlier attempt was reverted because of freezes that were probably caused by a since-fixed bug, so it should be retried on the console.
+2. **Use the scratchpad (SPR) for the PS1 scratch memory and packet building:** single-cycle memory with no cache misses. This matters more on real hardware than in PCSX2, which doesn't model the EE caches.
+3. **Build packets with 128-bit (MMI) stores:** write whole GIF qwords at once instead of field by field. That cuts directly into the 1.6M polygon setup.
+4. **Cheaper CLUT reloads:** draw order can't be changed (semi-transparency depends on it), but each reload can probably be made cheaper.
+5. **Convert primitives on VU1:** the largest potential gain and the largest job. It's only worth it after the items above.
+
+**Potential:** cutting `DrawOTag` by 20–40%, which items 1–3 could plausibly do, saves about 0.4–1M cycles a frame. That's 8–20% of the frame budget, enough to bring the Kaufmann cutscene to a steady 60 fps on hardware. Every scene benefits, because everything drawn goes through `DrawOTag`.
+
+**Constraint:** the output has to stay pixel-identical. The deterministic benchmark and frame-dump comparison already check that.
+
+**Recommendation:** go after `DrawOTag`. I'd start by profiling it with finer sections, to split polygon setup by primitive type and see what the snow triangles cost. Then try the scratchpad and the MMI packet building, since they're self-contained, and retry the CPU/GS overlap on the console. Should I go ahead with the breakdown?
+
+## User
+
+Yes, but first, I would like to know about our VRAM usage at the moment
+
+## Claude
+
+I'll look at how the port lays out the GS's 4 MB of VRAM, and its copy of the PS1's 1 MB VRAM.
+
+- tool `Bash`: Find GS memory layout definitions
+
+- tool `Bash`: Read layout comments and display buffer use
+
+- tool `Bash`: Read display setup and GS stats output
+
+## Claude
+
+The GS memory map is clear now. I'm reading the texture-page cache code to see how full it gets.
+
+- tool `Bash`: Read texture page and CLUT cache code
+
+## Claude
+
+The PS2's 4 MB of video memory (the GS's VRAM) is fully allocated. The layout is fixed in [gpu_gs.c](src/port/ps2/gpu_gs.c#L38-L51):
+
+| GS address | Size | Holds |
+|---|---|---|
+| `0x000000`–`0x12C000` | 1,200 KB | gsKit's display frame buffer, sized for the largest mode: 640×480, 32-bit, single buffer |
+| `0x12C000`–`0x130000` | 16 KB | unused gap |
+| `0x130000`–`0x200000` | 832 KB | texture page cache, slots 15–27 (13 × 64 KB) |
+| `0x200000`–`0x2F0000` | 960 KB | texture page cache, slots 0–14 (15 × 64 KB) |
+| `0x2F0000`–`0x300000` | 64 KB | CLUT cache: 128 rows of 256 colours, 16-bit |
+| `0x300000`–`0x400000` | 1,024 KB | the PS1's entire VRAM (1024×512, 16-bit). The game draws into it directly, so it's both the PS1 framebuffer and its textures |
+
+**How it works:**
+- **Copy of PS1 VRAM:** the GS holds an exact 1:1 copy of the PS1's VRAM in its native 16-bit format. 16-bit textures are read straight from it.
+- **4-bit and 8-bit textures:** these can't be read in place, because the PS1 packs the indices into 16-bit words. They're unpacked into a page cache instead. There are 64 possible pages (32 page positions × two bit depths) for 28 slots, with least-recently-used eviction. Any VRAM write that overlaps a cached page or CLUT drops it.
+- **Display:** each frame, the PS1 display area is copied 1:1 into the display buffer.
+
+**How full it is:** the stats from your snow session show **0 uploads per frame**. So in steady play the page cache isn't thrashing; everything in use stays resident. TEX0 and CLUT changes are about 340–350 a frame, but those are register switches, not uploads. I don't log how many of the 28 slots are occupied, or peak uploads during scene changes. Both would be cheap to add.
+
+**Space that could be reclaimed**, if more is ever needed:
+1. **Display buffer:** about 1.2 MB is reserved for 640×480×32, but the PS1 shows 320×224 (480i is only used for interlaced modes). A 16-bit buffer, or one sized to the current mode, would free 600–900 KB.
+2. **4-bit pages** fill only half of their 64 KB slot. Packing two per slot would raise the effective capacity.
+3. **Z buffer:** `ZBUF` points at the cache area, but Z writes are masked, so nothing is written there. It costs no memory.
+
+**What this means for DrawOTag:** memory isn't the bottleneck right now; the cost is in the CPU's conversion work. One idea that needs VRAM is double buffering the display list (option 5). It needs no extra VRAM, only EE memory, so the current layout doesn't block it.
+
+On the EE side, the port also keeps its own 1 MB copy of PS1 VRAM (`g_PortVram`) for uploads, readbacks and filling the page cache, plus 64 KB staging and transfer buffers.
+
+Should I add occupancy and upload stats to the GS stats line? Otherwise I'll start the `DrawOTag` breakdown.
+
+## User
+
+For that 640x480x32 display buffer, are we even using it if we already have the PS1's entire VRAM resident in the PS2's VRAM?
+
+## Claude
+
+Good question. I'll check what the copy actually does and why it exists.
+
+- tool `Bash`: Read present path and the copy
+
+## Claude
+
+Yes, it's used every frame, but your instinct is right: it probably isn't needed.
+
+**What happens now** (`Display_PresentGs` → `GpuGs_DisplayCopy` in [gpu_gs.c](src/port/ps2/gpu_gs.c#L1416)): at each display swap, the GS draws one textured sprite that copies the PS1's display area (320×224 at its current position in the VRAM copy) into gsKit's 640×480×32 buffer. The PS2 video output then scans out that buffer. The copy ends with `GpuGs_Sync()`, so the CPU waits for the GS to finish all queued drawing before carrying on.
+
+**Showing the PS1 VRAM directly would work.** The PS2's video output can scan out any part of GS memory in 16-bit format: you point its display register (`DISPFB`) at an address, a width, and an x/y start. The formats line up exactly. The PS1's 16-bit colour is red in bits 0–4, green 5–9, blue 10–14 and the mask bit in 15, which is the same layout as the GS's 16-bit format (the top bit becomes alpha, which plain output ignores). The display would point at `0x300000`, buffer width 1024, starting at the PS1's display x/y. That matches what the PS1 itself does: it scans out part of its VRAM, and the game's double buffering only moves that start position.
+
+**Benefits:**
+1. **Frees about 1.2 MB of GS memory:** the whole 640×480×32 buffer, which is about 30% of VRAM.
+2. **Removes the copy each frame:** a small cost, since the display copy profiled at about 11k cycles a frame. GsSwapDispBuff is another 20k, which may not all go away.
+3. **Removes a full CPU–GS wait every frame. This is the important one for the DrawOTag work.** The `GpuGs_Sync()` in the copy makes the CPU wait for the GS once per frame. Overlapping CPU and GS work (option 5, the double display list) needs that wait gone or moved.
+
+**Things to handle:**
+- **When to switch:** writing `DISPFB` takes effect immediately; it doesn't go through the drawing queue. So the switch to a new buffer has to wait until the GS has finished drawing it, and should happen during vertical blank to avoid tearing. That means a "GS finished" signal (its FINISH event), plus a vertical-blank handler that applies the pending start position.
+- **480i modes** (heights above 256, used by a few screens): the PS1 keeps both fields in one 480-line image, so the output must read alternate lines per field. The GS can do this, but it needs its own setup and a test.
+- **24-bit FMV mode:** the GS can't display the PS1's packed 24-bit pixels directly. It isn't supported today anyway, so nothing is lost, but the movies would need a separate path later.
+- **gsKit** still does the video mode setup. It would need a tiny buffer, or none, with the display registers set by us.
+
+**Verification:** frame dumps already read from the VRAM copy, not the display buffer, so they're unaffected. The real check is visual on PCSX2 and on the console: centring, no tearing, and the menus and 480i screens.
+
+I'd do this before the `DrawOTag` work, because removing that per-frame wait is a prerequisite for the CPU/GS overlap. Should I implement it?
+
+## User
+
+Yes
+
+## Claude
+
+I'll start by reading the whole display module and the GS sync and vertical-blank code it depends on.
+
+- tool `Bash`: Read display module and sync hooks
+
+- tool `Bash`: Read GS send/sync code, vblank handler, present call
+
+- tool `Bash`: Check gsKit PMODE and DISPFB macros
+
+- tool `Bash`: Find gsKit init source and macros
+
+- tool `Bash`: Replace display copy with direct scan-out
+
+## Claude
+
+Building the normal ISO.
+
+- tool `Bash`: Build normal ISO with direct scan-out
+
+## Claude
+
+It builds. This needs a visual check, which only you can do, so I'm launching PCSX2 with the new build at normal speed.
+
+- tool `Bash`: Launch PCSX2 to check direct scan-out visually
+
+## Claude
+
+PCSX2 is running the new build, and you can take over.
+
+The display now scans out straight from the PS1 VRAM copy in GS memory. The per-frame copy into gsKit's 640×480×32 buffer is gone; the change is `GpuGs_DisplayShow` in [gpu_gs.c](src/port/ps2/gpu_gs.c#L1421).
+
+Please look for:
+1. **Boot logos, title screen and menus:** the image should be centred as before, with no offset, wrapped edges or garbage at the sides.
+2. **Normal play:** no tearing or flicker. The game swaps between its two buffers in VRAM, and the display now follows that swap directly.
+3. **Fades and dark scenes:** colours should be unchanged. The PS1's mask bit is ignored by a fixed-alpha setting, so a wrong colour or a half-dark image would mean that setting is off.
+4. **Any interlaced screen** (taller than 256 lines), if you come across one. I'm not sure which screens in this game use it, so anything that looks doubled, squashed or flickery is worth telling me about.
+
+I haven't freed the 1.2 MB buffer yet. gsKit still allocates it, but nothing draws to it anymore. Once you're happy with how it looks, I'll measure the change, reclaim that memory, and then start the `DrawOTag` breakdown.
+
+## Claude
+
+PCSX2 has closed. Checking its log for crashes or display errors:
+
+- tool `Bash`: Check session log for problems
+
+## Claude
+
+The log looks clean: no crashes, no watchdog warnings and no stuck transfers. The session ran about 54 s and was at 33% idle at the end.
+
+It also switched through several video modes, including three interlaced ones I hadn't expected:
+- `640x448i` at 6.3 s, probably a boot screen
+- `320x448i` twice, at 15.0 s and 47.5 s, possibly the title or a menu
+- the usual `320x224p` and `320x240p`
+
+The interlaced modes are the riskiest part of this change, since the PS1 keeps both fields in one 448-line image. How did those screens look? Was the picture right everywhere, and was there any tearing, offset, colour change or squashed or doubled image?
+
+## User
+
+No, the title screen and the inventory screen, both 320x448i, have missing text and graphics. Not everything is gone: the title screen's background is fine, but most of the text for the menu choices is missing. The inventory screen has the Harry health status and some of the icons, but most of the text is gone.
+
+## Claude
+
+That fits a timing problem rather than a format one. Those two screens use `320x448i`, and with a 448-line image the PS1 has room for only one buffer. So the game draws into the same area that's being displayed: it clears the screen and redraws everything each frame. Before, the copy took a snapshot of the finished frame at the swap. Now the video output scans the buffer live, so it catches the background drawn but not the text and icons, which come later in the frame. Progressive gameplay was fine because there the game alternates between two buffers and never draws into the one being shown.
+
+**Fix:** show VRAM directly only when the display area doesn't overlap the current drawing area, which is the double-buffered case. When it does overlap, fall back to the snapshot copy. Next I'm checking where the port keeps the current drawing area.
+
+- tool `Bash`: Find draw environment tracking
+
+- tool `Bash`: Find GsSwapDispBuff implementation and PutDrawEnv
+
+- tool `Bash`: Find drawing area handling in gpu_gs
+
+- tool `Bash`: Read fill and draw-area handlers
+
+- tool `Bash`: Locate VRAM write entry points
+
+- tool `Bash`: Check invalidate callers, recover copy function
+
+## Claude
+
+All three VRAM-write paths (fills, copies and uploads) go through `cache_invalidate`, so one hook there plus the drawing-area commands covers everything. Writing it:
+
+- tool `Bash`: Add overlap tracking and copy fallback
+
+- tool `Bash`: Find prim_state entry
+
+- tool `Bash`: Add first-primitive area check, rebuild
+
+## Claude
+
+The build printed nothing, so I'm checking the logs:
+
+- tool `Bash`: Inspect build logs
+
+## Claude
+
+`GpuGs_StateLost` comes before the new state variables in the file. I'm moving their declarations up.
+
+- tool `Bash`: Move declarations and rebuild
+
+## Claude
+
+It builds. I'll also add a count of directly shown versus copied frames to the GS stats line, so we can confirm from the log which path each screen takes.
+
+- tool `Bash`: Read stats function
+
+- tool `Bash`: Add display path stats, rebuild
+
+- tool `Bash`: Check declaration lines
+
+- tool `Bash`: Tidy comment placement, rebuild
+
+## Claude
+
+Built. Launching PCSX2 for you to check the title and inventory screens again.
+
+- tool `Bash`: Launch PCSX2 to recheck interlaced screens
+
+## Claude
+
+PCSX2 is running the fixed build, and you can take over.
+
+**The cause:** the title screen and inventory are single-buffered. At 448 lines there's room for only one buffer in the PS1's VRAM, so the game redraws the very area on screen every frame. Showing VRAM directly caught it halfway through each redraw: the background was there, but the text and icons drawn later in the frame were missing.
+
+**The fix, in [gpu_gs.c](src/port/ps2/gpu_gs.c):**
+- The GS code now notices when a frame draws into the area currently on screen. It checks drawing-area commands, fills, VRAM copies and uploads, plus the drawing area in effect at the first primitive after each swap.
+- When a frame does that, the next swap uses the old snapshot copy, so those screens should look exactly as they did before today.
+- Direct scan-out is used only after a frame that left the displayed area alone, which is normal double-buffered gameplay.
+- Any video mode change starts with a copy, until a clean double-buffered frame is seen.
+
+**Please check:** the title screen, the inventory, and a bit of normal gameplay, including going into and out of the inventory, where the mode switches between 448i and 224p.
+
+The GS stats line in the log now counts frames scanned out directly against frames copied. When you're done, I'll check that gameplay took the direct path and the 448i screens took the copy.
+
+## Claude
+
+PCSX2 has closed. Checking which display path each screen took:
+
+- tool `Bash`: Show mode changes and display path counts
+
+## Claude
+
+The log shows the detection doing what it should, with no crashes. Counts are frames per stats interval:
+
+| screen | video mode | display path |
+|---|---|---|
+| Boot screen | `640x448i` | copy, every frame (60/60) |
+| Title and inventory (each time you opened it, about 7 times) | `320x448i` | copy, every frame (30/30) |
+| Gameplay and cutscenes | `320x224p` | scanned straight out of VRAM, every frame (30/30) |
+
+The mixed counts around each mode switch are intervals that straddle the change. Each 448i stretch took no more than a frame or two to settle on copying, and 224p went back to direct after the one snapshot frame that follows any mode change.
+
+How did it look this time? In particular:
+- the title menu text and the inventory text and icons
+- any flicker or a half-drawn frame when opening or closing the inventory
+- normal gameplay
+
+If everything looked right, I'll measure the gain, write it up, and move on to reclaiming the display buffer memory. The copy path is still needed for the 448i screens, but that buffer can shrink from 640×480 at 32-bit to 16-bit. Then I'll start the `DrawOTag` breakdown.
+
+## User
+
+The menus and gameplay look correct, but there is still a short garbage display when switching between video modes. Is there anything we can do to clean that up?
+
+## Claude
+
+Yes. On a switch, gsKit reprograms the video output, which then shows whatever is in its buffer. The first frame or two in the new mode can also come from a buffer the game hasn't finished drawing at the new size. Either way, the fix is to blank the output for a few frames after each mode change. The output then shows the background colour (black), which looks like the normal re-sync blink a TV does on a mode change anyway.
+
+I'll blank right after gsKit's setup and keep the output off for the first 3 frames in the new mode, which is 50 ms at 60 fps. Next I'm checking the background-colour register macro.
+
+- tool `Bash`: Find BGCOLOR macro
+
+- tool `Bash`: Blank output after mode changes, rebuild
+
+## Claude
+
+One catch: `init()` is also used by the software-renderer display path, which never calls `GpuGs_DisplayShow` and so would never turn the output back on. I'm limiting the blanking to the GS renderer.
+
+- tool `Bash`: Guard blanking to GS renderer, rebuild
+
+- tool `Bash`: Launch PCSX2 to check mode-switch blanking
+
+## Claude
+
+PCSX2 is running the new build, and you can take over.
+
+On every video mode change, the output now goes black right after gsKit's setup and stays black for the first 3 frames in the new mode, which is 50 ms. Then the display comes back as before. That hides both suspected sources of the garbage: gsKit showing its buffer's stale contents during setup, and the first half-drawn frames in the new size. The change is in `init()` and `Display_PresentGs` in [display_ps2.c](src/port/ps2/display_ps2.c), with a `blank` flag on `GpuGs_DisplayShow`. The software-renderer display path is left alone.
+
+Please switch modes a few times, for example the title screen into the game and back, or opening and closing the inventory. You should now see a brief black blink at each switch instead of garbage.
+
+- **Garbage still shows, but shorter:** the remaining frames come from the game itself, and I can raise the blank count.
+- **The blink is too long:** I can try 2 frames.
+- **Garbage looks the same as before:** the source is something else, for example before the mode-change code runs. Tell me and I'll dig further.
+
+- tool `Bash`: Check session log for mode switches and crashes
+
+## Claude
+
+PCSX2 has closed with no crashes. One thing stands out, though: the log has 78 video mode changes in 43 seconds. I'm checking whether that was you switching screens or something repeating on its own.
+
+- tool `Bash`: List mode change sequence
+
+## Claude
+
+False alarm: my search also counted the new `gs display:` stats lines. The real mode changes are as expected, one per screen switch, and the session ran normally (no crashes, 33% idle).
+
+How did the mode switches look this time? Was there a clean black blink, or is some garbage still visible?
+
+## User
+
+They looked clean. I'm wondering, is there a way to test how long it takes the PS2 to switch between 240p and 480i video output modes, compared to the PS1? I've noticed when playing the retail version of Silent Hill on my PS1 vs my PS2, the PS2 seems to lose video sync slightly longer. If that's something we could fix, that would be amazing, but I get the feeling that we can't change the timing in code. Still, I want you to investigate this.
+
+## Claude
+
+I'll check what gsKit actually does on a mode switch. A full reset of the GS would stop the video signal itself, and that would explain a longer sync loss.
+
+- tool `Bash`: Find gsKit source or disassemble init_screen
+
+- tool `Bash`: Disassemble gsKit_init_screen calls
+
+- tool `Bash`: Locate init_screen in disassembly
+
+- tool `Bash`: Check archive format and symbols
+
+## Claude
+
+The gsKit library is built with link-time optimization, so its archive has no machine code to read. I'll disassemble the linked copy in our ELF instead.
+
+- tool `Bash`: Disassemble linked gsKit_init_screen
+
+- tool `Bash`: Read the GS reset and SetGsCrt section
+
+## Claude
+
+I looked into this, and it turns out we can change it for the port, though not for the retail disc.
+
+**What the port does on every mode switch:** I disassembled `gsKit_init_screen` from our ELF. Each time the game changes video mode, the port re-runs it, and it does two things:
+1. **A full GS reset:** it writes `0x200` to `GS_CSR` (`sd v0,4096(s3)` with `s3 = 0x12000000`). That resets the whole GS, including the part that generates the video signal (the PCRTC), so the sync pulses stop altogether.
+2. **`SetGsCrt`:** a BIOS call that reprograms the video timing from scratch.
+
+So the TV briefly loses its signal entirely, then has to lock onto a new one.
+
+**What the PS1 does:** it changes the display mode with one GPU command (`GP1(08h)`), and the video signal keeps running throughout. Going between 240p and 480i at NTSC, the line rate stays the same (15.7 kHz). Only the vertical timing gains or loses its half-line offset, so a TV re-locks almost immediately.
+
+**Why retail Silent Hill does the same on a PS2:** a PS2 runs PS1 games on its IOP, which is an actual PS1 CPU, but the PS1's GPU is emulated with the GS. My understanding, which I can't verify from here, is that the PS1-mode driver reprograms the GS video timing on display mode changes in a similar way. That would explain the longer sync loss you see, and it can't be changed for the retail disc. For the port, the switch is our own code.
+
+**What we could do:** switch modes without resetting the GS. There are two lighter options:
+- **B:** skip the GS reset and call only `SetGsCrt`. It's simple and low risk, but `SetGsCrt` may still interrupt the signal briefly; I can't tell without testing.
+- **C:** keep the video signal untouched and only flip the interlace setting (`SMODE2`) and the display window (`DISPLAY1`/`DISPLAY2`). This is closest to what the PS1 does. The risk is that 240p and 480i may also need different vertical sync settings (`SYNCV`), which I'd have to determine, since those registers can't be read back.
+
+**How to measure it:**
+- **From software:** I can log how long the GS stops producing vertical-blank interrupts around a switch. That shows whether the video signal paused and for how long, on our side. It can't see when the TV re-locks.
+- **The TV's re-lock time** needs an outside observer. A slow-motion phone video (240 fps) of the screen during a switch is enough. Count the frames of blank or rolling picture on the PS1 retail game, the PS2 retail game, and the port with A, B or C.
+- **PCSX2 won't show the difference;** it doesn't emulate signal loss. This has to be tested on the console.
+
+**Proposal:** I add a build setting to choose between A (the current behaviour), B and C, plus the vertical-blank logging. You then run each one on the console and film a few switches, for example opening and closing the inventory. Deploying restarts the game on the PS2, so it needs you there with the camera ready. Should I set that up?
+
+## User
+
+For now, let's measure the difference in software, and I'll look at hardware later.
+
+## Claude
+
+I'll build the switch variants with logging and measure them in PCSX2 now. The same logging will give real numbers on the console when you get to it. For option C, I first need the vertical sync settings for both modes, so I'm checking whether the ps2sdk sources on disk record what `SetGsCrt` programs.
+
+- tool `Bash`: Search ps2sdk source for SetGsCrt/SYNCV
+
+- tool `Bash`: Look for SetGsCrt implementation
+
+- tool `Bash`: Probe gsKit display parameters and sync registers
+
+- tool `Bash`: Check constants and vblank handler
+
+- tool `Bash`: Remove probe; check build flag plumbing
+
+- tool `Bash`: Check how port files get compile flags
+
+- tool `Bash`: Find port file compile flags
+
+- tool `Bash`: Read PS2 HAL compile section
+
+## Claude
+
+Now writing the code: the build option, the vertical-blank gap measurement, and the three switch methods.
+
+- tool `Bash`: Implement switch methods and measurement
+
+- tool `Bash`: Build and measure each switch method in PCSX2
+
+- tool `Bash`: Rebuild and measure each method
+
+- tool `Bash`: Show switch measurements per method
+
+## Claude
+
+All three methods ran without crashing in PCSX2. The last ISO built is method 2, so I'm rebuilding the default (method 0) to leave things as they were.
+
+- tool `Bash`: Rebuild default ISO (method 0)
+
+## Claude
+
+The three switch methods are built and measured in PCSX2. The default ISO is back to the current behaviour (method 0).
+
+**What I added:**
+- **A build setting for the switch method** (`SH1_MODESWITCH`, in [display_ps2.c](src/port/ps2/display_ps2.c)):
+  - **0, the default:** gsKit's full setup on every switch (GS reset, `SetGsCrt`, a new frame buffer). This is the current behaviour.
+  - **1:** `SetGsCrt` only, with no GS reset.
+  - **2:** only the interlace setting (`SMODE2`) and the display window; the video timing isn't touched.
+- **A log line after every switch:** how long the setup took, and the longest gap between vertical-blank interrupts over the next 30 frames. If the video signal stops, the interrupts stop too, so that gap is a software measure of signal loss. 16,683 µs means it never stopped. The interrupt handler change is in [libetc_ps2.c](src/port/ps2/libetc_ps2.c).
+
+**Results in PCSX2,** over the same boot, title and game sequence (6–7 switches each):
+
+| method | setup time per switch | longest vertical-blank gap |
+|---|---|---|
+| 0: full gsKit setup (current) | 1.1–16.8 ms | 16.69–16.72 ms |
+| 1: `SetGsCrt` only | 0.38 ms | 16.71–16.72 ms |
+| 2: `SMODE2` only | 0.02 ms | 16.72 ms |
+
+- **Setup time is a real difference.** The current method can take up to 17 ms of CPU time, which is a whole frame, so a switch can cost the game a frame. Methods 1 and 2 are effectively instant. Most of method 0's time goes on gsKit reallocating and clearing its frame buffer.
+- **Signal loss can't be measured in PCSX2.** Its vertical-blank interrupts never stop, even through a GS reset, because it doesn't emulate the video signal going down. All three methods look identical there.
+
+**On the console,** the same log lines will show whether the signal stops. For method 0, I'd expect a gap noticeably longer than 16.7 ms if the GS reset really interrupts the sync output. That would be the measured cause of the longer sync loss you've noticed, and method 1's gap would show whether `SetGsCrt` on its own interrupts it.
+
+**Caveats:**
+- **Method 2** doesn't rewrite the vertical sync timing (`SYNCV`), because I can't find out the BIOS values; they're unreadable even in PCSX2. So it's for a hardware test only, and a TV may show a slightly off vertical position or a roll in one of the modes.
+- **Methods 1 and 2** skip gsKit's buffer reallocation and keep the 640×480 buffer from the first setup. That's fine, because it's already sized for the largest mode.
+- **Not visually checked yet:** I haven't looked at methods 1 and 2 on screen, only that they run without crashing and log normally.
+
+Nothing is committed. For the hardware test later, build with `SH1_MODESWITCH=0`, `1` or `2`, deploy, switch modes a few times (for example, open and close the inventory), and send me the console log. Filming the TV at the same time would show how long the picture is actually lost.
+
+## User
+
+When you say "Methods 1 and 2 skip gsKit's buffer reallocation and keep the 640×480 buffer from the first setup. That's fine, because it's already sized for the largest mode.", can you explain that a little more? I thought we were getting rid of the 640x480x32 buffer from before.
+
+## Claude
+
+You're right to question that, and my sentence was wrong in two ways.
+
+**1. The buffer hasn't gone away; only its use changed.** Before today, every frame was copied into gsKit's buffer and the TV showed that buffer. Now:
+- **Double-buffered frames** (normal gameplay at 224p) are shown straight from the PS1 VRAM copy, and the buffer isn't touched.
+- **Single-buffered screens** (the title and inventory at 448i) still need it. That's the fix for the missing text: those screens redraw the area that's on screen, so we take a snapshot of each finished frame into this buffer and display the snapshot.
+
+So the buffer still has a job, but only for those screens. What I planned to reclaim was most of its size, not the buffer itself. It's 32-bit today, but PS1 pixels are 16-bit, so a 16-bit snapshot buffer holds exactly the same image at half the size.
+
+**2. It isn't "already sized for the largest mode."** gsKit sizes the buffer at each setup for that mode:
+- **progressive (240 lines):** 640×240×4 bytes = 600 KB
+- **interlaced (480 lines):** 640×480×4 bytes = 1.2 MB
+
+The first setup is 320×240 progressive, so with methods 1 and 2, which never reallocate, the buffer is only 600 KB. On the first 448i screen, the 448-line snapshot (1.1 MB) runs past its end. It doesn't break anything today, but only by luck: the overflow lands in the unused space below `0x130000`, where the texture cache starts. Method 0 doesn't have this problem, because it reallocates for each mode.
+
+**The clean fix** also does the memory reclaim I had planned:
+1. Stop using gsKit's buffer for the snapshot. Use our own fixed 16-bit buffer, sized for the largest PS1 display, 640×480×2 = 600 KB, at a fixed address in the GS memory map, like the texture cache.
+2. Allocate gsKit's own buffer as small as possible. It's only used during gsKit's setup, and we can't skip that entirely in method 0.
+3. Move the texture cache's lower bound down into the freed space.
+
+That makes methods 1 and 2 safe regardless of the starting mode, and frees about 600 KB to 1 MB of GS memory, depending on how small gsKit's buffer can go. It's also a further small saving for the 448i screens, since a 16-bit snapshot moves half the data.
+
+Should I do that now?
+
+## User
+
+Given that the PS1 is able to show the dual buffers for 320x224, the single buffer for 640x448, and the single buffer for 320x448, all without needing a secondary framebuffer copy for display, why can't we do the same on PS2? It seems rather wasteful to me to NOT show directly from the PS1 VRAM copy.
+
+## Claude
+
+We can, and you're right that the copy is a workaround. The reason my first attempt broke those screens is a PS1 GPU feature the port doesn't emulate yet.
+
+**How the PS1 manages it:** in interlaced modes, the PS1 GPU has a "drawing to display area" setting, the DFE bit in `GP0(E1h)`. When it's off, which is the normal setting for single-buffered interlaced screens, the GPU skips every pixel on the lines of the field currently being sent to the TV. It only writes the lines of the other field. The field being scanned out is never touched, so the game can redraw its single buffer every frame without the TV catching it half-drawn. The two fields alternate every vertical blank, so each field is shown complete while the other one is redrawn.
+
+**What the port does:** the GS draws every line at once, so it overwrote the field being scanned out. That's why the background showed but the later text and icons didn't. The copy hid this by taking a snapshot. That also makes the result look slightly different from a real PS1: we show both fields from the same moment, while the PS1 shows fields drawn one frame apart, which you'd only notice on moving images.
+
+**The GS has the matching features:**
+- **`SCANMSK`** (a GS drawing register) can block drawing to even lines (value 2) or odd lines (value 3). That's exactly the PS1's field skipping.
+- **`CSR.FIELD`** (readable) tells us which field the GS is scanning out right now.
+
+**So the plan is:**
+1. When the display is interlaced and the game's DFE bit is off, set `SCANMSK` to block the lines of the field currently being displayed. Update it as the field changes: at each packet flush, and at each vertical blank for anything queued.
+2. Show every mode directly from the VRAM copy, including the 448i screens. Remove the snapshot copy and the touch tracking I added today.
+3. Make gsKit's buffer as small as gsKit allows, and give the reclaimed memory to the texture cache.
+
+**Risks to check:**
+- **Field mapping:** which GS field corresponds to the PS1's even lines. If I get it backwards, we'd block the wrong lines and the missing-text problem would come back in half the lines. That's easy to spot on the title screen, and simple to flip.
+- **Field changes mid-draw:** the field can change partway through drawing a frame. On the PS1 that's decided pixel by pixel as each one is drawn; here it would be per batch. Batches are short compared with a field (16.7 ms), so any difference should be a line or two, and only on frames that cross a field change.
+- **PCSX2's deinterlacing** may blur differences between the fields. The final check should also be on the console.
+- **Single-buffered progressive screens** would tear on a real PS1 too. Showing them directly is faithful, so they don't need the mask.
+
+The one remaining case for a separate buffer is 24-bit movie playback, which the GS can't scan out directly from the PS1's packed format. That's for later, when movies are supported.
+
+Should I implement it?
+
+## User
+
+As far as I know, there aren't any single-buffered progressive screens in the game. You can verify that. Otherwise, proceed with the implementation.
+
+## Claude
+
+I'll verify that first. The touch tracking I added today already tells single-buffered frames apart, so it can find any progressive screen that redraws the area on screen. In the earlier session logs, 224p gameplay was always shown directly. But the very first stats interval at boot, which covers 240p and then 224p, had 34 copied frames, and that needs explaining. I'll add a temporary log line for any progressive frame detected as single-buffered (not counting the forced copy right after a mode change), then run it over boot, all 43 maps and the Demo cutscenes.
+
+- tool `Bash`: Add temporary single-buffer probe; read demo sweep usage
+
+- tool `Bash`: Find demo sweep log location
+
+- tool `Bash`: Sweep maps and cutscenes for single-buffered progressive frames
+
+## Claude
+
+While the sweep runs, I'm reading the code the `SCANMSK` change will touch: the texture-page slot addressing and the fill path.
+
+- tool `Bash`: Read slot addressing and fill_rect
+
+- tool `Bash`: Implement SCANMSK field skipping and direct display
+
+- tool `Bash`: Find all s_TexPage writes
+
+- tool `Bash`: Read polygon texpage update
+
+- tool `Bash`: Keep DFE bit, add vblank counter, wire display call
+
+- tool `Bash`: Check build result, remove stray log
+
+## Claude
+
+The new code compiles and links. I'll build the ISO from it once the sweep finishes, then wait for the sweep result before testing.
+
+- tool `Bash`: Read sweep results
+
+- tool `Bash`: Show context around probe hits
+
+- tool `Bash`: Build SCANMSK version and smoke-test boot
+
+## Claude
+
+It boots through every mode and reaches the title screen and the game without crashing. Whether the field masking hides the half-drawn frames is a visual check, so I'm launching PCSX2 for you.
+
+- tool `Bash`: Launch PCSX2 to check field-masked direct display
+
+## Claude
+
+I confirmed there are no single-buffered progressive screens, and PCSX2 is now running the field-masked build for you to check.
+
+**What I found:** I ran all 43 maps and the 52 Demo cutscenes with a probe for progressive frames that draw into the area on screen. Your expectation holds; the only hits were harmless.
+- **The first boot frames, before the logos:** the two 240-line buffers at y = 32 and y = 256 share 16 lines. The real PS1 also draws those lines while they're visible.
+- **One leftover frame right after leaving each 448i screen.**
+
+**What the new build does:**
+- **Every mode is shown straight from the PS1 VRAM copy,** including the 640×448i and 320×448i screens. The snapshot copy and the touch tracking are gone.
+- **Single-buffered interlaced screens work as on the PS1:** with DFE off, nothing is drawn on the lines of the field being scanned out. This uses the GS's `SCANMSK`, updated from `CSR.FIELD` at each vertical blank, and it applies to fills too. The polygon texture-page update no longer clears the DFE bit, matching the PS1.
+- **gsKit's buffer is now 16-bit** and only used during gsKit's setup. That gives the texture cache 9 more 64 KB slots (28 → 37).
+- **The mode-switch blanking stays.** The default switch method is still the full gsKit setup.
+
+**Please check the title screen and the inventory:**
+- All menu text and icons should be present. If roughly half the lines are missing or flicker, the field mapping is inverted, which is a one-line flip.
+- The picture should be complete, not doubled or shifted by a line.
+- Normal gameplay should look the same as before.
+
+PCSX2 may blend the two fields when it deinterlaces, so the final check on field behaviour will be on the console.
+
+## User
+
+Half the lines on the text on the menu screen are missing, but there are parts of the text that looks normal. On the inventory screen, it's "No. 1", with the "1" appearing normal, and "Name:", with the "ame:" appearing normal. On the title screen, it's "OPTION", with "ION" appearing normal.
+
+## Claude
+
+The symptom points at timing, not at an inverted field mapping. If the mapping were backwards, all text would be broken the same way. Instead, some letters look complete and others are missing every other line. That fits text that only ever gets drawn while the same field is on screen, so its other field's lines are never filled in.
+
+With field skipping, each field only gets drawn while the other one is displayed. A screen redrawn after every vertical blank fills both fields in turn. But if the game redraws only every second vertical blank, which is 30 fps, every redraw lands in the same field. The other field's lines then keep whatever was drawn earlier. The parts that look normal would be ones that happened to be drawn at least once in each phase, for example while the screen was opening.
+
+Before changing anything, I want to measure it: on those screens, how many vertical blanks pass between frames, which field is on screen at each swap, and the DFE bit the game sets.
+
+- tool `Bash`: Add temporary interlace timing probe and build
+
+## Claude
+
+The previous PCSX2 session has closed. The title screen comes up on its own about 4 s after boot, so I can capture the probe without your help.
+
+- tool `Bash`: Capture interlace timing at boot and title
+
+- tool `Bash`: Capture probe on the 320x448i title screen
+
+## Claude
+
+The probe's 400-line limit was used up by the boot screen. I'm raising it.
+
+- tool `Bash`: Rebuild with higher probe limit and capture title
+
+- tool `Bash`: Read input script format
+
+- tool `Bash`: Dump title frames and VRAM
+
+## Claude
+
+Those dumps landed on the boot screen. The script times are in emulated seconds, and the title appeared later than I'd guessed. I'll dump later in the run.
+
+- tool `Bash`: Dump during title screen
+
+- tool `Bash`: Convert dumps to PNG
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/title/f1500.png
+
+## Claude
+
+The VRAM copy looks complete at this scale. I'm zooming in on the menu text to check line by line.
+
+- tool `Bash`: Crop and enlarge menu text
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/title/crop.png
+
+- tool `Bash`: Flip field mapping, remove probe, rebuild
+
+- tool `Bash`: Launch PCSX2 with flipped field mapping
+
+## Claude
+
+PCSX2 is running the corrected build, and you can take over.
+
+**What was wrong:** the field mapping was inverted, the risk I mentioned before. I dumped the title screen's VRAM and every line of "START / DEMO / OPTION" was intact in both fields, so the drawing was right. The mask was blocking the wrong field, though: it stopped drawing into the field being redrawn and let it hit the field the TV was showing. The TV caught its field half-redrawn every frame, so every other line of the text drawn later in each frame was missing, while the other field stayed complete. The dump looked fine because both fields are finished by the time it's taken.
+
+**Fix:** when the GS reports field 0, it's actually scanning out the odd lines of VRAM, so field 0 now masks the odd lines and field 1 the even ones. The temporary probe is removed.
+
+**Please check the same places again:**
+- "OPTION" on the title screen
+- "No. 1" and "Name:" in the inventory
+- the rest of the menu text and icons
+- normal gameplay
+
+- tool `Bash`: Check session log
+
+## Claude
+
+PCSX2 has closed after a clean session: about 230 s, four visits to the 448i screens, and no crashes, watchdog warnings or stuck transfers. How did the title and inventory text look this time? Were all the lines there?
+
+## User
+
+No, they looked broken this time.
+
+## Claude
+
+Both mappings look broken, so the mapping isn't the whole story, and I'd rather measure than flip it back and forth. I'll check whether PCSX2 runs can capture the actual displayed output, not just the port's VRAM dumps, which have been fine every time.
+
+- tool `Bash`: Look for screenshot or capture support
+
+- tool `Bash`: Log VRAM operations during 448i title frames
+
+## Claude
+
+That hypothesis is wrong. Each 448i title frame does exactly one VRAM operation outside normal drawing: a fill (the screen clear) at (0,32) 320×448. Fills are masked, and there are no copies or uploads. So the drawing is correctly confined to one field per frame, and the VRAM dumps show both fields complete.
+
+**Where that leaves us:** if the drawing is right and VRAM is complete, the broken image must come from how PCSX2 presents an interlaced display that changes one field per frame. The likely culprit is its deinterlacing (Automatic, Blend, Bob and so on), which combines fields in its own way. A real PS2 would just scan out the fields one after another, so the console may already be fine. I can't see PCSX2's window, though, and I don't want to guess a third time.
+
+Could you help me with two things?
+1. **Describe what "broken" looks like now.** Is it the same missing-every-other-line pattern on the same letters, different letters, flickering, or a doubled or shaky image?
+2. **Take a screenshot in PCSX2** (F8 by default, saved to `~/.config/PCSX2/snaps/`) on the title screen. Also tell me the Deinterlacing setting under Graphics → Rendering.
+
+I'll keep this build. The only extra thing it does is log a probe line. If you can try another deinterlacing mode, for example Weave or Off, and the text then looks complete, that confirms it's PCSX2's presentation and not the port. The final check would then be on the console.
+
+## User
+
+I took screenshots with Automatic, No Deinterlacing, Bob Top Field First, Blend, and Weave, in that order.
+
+- tool `Bash`: List PCSX2 screenshots
+
+- tool `Bash`: Crop menu text from each screenshot
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/snap_weave.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/snap_auto.png
+
+- tool `Bash`: Log per-frame timeline of clear, mask, and swap
+
+## Claude
+
+Those are fills only; the mask and swap lines used up their 300-line budgets during the boot screen. I'm looking at the start of the title section instead.
+
+- tool `Bash`: Show timeline on the 640x448i boot screen
+
+- tool `Bash`: Show timeline on the 320x448i title
+
+- tool `Read`: /home/alex/.config/PCSX2/snaps/sh1_ps2_SHPS-00001_20261017101046.png
+
+- tool `Bash`: Dump full VRAM at title with current mapping
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/title2/vram.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/title2/crop.png
+
+- tool `Bash`: Restore probe-free SCANMSK version and rebuild
+
+## Claude
+
+The interlaced screens are still broken in PCSX2, and I can't explain why from the port's side. Per-field drawing (the real PS1 behaviour) can't be judged in PCSX2; only the console will show whether it works. The current build is the field-masked version without the probes. Nothing is committed.
+
+**What I checked:**
+- **Drawing:** the title frame clears the screen, then draws about 245 primitives. Each frame touches only one field, alternating every vertical blank, exactly as the PS1 rule specifies.
+- **VRAM:** dumps at each frame swap show the complete menu in both fields. The menu text is drawn directly from the font pages, not rendered off-screen.
+- **Timing:** drawing starts right after each vertical blank and finishes within a few milliseconds.
+- **PCSX2's output:** in every deinterlacing mode, including Weave, "START", "DEMO" and "OPT" are missing, while "ION" and everything else is shown. That doesn't match what VRAM holds at any frame swap.
+
+**Options:**
+1. **Use snapshots for single-buffered interlaced screens, as before.** The PS1-style field masking stays behind a build setting for a console test. The snapshot goes into a 16-bit buffer the port owns, so most of the memory saving is kept (600 KB at most instead of 1.2 MB), and all progressive gameplay is still shown directly. The title and inventory looked correct this way earlier today. *(Recommended for now.)*
+2. **Keep field masking as the default and test it on the console next.** If it works there, PCSX2's interlace handling is the odd one out. If it doesn't, we'd at least see the real failure.
+3. **Dig into PCSX2's interlace and `SCANMSK` handling,** for example by testing a tiny standalone program that draws one field at a time with `SCANMSK`. That would show what PCSX2 does, but it's a detour from the port itself.
+
+My recommendation is option 1 now, plus a field-masking build for your next console session. On hardware, the mode-switch timing logs would come from the same session. Should I go ahead?
+
+## User
+
+Let's go with option 1 for now, but keep 2 and 3 in our back pocket. The reason I wanted to optimize and check VRAM was that I want to know how viable it would be to have a 480p and a 720p mode. The game's internal resolution would change, but I'm hoping that the fill rate of the PS2 is high enough that this wouldn't make much difference to the frame rate. 480p mode would never have the switches between 240p and 480i, instead staying at 480p the whole time. The 320x224p mode would become 640x448, the 320x448i mode would become 640x448p, with aspect ratio fixes necessary to cancel out the stretching, and the 640x448i mode would simply become 640x448p. I realize that 480p mode would require more VRAM, but given that the Graphics Synthesizer is designed to shuttle textures in and out of VRAM quickly so they don't take up too much space, I hope that it's still viable. 1280x720p may be more difficult, but it does have precedent in homebrew software. Let me know your thoughts on the viability of each mode.
+
+## Claude
+
+I'll do option 1 first, then answer the 480p/720p question.
+
+For option 1, single-buffered interlaced screens (interlaced, 480 lines, DFE off) get snapshot-copied into a 16-bit buffer at the bottom of GS memory, below the texture cache. Everything else is still shown directly from VRAM. The PS1-style field masking (option 2) moves behind a build setting, `SH1_INTERLACE_FIELDS=1`.
+
+- tool `Bash`: Implement snapshot fallback, field masking behind a flag
+
+## Claude
+
+Both variants build. Launching PCSX2 so you can check the title and inventory with option 1.
+
+- tool `Bash`: Launch PCSX2 to check option 1
+
+## Claude
+
+Option 1 is built, and PCSX2 is running it for you to check. Single-buffered interlaced screens (interlaced, 480 lines, DFE off) are snapshot-copied into a 16-bit buffer at the bottom of GS memory. Everything else is still shown directly from VRAM, and the texture cache keeps its 37 slots. The PS1-style field masking is behind `SH1_INTERLACE_FIELDS=1` (option 2), noted as broken in PCSX2 and to be tested on hardware. Please check that the title and inventory text are complete again.
+
+## 480p and 720p
+
+**Short version:** 480p is viable. Fill rate isn't the problem, and the VRAM fits. The hard part is the same as in every upscaling PS1 emulator: keeping the high-resolution image and the PS1's 1:1 VRAM in agreement. 720p at full internal resolution doesn't fit in VRAM with double buffering. A 720p output signal showing an image rendered at a lower resolution is easy.
+
+### Fill rate: not the limit
+
+- **What the GS can do:** about 2.4 billion pixels a second untextured and about 1.2 billion textured. At 60 fps that's roughly 20 million textured pixels per frame.
+- **What Silent Hill needs:** about 72k pixels per frame at 320×224. Even assuming 4× overdraw (the fog pairs alone double the world), that's about 0.3 million pixels per frame.
+  - **640×448:** 4× that, about 1.2M per frame, or 6% of the fill rate.
+  - **1280×720:** about 13×, roughly 4M per frame, or 20%. Texture and CLUT switching (about 340 a frame) adds some cost, but it should still fit.
+
+**One catch:** GS sends in this port are currently synchronous. The CPU waits for each transfer, and once the GS has more pixels to draw, its FIFO backs up and that wait grows. So more GS work can turn into CPU time until the planned CPU/GS overlap (option 5) is done. Both come down to the same `DrawOTag` work we were about to start. The CPU-side cost per primitive doesn't change with resolution; it's the same conversion with scaled coordinates.
+
+### VRAM
+
+The 1 MB PS1 VRAM copy stays at 1:1 in every mode. It holds the textures, the CLUTs and anything the game reads back.
+
+| | 480p (640×448, 16-bit) | 720p (1280×720, 16-bit) |
+|---|---|---|
+| render buffers (×2, double-buffered) | 2 × 560 KB = 1.1 MB | 2 × 1.8 MB = 3.6 MB |
+| PS1 VRAM copy + CLUT cache | 1.06 MB | 1.06 MB |
+| left for the 4/8-bit texture cache (4 MB total) | about 1.8 MB (≈ 28 slots, today's original count) | negative: doesn't fit |
+
+- **480p** fits comfortably. We measured 0 texture uploads per frame in steady play, so a cache the size the port had until today is fine. On "shuttling textures": the GS can upload quickly, about 0.3–0.5 ms for a 64 KB page through the GIF path. That's fine for a few pages a frame, but would cost real time if the cache were too small and thrashed.
+- **True 720p** options:
+  - **Single buffer:** 1.8 MB plus the 1 MB copy leaves about 1.1 MB for textures. But then the game draws into the buffer being scanned out, which causes tearing, or needs the field-style workarounds.
+  - **Lower internal width** for the render buffers, such as 960×720 at about 1.4 MB each, still doesn't double-buffer comfortably.
+  - **Rendering at 640×448 or 640×360 and letting the GS output stretch it** to a 720p signal is what most PS2 homebrew "720p" actually does (OPL, the GSM video-mode tool). Horizontal stretching can be ×2 exactly. Vertical stretching only comes in whole multiples, so 448 lines would be letterboxed and 360 lines doubles cleanly. That's easy, but it isn't higher detail than 480p.
+
+### What makes it hard: the upscaling itself
+
+- **Two copies of the screen:** the game draws into the PS1's 1024×512 VRAM, and in a 2× mode the screen exists twice, at 1× in the copy and at 2× in the render buffers. Every effect that reads the framebuffer has to be handled, the same way DuckStation or PCSX2's upscaling does it:
+  - fades and screen copies (`MoveImage` of display areas)
+  - drawing that uses the screen as a texture (the port already counts "prims texturing from VRAM", 0 in gameplay so far)
+  - `StoreImage` readbacks
+  - the 448i title and inventory overlays
+- **Scaling rule:** each axis gets its own factor. 224p → 448 is ×2 on both axes. 320×448i → 640×448p is ×2 horizontally and ×1 vertically. 640×448i → 640×448p is ×1. Done that way the picture stays 4:3 with no stretching, so no separate aspect fix is needed. Only 2D elements built for one mode, like text and HUD sprites, need checking for seams or half-pixel gaps at 2×.
+- **No more mode switches:** in 480p, everything goes through one fixed 640×448 progressive output. This also removes the switch blinking and sync loss we just looked at.
+- **Hardware limits:** 480p needs a component cable and a display that accepts 31 kHz; composite and S-Video can't carry it. 720p needs an HDTV, and the GS's 720p mode works on all retail PS2 models.
+
+### Suggested path
+
+1. **First, the `DrawOTag` work and asynchronous GS sends.** They help today, and they make 480p cheaper.
+2. **A 480p prototype:** scale coordinates and scissor in `gpu_gs.c` into separate 2× buffers, output 480p, and leave VRAM effects at 1× at first. That shows the real frame rate and which effects break.
+3. **720p:** later, as output stretching of the 480p render, unless memory frees up.
+
+Tell me how option 1 looks. After that I'd start the `DrawOTag` breakdown.
+
+- tool `Bash`: Check option 1 session log
+
+## Claude
+
+PCSX2 has closed after a short session: about 26 s, one visit to a 448i screen, and no crashes. How did the title screen look with option 1? Was the menu text complete?
+
+## User
+
+Yes it was. Let's move on to the DrawOTag work, but one last thing before that. We've had a copy of the PS1 VRAM this whole time for legacy reasons while we had the software renderer, but I don't think we need to keep an exact copy. At this point, I just want PS2 VRAM to be analogous to PS1 VRAM, in that we have framebuffers, CLUTs, and textures, but they don't necessarily need to be in the same spots as the PS1 VRAM, and we don't need to have a copy of the PS1 VRAM. What can we do to achieve this?
+
+## Claude
+
+There are two "copies" in play today, and they're different things. Your goal is reachable for one of them, and the other is already what you're describing.
+
+### 1. The GS-side PS1 VRAM image (1 MB at `0x300000`)
+
+This isn't a copy; it is the port's PS1 VRAM. The game draws its framebuffers into it, and 16-bit textures are read straight from it. It's also the master data for 4/8-bit textures and CLUTs. So it already is "framebuffers, CLUTs and textures in PS2 VRAM". The parts that are converted into GS formats, the 4/8-bit texture pages and the CLUT rows, already live in their own places (the page cache and the CLUT cache).
+
+Rearranging it into separately placed framebuffers, textures and CLUTs isn't worth it. The game addresses VRAM only by PS1 (x, y) rectangles and freely reuses the same pixels in different roles:
+- a framebuffer area later sampled as a texture (fades, screen effects)
+- CLUTs stored in spare framebuffer rows
+- `LoadImage`, `MoveImage` and `StoreImage` working on arbitrary rectangles
+
+With relocated pieces, every one of those operations would have to work out which pieces a rectangle overlaps, in which roles, and keep them consistent. A single 1:1 image handles all of that for free. It would also save no GS memory unless large parts of PS1 VRAM were never used, and the game uses most of it over time.
+
+### 2. The EE-side copy, `g_PortVram` (1 MB of main RAM)
+
+This one is left over from the software renderer, and it can go. In the GS renderer it's only used for four things:
+- **Filling the 4/8-bit page cache and the CLUT cache:** the CPU reads the indices out of it on a cache miss.
+- **Staging `LoadImage` uploads:** the game's data is copied into it, then sent to the GS.
+- **Keeping it in step on the CPU:** every fill (screen clear) and every `MoveImage` is repeated on the CPU. That's real cost every frame. The clear alone is 72k pixel writes per frame in gameplay and 143k on the 448i screens.
+- **`StoreImage`:** answered from a GS readback already.
+
+**Without it:**
+- **`LoadImage`** uploads straight from the game's buffer.
+- **Fills and copies** happen only on the GS, so the CPU loops disappear. That's a direct win for the frame time we're about to work on.
+- **Cache misses** (rare: 0 per frame in steady play) read the page or CLUT back from the GS, about 30–60 KB each. Better still, the GS might convert it itself with a local-to-local transfer from the 16-bit image into a 4/8-bit page. I'm not sure the GS allows that format change, so it needs a test in PCSX2 and on hardware. Readback is the safe fallback.
+- **Drawing into texture pages** (render-to-texture) becomes simpler: today the CPU copy goes stale there and needs special handling. With the GS as the only master, a re-read picks up the new pixels.
+- **The software renderer and the GS/software compare mode** need the EE copy. I'd keep them building, with the copy only in those modes, or remove them if you consider them retired.
+
+### Proposal
+
+1. Measure what the CPU mirroring costs per frame now (fills, copies and uploads), so the gain is known.
+2. Remove `g_PortVram` from the GS renderer: direct uploads, GS-only fills and copies, and readback on cache misses.
+3. Test GS-side conversion for cache misses as an improvement.
+4. Verify with the deterministic benchmark (pixel-identical frame dumps) and the warp sweep.
+
+Since step 1 is profiling, it can be the start of the `DrawOTag` work. Should I go ahead? And should the software renderer stay buildable or be retired?
+
+## User
+
+Yes, let's start on that. Let's also retire the software renderer, as we can test against Duckstation instead.
+
+## Claude
+
+I'll start by mapping everything that touches `g_PortVram` and the software renderer.
+
+- tool `Bash`: Survey VRAM copy and software renderer usage
+
+- tool `Bash`: List renderer references in libgpu_port.c
+
+- tool `Bash`: Read libgpu_port.c top half
+
+- tool `Bash`: Read rest of libgpu_port.c
+
+## Claude
+
+Next I'm reading the GS side: uploads, readback and the "texturing from VRAM" path.
+
+- tool `Bash`: Locate readback and render-to-texture code
+
+- tool `Bash`: Read transfer, readback, CLUT, rt-texture code
+
+- tool `Bash`: Baseline Kaufmann benchmark with dumps and log
+
+## Claude
+
+While the benchmark runs, I'll only read code, since editing now could race its build. Next: what else depends on the software renderer, and the display module's soft path.
+
+- tool `Bash`: Find software renderer dependents and display soft path
+
+- tool `Bash`: See why benchmark failed
+
+## Claude
+
+My copy of the benchmark script changes into a directory relative to its own location, which is wrong once it lives in my scratchpad. I'm pointing it at the repo and rerunning.
+
+- tool `Bash`: Run baseline benchmark
+
+## Claude
+
+The baseline is running. Meanwhile I'm reading the remaining pieces: the dump code in `Display_PresentGs`, and how the capture tool uses the VRAM copy.
+
+- tool `Bash`: Read dump code and capture usage
+
+- tool `Bash`: Read remaining details for the edit script
+
+- tool `Bash`: Read dump function and function boundaries
+
+- tool `Bash`: Read baseline results
+
+## Claude
+
+The baseline is in: **46.89 fps** (6,335 frames in 8,097 vertical blanks), plus 10 frame dumps. Now I'm applying the changes.
+
+- tool `Bash`: Remove software display path and copies from display_ps2.c
+
+- tool `Bash`: Update display_ps2 header comment
+
+## Claude
+
+Now `libgpu_port.c`.
+
+- tool `Bash`: Simplify libgpu_port.c to GS-only, no EE VRAM copy
+
+## Claude
+
+Now `gpu_gs.c`: the readback helper, cache misses read from the GS, no CPU mirrors, direct uploads and `StoreImage`.
+
+- tool `Bash`: Show remaining VRAM copy references in gpu_gs.c
+
+- tool `Bash`: Read header comment and cache_get loop
+
+- tool `Bash`: GS-side readback, direct uploads, no CPU mirrors
+
+- tool `Bash`: Drop SH1_GPU and gpu_soft.c, build
+
+## Claude
+
+It builds. Next I'm checking for new compiler warnings in the changed files, then running the benchmark against the baseline.
+
+- tool `Bash`: Check warnings; benchmark and compare dumps
+
+- tool `Bash`: Distribution of uploads/readbacks per frame
+
+- tool `Bash`: Break down cache misses during cutscene
+
+- tool `Bash`: Identify what invalidates cached pages
+
+- tool `Bash`: Restore probe-free file; locate insertion points
+
+- tool `Bash`: Patch cached pages/CLUTs on fills instead of dropping them
+
+## Claude
+
+It links. Running the benchmark again: the frame dumps must still match the baseline, and readbacks should drop to 0.
+
+- tool `Bash`: Benchmark with fill patching
+
+- tool `Bash`: Warp sweep with the copy-free renderer
+
+- tool `Bash`: Which map failed
+
+- tool `Bash`: Inspect map0_s00 failure log
+
+- tool `Bash`: Compare game state sequence with earlier passing run
+
+- tool `Bash`: Reproduce map0_s00 in bench and normal builds
+
+- tool `Bash`: Resolve crash PC in benchmark build
+
+- tool `Bash`: Test map0_s00 bench crash on last commit, then restore work
+
+- tool `Bash`: Bisect: without GTE-side changes
+
+- tool `Bash`: Log lines leading up to the crash
+
+- tool `Bash`: Read capture VRAM write and other malloc use
+
+- tool `Bash`: Banded readback for dumps and captures, no malloc
+
+## Claude
+
+`GpuGs_Download` has no callers left, so I'm removing it. Then I'll rerun the map0_s00 benchmark-build test.
+
+- tool `Bash`: Rebuild and retest map0_s00 in benchmark build
+
+- tool `Bash`: Look at the new failure
+
+- tool `Bash`: Compare load-screen sequence: last commit vs now
+
+- tool `Bash`: Compare emulated time of the load
+
+- tool `Bash`: Print vblank and frame numbers during load
+
+- tool `Bash`: Compare dumps and post-load behaviour
+
+- tool `Bash`: Full warp sweep with normal build
+
+## User
+
+[Request interrupted by user for tool use]
+
+## User
+
+I'm ending this early because I feel confident in the results. Let's just move on to the DrawOTag work
+
+- tool `Bash`: Look for sampling or function-level profilers
+
+- tool `Bash`: Check EE timer usage
+
+- tool `Bash`: Find text section bounds and demo event prints
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/sample_ps2.c
+
+- tool `Bash`: Check _etext and demo hook points
+
+## Claude
+
+There's no `_etext` symbol, so I'll use `_fdata`, the start of `.data`, which follows `.text` closely, as the end bound. Then I'll hook the Demo menu and the build flag.
+
+- tool `Bash`: Hook sampler into demo menu and build
+
+## Claude
+
+Now the analysis tool.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/samples.py
+
+## Claude
+
+Now a sampled run of the Kaufmann cutscene in the benchmark build, which runs uncapped so no time is spent idle.
+
+- tool `Bash`: Sampled benchmark run of the Kaufmann cutscene
+
+## Claude
+
+Every sample landed outside the code, so the interrupted PC isn't what this handler reads from `EPC`. I'll log a few raw values to see what's there.
+
+- tool `Bash`: Probe raw EPC values in the timer handler
+
+- tool `Bash`: Find kernel exception hooks
+
+- tool `Bash`: See how the crash reporter gets the faulting PC
+
+- tool `Bash`: Read ee_debug API and crash install
+
+- tool `Bash`: Remove the sampler
+
+## Claude
+
+`git status` shows no changes to `port_link.py`, but it should still carry today's edits (the `SH1_GPU` removal and the new build options). I'll check what state the working tree is in.
+
+- tool `Bash`: Check working tree and stash state
+
+## Claude
+
+The whole working tree reports clean, with no stash entries, and even the untracked `Gemini Conversation.md` isn't listed. Checking whether that's because the changes were committed:
+
+- tool `Bash`: Inspect recent commits
+
+- tool `Bash`: List functions in the primitive path
+
+- tool `Bash`: Read the primitive conversion path
+
+- tool `Bash`: Check includes and build flags plumbing
+
+- tool `Bash`: Add light cycle counters to DrawOTag paths
+
+- tool `Bash`: Check end of prof.h
+
+- tool `Bash`: Apply light counters
+
+## Claude
+
+Building the benchmark with the light counters and running the Kaufmann cutscene. The frame rate will also tell me how much the counters themselves cost.
+
+- tool `Bash`: Run Kaufmann benchmark with light counters
+
+- tool `Bash`: Find fog pair stats users
+
+## Claude
+
+The fog-pair counts were a one-off diagnostic for the fog-pair fusion, which is done. I'll keep them in profiling builds (`SH1_PROF` or `SH1_LITEPROF`) only.
+
+- tool `Bash`: Make fog pair stats profiling-only
+
+## Claude
+
+The closing `#endif` landed inside the loop. Fixing its position:
+
+- tool `Bash`: Fix #endif placement
+
+## Claude
+
+If the light-counter builds keep the statistics on, they can't measure this saving. I'll enable them only in `SH1_PROF` builds.
+
+- tool `Bash`: Benchmark without fog pair stats
+
+- tool `Bash`: Frame rate excluding dump stalls
+
+- tool `Bash`: Split state lookup cost
+
+- tool `Bash`: Function sizes and Prim layout
+
+## Claude
+
+`prim_state` compiles to 5.3 KB, because `state_other`, `tex_state`, `cache_get` and the register helpers are all inlined into it. I'll read its fast path, the part that runs when nothing changed.
+
+- tool `Bash`: Disassemble prim_state fast path
+
+- tool `Bash`: Find writes to state globals
+
+## Claude
+
+Only the `GP0 E2`–`E6` handler writes those globals, so a generation counter bumped there whenever a value actually changes covers every case. Implementing it:
+
+- tool `Bash`: Generation-based state memo, slim fast path; benchmark
+
+## Claude
+
+The state lookup went from 400 to 334 kcycles a frame, and all 10 dumps still match. The memo path itself still costs about 140 cycles per call, so I'm checking what the fast path compiles to now.
+
+- tool `Bash`: Check slimmed prim_state code
+
+- tool `Bash`: Bounding-box fit check, shared tag for fog pairs; benchmark
+
+- tool `Bash`: Log DrawOTag first pass
+
+## Claude
+
+I've cut `DrawOTag` by 14% in the Kaufmann cutscene, from 1,763 to 1,523 kcycles a frame, about 240k cycles saved per frame. All 10 frame dumps are identical to before. Nothing is committed, and I haven't rerun the warp sweep after these changes.
+
+**How it was measured:** a new light counter set (`SH1_LITEPROF=1`) times the parts of `DrawOTag` with inline cycle-counter reads, which cost a few cycles each. The old profiling sections cost hundreds of cycles per call, which distorted per-primitive work. A sampling profiler doesn't work under the ps2sdk kernel, so I dropped it. The benchmark's frame rate is a poor measure here, because it sits at 60 fps for most of the cutscene and includes the dump stalls. So the cycle counts are the measure and the frame dumps check exactness.
+
+**Where the time went before:** walking the ordering table and handling each packet cost 166k a frame. The rest was about 960 polygon calls a frame (half of them fog pairs), at roughly 1,300 cycles each, split across parsing the PS1 packet, looking up GS state and packing GS data.
+
+**What changed** (in [gpu_gs.c](src/port/ps2/gpu_gs.c)), all exact:
+1. **Fog-pair statistics only in profiling builds:** every polygon ran a `memcmp` and two `memcpy`s just for a diagnostic log line. Parsing went from 436k to 304k.
+2. **State lookup:** a generation counter replaces rebuilding a key from 12 globals on every polygon, and the slow paths are no longer inlined, so the fast path doesn't save 10 registers. It went from 375k to 334k.
+3. **Packing:** a quad's bounding box decides whether it fits the PS1's maximum primitive size, so the 12 per-triangle checks only run for big quads. A fog pair's two polygons now also share one GIF tag. Packing went from 430k to 370k.
+
+**What's left, roughly in order of payoff:**
+- **Packing and parsing:** write GS data straight into the packet while parsing, instead of filling temporary arrays and copying them, and use 128-bit stores. These are the two biggest parts, at about 370k and 300k.
+- **Texture state:** about 330 cycles per texture change, around 160k a frame.
+- **Ordering-table walk:** about 110 cycles per packet, around 166k a frame.
+- **The bigger structural items:** overlapping CPU and GS work, and building packets in the scratchpad.
+
+I've logged the numbers in [PS2 Optimizations.md](PS2%20Optimizations.md). Should I continue with writing straight into the packet?
+
+## User
+
+Yes, but make sure to update the other .md files too. I'm trying to find another cutscene for benchmarking, but I don't remember the performance numbers we've captured. What has historically been the worst performing cutscene?
+
+## Claude
+
+I'll look up the Demo cutscene sweep results recorded in the docs.
+
+- tool `Bash`: Search walkthrough for cutscene frame rates
+
+- tool `Bash`: Find Demo sweep comparison results
+
+- tool `Bash`: Read Demo sweep results section
+
+## Claude
+
+The full per-cutscene numbers are in the sweep logs from October 10. `compare_sweeps.py` tabulates them, so I'll run it.
+
+- tool `Bash`: Check compare_sweeps usage and log dates
+
+- tool `Bash`: Tabulate port vs PS1 cutscene frame rates
+
+## Claude
+
+Now I need the Demo-list numbers for the slowest ones, since `bench_cutscene.sh N` takes a list index.
+
+- tool `Bash`: Find Demo list indices of slow cutscenes
+
+- tool `Bash`: Read structure of walkthrough and planning doc
+
+## Claude
+
+Writing the doc updates: a walkthrough section for today's work, checklist updates in the planning doc, and an optimization-log entry for the display and VRAM changes.
+
+- tool `Bash`: Update walkthrough, planning doc, optimization log
+
+## Claude
+
+The slowest cutscene in the port was **map6_s04 func_800E1D50**, the monster Cybil scene, at **28.1 fps**. It's also the slowest on the PS1, at 9.8 fps.
+
+These are from the last full Demo cutscene sweep, on October 10 in PCSX2. That's before the fog-pair fusion, the mesh batching and today's work, so every scene should be faster now. The bottom of that sweep:
+
+| cutscene | Demo list # | port fps | PS1 fps |
+|---|---|---|---|
+| map6_s04 func_800E1D50 (monster Cybil) | 36 | **28.1** | 9.8 |
+| MapEvent_KaufmannBarFightCutscene | 50 | 33.3 | 15.5 |
+| map5_s02 func_800D4B58 | 13 | 33.9 | 15.9 |
+| map7_s02 func_800DF21C | 33 | 35.7 | 18.8 |
+| map4_s04 func_800D1910 | 6 | 37.8 | 19.7 |
+| map4_s05 func_800D61AC | 16 | 38.4 | 18.6 |
+| *current benchmark: map3_s00 func_800D0CF8 (Kaufmann)* | 4 | 52.8 | 19.8 |
+
+**Suggestion:** map6_s04 func_800E1D50 (#36), or the Kaufmann bar fight (#50) as a second choice. Both are far from 60 fps, so improvements will show in the frame rate as well as the cycle counts. The current benchmark spends most of its time at 60 fps. The list number is what `bench_cutscene.sh` takes, for example `bench_cutscene.sh 36 <dir>`.
+
+**Docs:** I've brought them up to date:
+- **[Running Walkthrough.md](Running%20Walkthrough.md):** a new section for the last two days: Split Head, the Gemini review fixes, the GTE dirty bits, the display changes, the VRAM-copy removal and the `DrawOTag` first pass.
+- **[Planning Doc.md](Planning%20Doc.md):** finished items checked off. New open items for the hardware tests (`SH1_INTERLACE_FIELDS`, `SH1_MODESWITCH`), the 480p/720p assessment, the next `DrawOTag` steps and the benchmark-cutscene candidates.
+- **[PS2 Optimizations.md](PS2%20Optimizations.md):** a GS memory map and display entry, next to today's `DrawOTag` entry.
+
+Next I'll start on writing GS data straight into the packet while parsing, measured on the Kaufmann benchmark, unless you'd like me to switch the benchmark to one of these first.
+
+## User
+
+For now, let's use both #36 and #50 as benchmarks. Rename #36 to CybilFightStart in the demo menu to make it easier to find. Then, move on to writing GS data into the packet while parsing.
+
+## Claude
+
+I'll start with the rename. The Demo list is generated by `tools/port/cutscene_list.py`, so I'm checking how it names entries.
+
+- tool `Bash`: Find naming in cutscene_list.py
+
+- tool `Bash`: Read the display-name function
+
+## Claude
+
+The list is sorted by function name, not by label, so renaming the label keeps it at #36. Adding a small table of readable names:
+
+- tool `Bash`: Add CybilFightStart name and check indices
+
+- tool `Bash`: Baseline benchmark on #36 and #50
+
+- tool `Bash`: Profile CybilFightStart whole frame
+
+- tool `Bash`: Resolve the hot RTPS sites
+
+- tool `Bash`: Read polygon tail to restructure
+
+- tool `Bash`: Read polygon tail
+
+- tool `Bash`: Direct packet writes for quads that fit
+
+## Claude
+
+Benchmarking both cutscenes and checking the frame dumps against the baselines:
+
+- tool `Bash`: Benchmark direct packet writes on #36 and #50
+
+- tool `Bash`: Check exactness on the deterministic Kaufmann benchmark
+
+- tool `Bash`: Where the Kaufmann dump differs
+
+- tool `Bash`: Determinism check: same build twice on #36 and #50
+
+- tool `Bash`: Size of dump differences vs baseline
+
+- tool `Bash`: Same code, counters off: do dumps change?
+
+- tool `Bash`: Compute vertex values only where written; Kaufmann check
+
+- tool `Bash`: Benchmark #36 and #50 after the change
+
+## Claude
+
+Writing the results into the three docs, including the determinism finding about the new benchmarks:
+
+- tool `Bash`: Update the three docs
+
+## Claude
+
+I renamed #36 and moved quad writing straight into the packet. `DrawOTag` is down another 5–8% in all three benchmarks, and the Kaufmann frame dumps are identical. The docs are updated and nothing is committed.
+
+**Rename:** Demo #36 (map6_s04 func_800E1D50) shows as **CybilFightStart** in the Demo menu. It's an entry in a small name table in [cutscene_list.py](tools/port/cutscene_list.py). The list is sorted by function name, so it keeps its place at #36. #50 is still `MapEvent_KaufmannBarFightCutscene`.
+
+**Writing straight into the packet:** a quad that fits the PS1's maximum primitive size is now written straight into the GS packet right after the state lookup, with a fog pair's underlay first. That's nearly every quad. Vertex values are only computed where they're written, not into temporary arrays first. Big quads and triangles keep the old path. `DrawOTag` kcycles per frame:
+
+| | Kaufmann #4 | CybilFightStart #36 | Bar fight #50 |
+|---|---|---|---|
+| end of the first pass | 1,523 | 1,520 | 1,198 |
+| now | **1,396** | **1,418** | **1,132** |
+
+Since this morning, the Kaufmann cutscene has gone from 1,763 to 1,396 kcycles (−21%).
+
+**The two new benchmarks can't check exactness.** Each is deterministic for a given build, but its picture depends on timing. The same source with only the light counters switched off produced different dumps (a few to a few hundred pixels) and slightly different vertical-blank counts. So they measure speed only, and Kaufmann remains the pixel check. It only varies in one subtitle glyph between builds.
+
+**Where CybilFightStart's time actually goes:** it runs at about 28 fps, and `DrawOTag` is only about 15% of its frame. The game update takes 6.3M cycles a frame, led by `func_80057658`, the world mesh's per-vertex point light. That issues about 3,550 RTPS a frame, two per vertex. It's the same kind of hot spot that batching fixed for character meshes, and likely the biggest frame-rate win available for that scene.
+
+**Docs:**
+- [PS2 Optimizations.md](PS2%20Optimizations.md): the numbers, the benchmark caveat, and the `func_80057658` finding.
+- [Planning Doc.md](Planning%20Doc.md): finished items checked off, with new open items for the next `DrawOTag` steps and `func_80057658`.
+- [Running Walkthrough.md](Running%20Walkthrough.md): a short summary.
+
+**Next options:**
+1. **`func_80057658` (point light):** batch its RTPS. This is the big one for CybilFightStart.
+2. **More `DrawOTag`:** texture state (about 330 cycles per change), 128-bit stores, the ordering-table walk.
+
+I'd recommend 1. Which do you want?
+
+## User
+
+Let's go with 2
+
+## User
+
+[Request interrupted by user]
+
+## User
+
+Last time I was playing through the game and creating a log before it crashed on console, in the first boss fight. Do we still have those logs?
+
+- tool `Bash`: Look for playthrough logs
+
+- tool `Bash`: Search notes for boss fight log mentions
+
+- tool `Bash`: Find recent log files anywhere
+
+## Claude
+
+The udpfs server log is the likely console log. Let me check it and other build/port logs.
+
+- tool `Bash`: Inspect port logs and udpfs log
+
+- tool `Bash`: Show start and end of ps2.log
+
+- tool `Bash`: Resolve crash PC to function
+
+## Claude
+
+Yes, the logs are still here. The PS2 console log is [build/port/ps2.log](build/port/ps2.log) (42 MB, last written Oct 11 at 12:59). There's also a parsed copy, [ps2_log.out](build/port/ps2_log.out), and the network file-server log, [udpfs_server.log](build/port/udpfs_server.log).
+
+The crash is at the end of `ps2.log`:
+
+```
+CRASH: addr store at pc=001EF850 badvaddr=FFFF9840 ra=001EF7CC sp=01FFE930
+CRASH: a0=00000000 a1=00490000 a2=00489850 a3=00000002 v0=00000002 v1=00020002
+CRASH: s0=00000066 s1=01FFEAB0 s2=01FFEAAC s3=01FFE9C4 s4=FFFFFDF1 s5=00000001 s6=00588108 s7=00489840
+```
+
+- **Where it crashed:** I looked up the crash address in the current `sh1.elf`. It falls in `sharedFunc_800D3388_1_s05` in `map1_s05.c`, which is the map for the first boss fight. That ELF was built at 11:35 on Oct 11, before the 12:59 crash, so it should be the same build you were running.
+- **What went wrong:** the game tried to write to address `FFFF9840`. That looks like a small negative offset (s4 = `FFFFFDF1`, a negative value) added to a null or zero base.
+- **After the crash:** the game stopped producing frames at frame 199162, but the system kept running. Heartbeats and sound continued, and the watchdog reported "no frame for 10 s". The crash handler also kept the machine's state, so `ps2_ctl.py md` could still read its memory then. That only helps if the console hasn't been restarted since.
+
+Do you want me to dig into `sharedFunc_800D3388_1_s05` next and find the cause?
+
+## User
+
+The console has been restarted since then. Let's try to dig into the issue.
+
+- tool `Bash`: Find source and disassemble crash site
+
+- tool `Bash`: Disassemble whole function, find slot writes
+
+- tool `Bash`: Read the C function
+
+- tool `Bash`: Find other instances and port ifdef convention
+
+- tool `Bash`: See SH_PORT usage in game code
+
+## Claude
+
+I'm fixing both copies of the pattern. The original lines stay as they are for the PS1 build, which has to keep matching the original game's code.
+
+- tool `Bash`: Apply fix to both sites
+
+- tool `Bash`: Find the build command
+
+- tool `Bash`: Read build section
+
+- tool `Bash`: Build port ELF and ISO without deploying
+
+## Claude
+
+The fix compiles and the build succeeded (new `sh1.elf` and ISO in `build/port/`). I haven't deployed it to the console.
+
+**What I found**
+
+- `sharedFunc_800D3388_1_s05` in [split_head.c](src/maps/characters/split_head.c#L1379) works out where the Split Head boss can push the player. Inside it, the code that rearranges its local list of collision edges reaches entries of the local array `sp38` with this:
+  ```c
+  ptr0 = &sp18[i * 16] + 32;
+  ```
+  That's a leftover from decompiling: on the PS1, `sp38` sits exactly 32 bytes after `sp18` on the stack, so the result lands on `sp38[i]`.
+- GCC on the PS2 places these locals differently, so those copies write over other values the function keeps on the stack. One of them was the saved address of a global (0x490000). It turned into 0, and the store at the end of the function hit `0 - 26560` = `FFFF9840`. That matches the `badvaddr` in your log exactly.
+- This only runs when the player overlaps the boss's collision area, which is why it only crashed during that fight.
+
+**Fix**
+
+Both copies of the pattern (lines 1438 and 1518) now use `&sp38[i]` / `&sp38[k]` directly under `#ifdef SH_PORT`. The original lines stay in place for the PS1 build, so the code that matches the original game is unchanged.
+
+**Not yet tested on the console.** To try it, run `./build-and-deploy --no-build`. That serves the new ISO and restarts the game on the PS2. Then play the Split Head fight, especially getting pushed against or around it. If you send me the log afterwards, I can check it.
+
+## User
+
+<ide_opened_file>The user opened the file /home/alex/Documents/silent-hill-1-ps2-port/PS2 Optimizations.md in the IDE. This may or may not be related to the current task.</ide_opened_file>
+
+Another issue I noticed in the fight was that Harry was unable to aim properly at the boss during the fight, which made it very difficult to shoot at its open mouth. Harry's aim seemed to be calculated wrong.
+
+## Claude
+
+I'll check whether the aiming has the same kind of stack-layout problem, starting with the rest of the Split Head code and then the player's targeting code.
+
+- tool `Bash`: Find other stack-layout pointer hacks
+
+## Claude
+
+That pattern only appears in those two places, which are already fixed, so the aiming problem has a different cause. Next I'm looking at how the game picks the aim target.
+
+- tool `Bash`: Search aim/target code
+
+- tool `Bash`: Aim references in player_control.c
+
+- tool `Bash`: Read target lock aim code
+
+## Claude
+
+The vertical aim at the boss's mouth is probably driven by `g_Player_FlexRotationX`. Next I'm finding where it's calculated.
+
+- tool `Bash`: Find FlexRotationX assignments
+
+- tool `Bash`: Read flex rotation code
+
+## Claude
+
+Harry's vertical aim comes from `playerProps.field_122`, which the target-lock function `func_8005CD38` fills in. I'm reading that next.
+
+- tool `Bash`: Locate targeting function
+
+- tool `Bash`: Read targeting functions
+
+- tool `Bash`: Read the collision offset function
+
+## Claude
+
+That's a strong lead: `sp20[unkIdx + 4].vy` reads past the end of `sp20` and relies on the same PS1 stack-layout trick. I'm checking the declarations to confirm.
+
+- tool `Bash`: Read declarations and find similar indexing
+
+- tool `Bash`: Apply fix and rebuild
+
+## Claude
+
+I found the likely cause of the bad aiming: it's the same kind of bug as the crash, and I've fixed it. The build succeeds, but I haven't tested it on the console.
+
+**Why the aim was off:** Harry aims at the middle of the enemy's hitbox. For Split Head, the hitbox height is set in `sharedFunc_800D2D74_1_s05` in [split_head.c](src/maps/characters/split_head.c#L1363), which reads `sp20[unkIdx + 4]`. `sp20` only has 4 entries. On the PS1, reading past its end landed on the next local array, `sp50`, so this was really `sp50[unkIdx]`. On the PS2 it reads whatever happens to be on the stack.
+
+That garbage feeds into the hitbox height, and Harry's vertical aim angle is calculated toward the middle of that height. So the height he aimed at was effectively random. It also sets the vertical size of the area your shots have to hit, so even shots that looked on target could miss.
+
+**Fix:** under `#ifdef SH_PORT` it now reads `sp50[unkIdx]` directly, and the original line is kept for the PS1 build.
+
+Both Split Head fixes (the crash and the aim) are in the new ISO. Run `./build-and-deploy --no-build` to put it on the console, then try the fight again.
+
+These two were the only cases of this pattern I could find in the Split Head code. Other enemies' code might have the same kind of hidden out-of-bounds read, which my search wouldn't reliably catch. If you want, I can check the whole codebase for this kind of bug, using compiler warnings and a wider pattern search.
+
+## User
+
+Let's mark down checking the whole codebase for these kinds of assumptions as a todo, but I'm tabling it for now. Now, read the Gemini Conversation. I was able to implement the bone matrix transforms, with Gemini, but I wanted Claude to take a look at it for any potential fixes.
+
+- tool `Bash`: Read Gemini conversation, diff, planning doc headings
+
+- tool `Bash`: Read conversation text without tool lines
+
+- tool `Bash`: Show code diff and doc diffs
+
+- tool `Bash`: Check ldlvl macro and callers
+
+- tool `Bash`: Check IR write semantics and caller contexts
+
+- tool `Bash`: Look for callers using leftover GTE state
+
+- tool `Bash`: Inspect suspicious callers
+
+## Claude
+
+Two real problems found, plus a few smaller notes. I'm fixing both and adding your todo. First, let me find where the todo should go and check whether Gemini recorded your "come back to step 1" note.
+
+- tool `Bash`: Check notes and open todos
+
+- tool `Bash`: Apply review fixes, add todo, rebuild
+
+## Claude
+
+I reviewed Gemini's bone-matrix change in [vw_calc.c](src/bodyprog/view/vw_calc.c#L296), fixed two bugs in it, and added your todo. The build succeeds; I haven't rerun the mismatch check.
+
+**Todo added:** a new open item in [Planning Doc.md](Planning%20Doc.md) to check the whole codebase for code that relies on the PS1 stack layout, marked as tabled on 2026-10-16. I also removed a stray blank line Gemini had left in the middle of that checklist.
+
+**Fixed: translation could come out wrong.** The original loads `inMat->t` into 16-bit GTE registers, so on the PS1 only the low 16 bits of each value are used. Gemini's version used the full 32-bit values. The two agree only while bone positions stay within ±32767. That held in the Kaufmann cutscene, which is why the check found 0 mismatches. Larger world coordinates, such as those passed in through `Vw_CoordToViewSpaceMatrix`, could differ from the original. The C code now cuts the values to 16 bits like the original does. I also made the final addition wrap around the same way the GTE does; before, an overflow there was technically undefined in C.
+
+**Fixed: inline assembly didn't declare all the registers it changes.** The SIMD multiply instruction (`PHMADH`) also writes the CPU's multiply-result registers, HI and LO, and the assembly block didn't declare that. If GCC ever kept a multiply result there across the block, it would silently get a wrong value. I added `"hi", "lo"` to the clobber list.
+
+**Checked and fine:**
+- The SIMD math is correct. Each 32-bit lane sums two products, and the `-0x8000` guard it uses before the SIMD path is enough to prevent overflow.
+- Passing the same matrix as input and output is safe, because the result is built in a temporary and copied at the end.
+- The new code doesn't leave the rotation and translation matrices set in the GTE, which the original did. I looked at the callers, and each one sets its own matrices before using the GTE, so nothing depends on what was left behind.
+
+**Notes:**
+- **Missing check result:** the 0-mismatch check only ever ran in the Kaufmann cutscene. To catch the translation case, it should be rerun in an open-world area with `-DSH_PORT_CHECK_BATCH`.
+- **Speedup never measured:** Gemini never answered your question about how much faster this is. The conversation ends while it's still running the profile.
+- **Not much real SIMD:** only the 3×3 matrix multiply uses SIMD. Packing the values into the SIMD registers and the translation are plain scalar code. Most of the gain probably comes from skipping the GTE emulator, not from the SIMD itself.
+- **Your step 1 note was never recorded:** Gemini didn't write down your request to come back to portable C later. In practice it's mostly done already, since the exact portable C version is in the same function as the fallback.
+
+Do you want me to run that open-world check, and measure the speedup against the commit before Gemini's change?
+
+## User
+
+Yes
+
+- tool `Bash`: Look at benchmark and build tooling
+
+- tool `Bash`: Learn pcsx2_run and warp usage
+
+- tool `Bash`: Read warp sweep docs
+
+- tool `Bash`: Read warp sweep script header
+
+- tool `Bash`: Read profile method and sweep log location
+
+- tool `Bash`: Find profiling run command
+
+- tool `Bash`: Read profiling command and result
+
+- tool `Bash`: Read profiling header and output format
+
+- tool `Bash`: Write the test script
+
+- tool `Bash`: Check flags and drop unsupported one
+
+- tool `Bash`: Use heartbeat and realtime flags
+
+- tool `Bash`: Run check sweep and before/after profiles
+
+## Claude
+
+The test script is running in the background. It runs the check sweep through all 43 maps, then profiles the Kaufmann cutscene with the old version and then the new one. When it's done I'll report the mismatch count from every map and the before/after cost and frame rate.
+
+- tool `Bash`: Read results
+
+- tool `Bash`: Inspect sweep log and profile run
+
+- tool `Bash`: Why sweep warps didn't trigger
+
+- tool `Bash`: Rerun check sweep through all maps
+
+- tool `Bash`: Average cutscene profile before vs after
+
+## Claude
+
+The speedup is measured. Over 117 s of the Kaufmann cutscene, averaged across every profile report:
+
+| | game update (kcycles/frame) | GTE MVMVA | fps |
+|---|---|---|---|
+| before | 2,666 | 178 | 57.0 |
+| after | 2,581 | 79 | 57.8 |
+
+That's about 85k cycles a frame saved, or 3% of the game update. The remaining 79k of MVMVA comes from other call sites. The open-world check sweep is still running.
+
+- tool `Bash`: Read sweep results
+
+- tool `Bash`: Update docs and rebuild normal ISO
+
+## Claude
+
+Both checks are done, and the bone-matrix change with my two fixes from the review holds up.
+
+**Open-world check:** I built with `-DSH_PORT_CHECK_BATCH`, which compares the new code against the emulated GTE on every call, and ran the warp sweep through all 43 maps for 15 s each. All 43 passed, with 0 mismatches over about 491,000 calls. The frame rates in that sweep don't mean anything: the check build does every calculation twice, and many maps sit on a fade during their 15 s.
+
+My first sweep attempt was invalid. A leftover `build/port/demo.txt` from an earlier session sent the game into a Demo cutscene sweep instead of the warps. It's gone now, and the numbers above come from the clean rerun.
+
+**Speedup**, measured in PCSX2 on the Kaufmann cutscene with a profiling build at real-time speed, averaged over 117 s:
+
+| | game update (kcycles/frame) | GTE MVMVA | fps |
+|---|---|---|---|
+| before Gemini's change | 2,666 | 178 | 57.0 |
+| after | 2,581 | 79 | 57.8 |
+
+That saves about 85k cycles a frame, or 3% of the game update, and adds about 0.8 fps. The 79k of MVMVA left comes from other call sites. The likely next ones are `WorldEnv_LightTransform` and `func_8006B318`.
+
+I recorded the review fixes, the sweep result and this table under Gemini's entry in [PS2 Optimizations.md](PS2%20Optimizations.md). The current ISO is the normal build again, with the Split Head fixes included. Nothing is committed yet.
+
+## User
+
+Alright, let's move to the remaining MVMA sites
+
+## Claude
+
+I'll start by finding where the remaining MVMVA calls come from in the profile I just ran.
+
+- tool `Bash`: Find GTE call site lines
+
+## Claude
+
+Those addresses belong to the profiling build, so I'm rebuilding it to look them up by name, and adding up each site's calls across the whole cutscene.
+
+- tool `Bash`: Aggregate and resolve MVMVA call sites
+
+## Claude
+
+Two functions account for nearly all of it: `func_8006B318` (84 MVMVA a frame) and `WorldEnv_LightTransform` (72 MVMVA + 36 GPF). Reading both.
+
+- tool `Bash`: Locate the two functions
+
+- tool `Bash`: Read both functions
+
+- tool `Bash`: Rest of function and macro definitions
+
+- tool `Bash`: Survey GTE emulator MVMVA path and macro users
+
+- tool `Bash`: Read GTE emulator fast paths
+
+- tool `Bash`: Read control-write and refresh path
+
+- tool `Bash`: Read inline control write and cmd helpers
+
+- tool `Bash`: List dirty flag usages and register names
+
+- tool `Bash`: Find direct control register writers
+
+## Claude
+
+Only reads happen outside the emulator, so the change stays inside `gte.h` and `gte.c`. Implementing it:
+
+- tool `Bash`: Implement per-register dirty bits
+
+- tool `Bash`: Read GTE test instructions
+
+- tool `Bash`: Run GTE bit-exactness checks on host
+
+## Claude
+
+The emulator's bit-exactness test still passes: seeds 0–5, 0 of 2,720 tests differ on each. Now I'm profiling the Kaufmann cutscene with the change, the same way as before.
+
+- tool `Bash`: Profile cutscene with per-register dirty bits
+
+## Claude
+
+The profile is running in the background. While it runs, I'm looking at the two call sites more closely.
+
+**What's taking the time:**
+- **`func_8006B318`** (collision, 84 MVMVA a frame): it loads two rows of the rotation matrix from a subcell's direction and runs two `rtv0` to project the character's offsets onto that direction.
+- **`WorldEnv_LightTransform`** (72 MVMVA + 36 GPF a frame): it sets the rotation matrix, then runs `rtv0`, `gpf12` and `rtv0` once per model.
+
+**Change being measured:** before this change, every rotation write made the next command unpack all three GTE matrices and redo the range checks. Now `ctrl_refresh` redoes only the groups whose registers were written. It's exact: the GTE bit-exactness test still finds no differences on seeds 0–5. It also helps every other command that follows a matrix write, not just these two.
+
+**Possible next step:** a direct C rewrite of the two functions, skipping the emulator entirely. That has a catch. The original leaves results in GTE registers (MAC, IR and FLAG, plus half-written rotation rows), and later code might read them. Unless a check shows nothing does, a rewrite would have to recreate that state exactly. I'll decide once the profile shows how much the change above saved.
+
+- tool `Bash`: Compare profiles
+
+## Claude
+
+The per-register dirty bits gave a small, exact gain. I'm recording it and rebuilding the normal ISO.
+
+- tool `Bash`: Document result and rebuild normal ISO
+
+## Claude
+
+I sped up the remaining MVMVA work with one exact change to the GTE emulator. It's a small gain: about 1% of the game update.
+
+**Where the remaining MVMVA comes from** (calls per frame in the Kaufmann cutscene):
+- `func_8006B318`, in collision: 84
+- `WorldEnv_LightTransform`, in lighting: 72, plus 36 GPF
+- `rc_RotTrans`: 7
+
+Both main functions write the rotation matrix before each command. In the emulator, any matrix write made the next command unpack all three GTE matrices and recheck the translation ranges. That overhead cost more than the MVMVA arithmetic, which already had a fast path.
+
+**Change** ([gte.c](src/port/gte.c#L106), [gte.h](include/port/gte.h#L121)): the emulator now records which registers were written, and only redoes the matrices or range checks those registers affect. This speeds up every command that follows a matrix write, not only these two functions. The GTE bit-exactness test still passes: 0 of 2,720 tests differ on each of seeds 0–5.
+
+**Measured** in PCSX2 on the Kaufmann cutscene, profiling build at real-time speed, averaged over 117 s:
+
+| | game update (kcycles/frame) | GTE MVMVA | GTE RTPS | fps |
+|---|---|---|---|---|
+| before | 2,581 | 79 | 115 | 57.8 |
+| after | 2,556 | 55 | 108 | 58.0 |
+
+**What I didn't do:** rewrite `func_8006B318` and `WorldEnv_LightTransform` in plain C. That would save at most about 2% more of the game update. To stay exact, it would also have to recreate the values the original leaves behind in GTE registers, because later code may read them. I don't think that's worth it now. The two-row collision code in [ray.c](src/bodyprog/collision/ray.c#L540) and [collision.c](src/bodyprog/collision/collision.c#L1672) would need the same treatment.
+
+**Recommendation:** about 1.9M cycles a frame of the game update is game C code that hasn't been profiled by section yet. That, plus about 2.2M in `DrawOTag`, is where real gains are left. RTPS from snow particles is another smaller target at about 108k.
+
+The results are written up in [PS2 Optimizations.md](PS2%20Optimizations.md). The ISO is back to the normal build, and nothing is committed. Which should I go after next?
+
+## User
+
+Let's go with RTPS from the snow particles
+
+- tool `Bash`: Locate snow draw function
+
+- tool `Bash`: Read Particle_SnowDraw
+
+- tool `Bash`: Read rest of Particle_SnowDraw
+
+## Claude
+
+Each snow particle runs one RTPS. Next I'm reading how RTPS is emulated, and how `Gte_RtpBatch` (already used for meshes) avoids the per-call cost.
+
+- tool `Bash`: Locate RTPS code
+
+- tool `Bash`: Read rtp_small and Gte_RtpBatch
+
+- tool `Bash`: Read the particle loop
+
+- tool `Bash`: Find enclosing function and PROF usage
+
+- tool `Bash`: See PROF usage and function start
+
+- tool `Bash`: Find Particle_Update callers
+
+- tool `Bash`: Check includes and call site
+
+- tool `Bash`: Profile particle system cost in cutscene
+
+## User
+
+[Request interrupted by user for tool use]
+
+## User
+
+Start PCSX2 and then let me take control so I can start a new game. The Kaufmann cutscene is now somewhat limitng what we can test, because the frame rate is so much better. I will choose a different cutscene to profile. While I play the new game, profile the particle system cost.
+
+## Claude
+
+I'll add the particle profiling sections, build a profiling ISO, and launch PCSX2 at normal speed with no demo or warp files, so it boots to the title screen for you.
+
+- tool `Bash`: Add particle PROF sections, build profiling ISO
+
+- tool `Bash`: Remove stray demo.txt, inspect loop end
+
+- tool `Bash`: Inspect following lines
+
+## Claude
+
+The earlier interrupted command had already applied the profiling sections before it was stopped, and it also left a `demo.txt` that I've just removed. Checking that nothing got added twice:
+
+- tool `Bash`: Verify profiling edits in particle.c
+
+- tool `Bash`: Build profiling ISO
+
+- tool `Bash`: Launch PCSX2 for interactive play with profiling log
+
+## Claude
+
+PCSX2 is running, so you can take over now. It should boot to the title screen; no demo or warp file is set, and the earlier stray `demo.txt` is deleted.
+
+- **Build:** a profiling build with two new sections, `particle: Particle_Update` (the whole snow/rain system) and `particle: draw loop` (snow and rain drawing, which is where the RTPS happens). Both show up next to the usual profile lines and GTE call-site counts.
+- **Log:** everything goes to `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/play.out`. The profile is printed every 120 frames, so I can split the results by timestamp, for example the opening cutscene versus walking around in the snow.
+- **No time limit:** I turned off the 15 s no-new-frames check, so pausing or sitting in menus won't end the run. If the game actually crashes or freezes, close PCSX2 or tell me.
+
+When you're done, close PCSX2 and tell me roughly what you did, and which cutscene you want to use as the new benchmark. I'll then split out the particle cost by section.
+
+## User
+
+This is a typical scene as far as the snowfall goes. What kinds of measurements can you make? I'll get to the benchmark cutscene later.
+
+## Claude
+
+I'll read the most recent profile reports from the running game.
+
+- tool `Bash`: Summarize latest profile reports
+
+- tool `Bash`: Check log contents
+
+## Claude
+
+The run script only writes its output when PCSX2 exits, but PCSX2 also logs to a file as it runs. Reading that instead:
+
+- tool `Bash`: Find PCSX2 live log
+
+- tool `Bash`: Find where pcsx2_run reads the log
+
+- tool `Bash`: Read PCSX2 temp log and summarize
+
+## Claude
+
+Here's what this snow scene costs. It's from the last 6 profile reports (about 12 s of play), running at a steady 60 fps with 29% of the EE idle. Numbers are thousands of CPU cycles per frame. A frame has about 4,900k at 60 fps.
+
+| section | kcycles/frame | share |
+|---|---|---|
+| Game update (all game logic) | 1,647 | |
+| ↳ **Particle system (`Particle_Update`)** | **348** | **21% of the game update** |
+|   ↳ snow drawing loop | 258 | |
+|   ↳ particle movement and spawning (the rest) | ~90 | |
+| Drawing (`DrawOTag`, turning PS1 packets into GS packets) | 1,787 | |
+
+GTE call sites: the top site does **299 RTPS a frame**, almost certainly the snow, since it falls in the particle code. That's far more than the 117 in the Kaufmann cutscene. All RTPS together cost 243k a frame.
+
+So snow is a real target here. It's about a fifth of the game update, and the drawing loop is three quarters of that.
+
+**Measurements I can take:**
+
+1. **Timed sections (`PROF_BEGIN`/`PROF_END`)** around any part of the code, with cycles per frame, calls per frame and the longest single call. I can split the drawing loop into its RTPS, the position clamping (`Particle_BoundaryClamp`), the depth colour (`func_80055A50`), and building the packets. I can also split movement from spawning.
+2. **GTE call sites:** commands per frame by caller address, which I map to function names.
+3. **Function-level profile** (`-finstrument-functions`): exclusive cycles for every function. It inflates small functions, but it's good for finding hotspots that don't have a timed section.
+4. **Frame rate and idle time** from the heartbeat, measured in emulated time, so emulator speed doesn't affect it.
+5. **Drawing stats:** primitives, texture changes, CLUT loads and fog pairs per frame. Each snowflake is one extra triangle (`POLY_FT3`) for the drawing side to translate.
+6. **Exactness checks** (`-DSH_PORT_CHECK_BATCH`): if I batch the snow RTPS, every result can be compared against the emulated GTE.
+
+One caveat: the profiling build sends every GTE command through the general dispatcher, which makes RTPS look more expensive than in a normal build. For the real saving I'd compare frame rate and idle time in a normal build.
+
+**Suggested next step:** add finer sections inside `Particle_SnowDraw` (RTPS, clamping, colour, packets) and in the movement loop, then have you stand in this same spot again. That shows whether batching the RTPS or something else in the snow code is the bigger win. Want me to set that up? I'd need to restart PCSX2 for the new build.
+
+## Claude
+
+PCSX2 has closed, and the full log of that session is saved in `play.out` in my scratchpad. I'll wait for your answer before setting up the finer snow profiling.
+
+## User
+
+Yes, let's do that
+
+- tool `Bash`: Add finer snow profiling sections
+
+- tool `Bash`: Read movement loop head
+
+- tool `Bash`: Wrap movement loop and build profiling ISO
+
+- tool `Bash`: Inspect movement loop end
+
+- tool `Bash`: Wrap movement loop and rebuild
+
+## Claude
+
+The profiling build with the finer snow sections is ready; launching PCSX2 for you now.
+
+- tool `Bash`: Launch PCSX2 for interactive profiling session
+
+## Claude
+
+PCSX2 is running with the new profiling build, so you can take over.
+
+Get back to the same snowy spot and stay there for 10–20 s. The memory card shows as unformatted in the log, so you'll likely need to start a new game again. Tell me when you're there and I'll read the live log; there's no need to close PCSX2 first.
+
+The new sections are:
+- `particle: movement loop`: moving and spawning particles
+- `snow: position (clamp)`: keeping flakes inside the snow area
+- `snow: RTPS`: projecting each flake to the screen
+- `snow: colour (func_80055A50)`: depth colour for each flake
+
+The rest of `particle: draw loop` is building each flake's draw packet.
+
+## User
+
+Alright, we're in the profling scene
+
+- tool `Bash`: Summarize live profile
+
+- tool `Bash`: Check clamp section and profiler overhead
+
+## Claude
+
+I'm keeping PCSX2 open in case you want to try something else in this scene. These are averages over the last 5 profile reports (about 10 s), at 60 fps with 28% of the EE idle. Numbers are thousands of CPU cycles per frame:
+
+| section | kcycles/frame | calls/frame |
+|---|---|---|
+| **`Particle_Update` (whole snow system)** | **393** | 1 |
+| ↳ movement loop (moving and spawning) | 86 | |
+| ↳ draw loop | 305 | |
+|   ↳ **snow RTPS** | **191** | 298 |
+|   ↳ colour (`func_80055A50`) | 19 | 298 |
+|   ↳ position (clamp) | 9 | 298 |
+|   ↳ the rest: building each flake's packet, plus the profiler's own overhead | ~86 | |
+
+The 393k total is higher than the 348k from last session, partly because the extra sections add their own profiling overhead.
+
+**Takeaways:**
+- **RTPS is most of the snow drawing:** about 640 cycles per flake in this build. The profiling build makes RTPS look worse than it is, because it skips the direct fast path. In a normal build it's probably about half that, still roughly 90k cycles a frame.
+- **Clamping and colour are cheap:** under 30k together, so they're not worth optimizing.
+- **Movement, at 86k, is the second target.** I haven't broken it down yet.
+- **Drawing the snow costs more again:** each flake is also one more triangle for `DrawOTag` to translate, inside the 1,790k drawing total. That cost isn't in the table.
+
+**Proposal: batch the snow RTPS** (port-only, exact):
+1. First pass: compute every visible flake's position and transform them all in one `Gte_RtpBatch` call. That removes the per-call overhead (command setup, register reads and writes, flag handling) and keeps the matrix in registers.
+2. Second pass: build the packets from the precomputed results. The last flake still goes through the real RTPS, so the GTE registers end up exactly as the original leaves them. That's the same approach the character meshes use.
+3. Verify with a `-DSH_PORT_CHECK_BATCH` build that compares every result against the emulated GTE. Then measure frame rate and idle time in a normal (non-profiling) build in this same scene, so the profiler's overhead doesn't distort the result.
+
+I'd expect it to save about 50–80k cycles a frame in a normal build, roughly 3–5% of the game update. The snow code has per-map `#if` branches, so the change needs care, but it stays inside `Particle_SnowDraw` and the loop that calls it.
+
+Should I go ahead with the batch? I can break down the movement loop next, or in parallel if you're staying in this scene.
+
+## Claude
+
+PCSX2 has closed; the session's log is saved as `play2.out` in my scratchpad. The snow-system numbers above are complete. I haven't started on the RTPS batch. That, and breaking down the movement loop, are waiting on your go-ahead.
+
+## User
+
+Let's proceed
+
+## Claude
+
+I'll start by checking the two things the batch depends on: how many particles there can be, and whether anything between the snow RTPS calls (like `func_80055A50`) uses the GTE.
+
+- tool `Bash`: Check particle count, func_80055A50, GTE headers
+
+## Claude
+
+`func_80055A50` doesn't use the GTE. Next I'm checking that `Particle_BoundaryClamp` doesn't either, then putting `particle.c` back to its original state before adding the batch.
+
+- tool `Bash`: Check clamp for GTE use, restore original particle.c
+
+## Claude
+
+Now I'm writing the batch. It's all port-only; the PS1 build keeps the original code.
+
+- tool `Bash`: Implement batched snow RTPS
+
+## Claude
+
+Building it. Then I'll run the check build through the warp sweep to see if any of the maps it visits exercises the snow.
+
+- tool `Bash`: Build check build with snow batch
+
+- tool `Bash`: Confirm batch code is compiled in
+
+## Claude
+
+The batch code is compiled into the snow maps. Now running the check-build warp sweep through all 43 maps.
+
+- tool `Bash`: Run check sweep with snow batch
+
+- tool `Bash`: Write before/after benchmark script
+
+- tool `Bash`: Benchmark cutscene without and with snow batch
+
+## Claude
+
+The benchmark is running in the background. It builds and plays the Kaufmann cutscene twice, without and then with the snow batch, then compares the frame dumps.
+
+The batch is in place, and the check build found 0 mismatches over more than 60,000 snow flakes in the warp sweep. The original `particle.c` is restored automatically between runs. I'll report the frame rates and the pixel comparison when it finishes.
+
+- tool `Bash`: Compute benchmark results
+
+## Claude
+
+Two problems: one of the ten frame dumps differs by 50 pixels, and the frame rate didn't improve (50.16 vs 50.03 fps). First I'm looking at where the differing pixels are.
+
+- tool `Bash`: Inspect differing pixels
+
+## Claude
+
+The pixel difference has nothing to do with the snow. It's a 10×10 block at the bottom of the screen (y = 192–201) where one run shows a white-and-black subtitle glyph and the other shows the scene. So text appeared at slightly different times. The two runs also took slightly different numbers of vertical blanks (8,092 vs 8,097) for the same 6,335 frames, which suggests the voice and subtitle timing isn't fully deterministic. The other nine dumps are identical, and the check build had already shown every flake matches.
+
+**The batch gives no measurable speedup.** In this cutscene, 50.16 fps before and 50.03 after is within noise, and so is idle time (5.2% vs 4.6%).
+
+| Kaufmann cutscene, benchmark build | fps | EE idle |
+|---|---|---|
+| without the batch | 50.16 | 5.2% |
+| with the batch | 50.03 | 4.6% |
+
+**Why the profile misled us:** the profiling build sends every GTE command through the general dispatcher and times each one, which roughly doubles RTPS's apparent cost. In a normal build each snow RTPS already uses the direct fast path. The per-call overhead the batch removes is probably around 100–150 cycles per flake. That's about 15k cycles a frame for the cutscene's 117 flakes, or about 0.3% of a frame, which is below what this benchmark can detect. Even in your 298-flake scene it would only be about 1%.
+
+**My recommendation is to revert the batch.** It adds about 120 lines of port code to a decompiled function, including a two-pass mode and code that recreates the GTE register state, for a gain we can't measure. I've kept a copy in my scratchpad in case it's ever needed. I'd also add a short note to [PS2 Optimizations.md](PS2%20Optimizations.md), so future profiles of GTE commands are read with this in mind.
+
+The bigger costs in your snow scene were elsewhere:
+- **`DrawOTag` at about 1.8M:** translating the PS1 draw packets for the GS, including each flake's triangle.
+- **The particle movement loop at 86k**, which I haven't broken down yet. It's plain C code, so the profile numbers there are more trustworthy.
+
+Should I revert the batch and write up the finding? And after that, do you want to look at the movement loop or `DrawOTag`?
+
+## User
+
+Yes. Explain the potential benefits of optimizing the movement loop and DrawOTag?
+
+- tool `Bash`: Revert batch, document, rebuild, read DrawOTag notes
+
+## Claude
+
+The batch is reverted and the normal ISO rebuilt. To ground the explanation, I'm rereading the earlier DrawOTag analysis in the optimization notes.
+
+- tool `Bash`: Read architecture and options notes
+
+## Claude
+
+I reverted the snow batch and rebuilt the normal ISO. I also added a short entry to [PS2 Optimizations.md](PS2%20Optimizations.md): what was tried, the 0-mismatch check, the benchmark showing no gain, and the warning that profiling builds roughly double the apparent cost of GTE commands. A copy of the batch is saved in my scratchpad.
+
+At 60 fps the EE has about 4,915k cycles per frame. In your snow scene it was using about 72% of that: 1,692k for the game update, 1,790k for `DrawOTag`, plus smaller items. That scene already holds 60 fps, so the benefit of either option shows up in heavier places. Those include the end of the alley (34–55 fps), map5_s00 (about 39 fps), and the Kaufmann cutscene on real hardware (50–55 fps).
+
+## Movement loop: small benefit
+
+- **Size:** 86k cycles a frame, about 1.7% of the frame. It's plain C, so this profile number is reliable.
+- **Realistic gain:** halving it would save about 40k cycles, under 1% of a frame and not visible as fps. It would apply to every snow and rain map, and rain maps may spawn more particles. Rain uses a density of 10 against snow's 3, but I haven't measured a rain scene.
+- **Constraint:** the loop uses the game's random number sequence, so any rewrite has to produce exactly the same values in the same order. That limits how much it can change.
+- **Verdict:** worth a quick breakdown only if a rain map turns out much heavier. Otherwise it's not worth the risk.
+
+## DrawOTag: the biggest remaining target
+
+`DrawOTag` walks the PS1 ordering table and turns every PS1 primitive into GS packets. It's 1.8M cycles in your scene and 2.2–2.6M in the cutscene, about 36–50% of the frame. From earlier profiles:
+- **Polygon setup** (converting coordinates, colours and UVs into GS vertex data): about 1.6M. This is the bulk.
+- **State changes per primitive:** about 540 texture-page (TEX0) changes and as many CLUT reloads a frame, because textures alternate in draw order.
+- **Snow's real cost probably sits here,** not in RTPS. Each of the 298 flakes is one more triangle to convert, plausibly 100–150k cycles. I haven't measured that yet; a probe could.
+
+Options from the plan, roughly by return for the effort:
+
+1. **Overlap the CPU and GS (double display list):** build frame N+1's packets while frame N is still being sent. This doesn't make the conversion cheaper; it stops the CPU waiting on the GS. On hardware this could be a sizeable win. An earlier attempt was reverted because of freezes that were probably caused by a since-fixed bug, so it should be retried on the console.
+2. **Use the scratchpad (SPR) for the PS1 scratch memory and packet building:** single-cycle memory with no cache misses. This matters more on real hardware than in PCSX2, which doesn't model the EE caches.
+3. **Build packets with 128-bit (MMI) stores:** write whole GIF qwords at once instead of field by field. That cuts directly into the 1.6M polygon setup.
+4. **Cheaper CLUT reloads:** draw order can't be changed (semi-transparency depends on it), but each reload can probably be made cheaper.
+5. **Convert primitives on VU1:** the largest potential gain and the largest job. It's only worth it after the items above.
+
+**Potential:** cutting `DrawOTag` by 20–40%, which items 1–3 could plausibly do, saves about 0.4–1M cycles a frame. That's 8–20% of the frame budget, enough to bring the Kaufmann cutscene to a steady 60 fps on hardware. Every scene benefits, because everything drawn goes through `DrawOTag`.
+
+**Constraint:** the output has to stay pixel-identical. The deterministic benchmark and frame-dump comparison already check that.
+
+**Recommendation:** go after `DrawOTag`. I'd start by profiling it with finer sections, to split polygon setup by primitive type and see what the snow triangles cost. Then try the scratchpad and the MMI packet building, since they're self-contained, and retry the CPU/GS overlap on the console. Should I go ahead with the breakdown?
+
+## User
+
+Yes, but first, I would like to know about our VRAM usage at the moment
+
+## Claude
+
+I'll look at how the port lays out the GS's 4 MB of VRAM, and its copy of the PS1's 1 MB VRAM.
+
+- tool `Bash`: Find GS memory layout definitions
+
+- tool `Bash`: Read layout comments and display buffer use
+
+- tool `Bash`: Read display setup and GS stats output
+
+## Claude
+
+The GS memory map is clear now. I'm reading the texture-page cache code to see how full it gets.
+
+- tool `Bash`: Read texture page and CLUT cache code
+
+## Claude
+
+The PS2's 4 MB of video memory (the GS's VRAM) is fully allocated. The layout is fixed in [gpu_gs.c](src/port/ps2/gpu_gs.c#L38-L51):
+
+| GS address | Size | Holds |
+|---|---|---|
+| `0x000000`–`0x12C000` | 1,200 KB | gsKit's display frame buffer, sized for the largest mode: 640×480, 32-bit, single buffer |
+| `0x12C000`–`0x130000` | 16 KB | unused gap |
+| `0x130000`–`0x200000` | 832 KB | texture page cache, slots 15–27 (13 × 64 KB) |
+| `0x200000`–`0x2F0000` | 960 KB | texture page cache, slots 0–14 (15 × 64 KB) |
+| `0x2F0000`–`0x300000` | 64 KB | CLUT cache: 128 rows of 256 colours, 16-bit |
+| `0x300000`–`0x400000` | 1,024 KB | the PS1's entire VRAM (1024×512, 16-bit). The game draws into it directly, so it's both the PS1 framebuffer and its textures |
+
+**How it works:**
+- **Copy of PS1 VRAM:** the GS holds an exact 1:1 copy of the PS1's VRAM in its native 16-bit format. 16-bit textures are read straight from it.
+- **4-bit and 8-bit textures:** these can't be read in place, because the PS1 packs the indices into 16-bit words. They're unpacked into a page cache instead. There are 64 possible pages (32 page positions × two bit depths) for 28 slots, with least-recently-used eviction. Any VRAM write that overlaps a cached page or CLUT drops it.
+- **Display:** each frame, the PS1 display area is copied 1:1 into the display buffer.
+
+**How full it is:** the stats from your snow session show **0 uploads per frame**. So in steady play the page cache isn't thrashing; everything in use stays resident. TEX0 and CLUT changes are about 340–350 a frame, but those are register switches, not uploads. I don't log how many of the 28 slots are occupied, or peak uploads during scene changes. Both would be cheap to add.
+
+**Space that could be reclaimed**, if more is ever needed:
+1. **Display buffer:** about 1.2 MB is reserved for 640×480×32, but the PS1 shows 320×224 (480i is only used for interlaced modes). A 16-bit buffer, or one sized to the current mode, would free 600–900 KB.
+2. **4-bit pages** fill only half of their 64 KB slot. Packing two per slot would raise the effective capacity.
+3. **Z buffer:** `ZBUF` points at the cache area, but Z writes are masked, so nothing is written there. It costs no memory.
+
+**What this means for DrawOTag:** memory isn't the bottleneck right now; the cost is in the CPU's conversion work. One idea that needs VRAM is double buffering the display list (option 5). It needs no extra VRAM, only EE memory, so the current layout doesn't block it.
+
+On the EE side, the port also keeps its own 1 MB copy of PS1 VRAM (`g_PortVram`) for uploads, readbacks and filling the page cache, plus 64 KB staging and transfer buffers.
+
+Should I add occupancy and upload stats to the GS stats line? Otherwise I'll start the `DrawOTag` breakdown.
+
+## User
+
+For that 640x480x32 display buffer, are we even using it if we already have the PS1's entire VRAM resident in the PS2's VRAM?
+
+## Claude
+
+Good question. I'll check what the copy actually does and why it exists.
+
+- tool `Bash`: Read present path and the copy
+
+## Claude
+
+Yes, it's used every frame, but your instinct is right: it probably isn't needed.
+
+**What happens now** (`Display_PresentGs` → `GpuGs_DisplayCopy` in [gpu_gs.c](src/port/ps2/gpu_gs.c#L1416)): at each display swap, the GS draws one textured sprite that copies the PS1's display area (320×224 at its current position in the VRAM copy) into gsKit's 640×480×32 buffer. The PS2 video output then scans out that buffer. The copy ends with `GpuGs_Sync()`, so the CPU waits for the GS to finish all queued drawing before carrying on.
+
+**Showing the PS1 VRAM directly would work.** The PS2's video output can scan out any part of GS memory in 16-bit format: you point its display register (`DISPFB`) at an address, a width, and an x/y start. The formats line up exactly. The PS1's 16-bit colour is red in bits 0–4, green 5–9, blue 10–14 and the mask bit in 15, which is the same layout as the GS's 16-bit format (the top bit becomes alpha, which plain output ignores). The display would point at `0x300000`, buffer width 1024, starting at the PS1's display x/y. That matches what the PS1 itself does: it scans out part of its VRAM, and the game's double buffering only moves that start position.
+
+**Benefits:**
+1. **Frees about 1.2 MB of GS memory:** the whole 640×480×32 buffer, which is about 30% of VRAM.
+2. **Removes the copy each frame:** a small cost, since the display copy profiled at about 11k cycles a frame. GsSwapDispBuff is another 20k, which may not all go away.
+3. **Removes a full CPU–GS wait every frame. This is the important one for the DrawOTag work.** The `GpuGs_Sync()` in the copy makes the CPU wait for the GS once per frame. Overlapping CPU and GS work (option 5, the double display list) needs that wait gone or moved.
+
+**Things to handle:**
+- **When to switch:** writing `DISPFB` takes effect immediately; it doesn't go through the drawing queue. So the switch to a new buffer has to wait until the GS has finished drawing it, and should happen during vertical blank to avoid tearing. That means a "GS finished" signal (its FINISH event), plus a vertical-blank handler that applies the pending start position.
+- **480i modes** (heights above 256, used by a few screens): the PS1 keeps both fields in one 480-line image, so the output must read alternate lines per field. The GS can do this, but it needs its own setup and a test.
+- **24-bit FMV mode:** the GS can't display the PS1's packed 24-bit pixels directly. It isn't supported today anyway, so nothing is lost, but the movies would need a separate path later.
+- **gsKit** still does the video mode setup. It would need a tiny buffer, or none, with the display registers set by us.
+
+**Verification:** frame dumps already read from the VRAM copy, not the display buffer, so they're unaffected. The real check is visual on PCSX2 and on the console: centring, no tearing, and the menus and 480i screens.
+
+I'd do this before the `DrawOTag` work, because removing that per-frame wait is a prerequisite for the CPU/GS overlap. Should I implement it?
+
+## User
+
+Yes
+
+## Claude
+
+I'll start by reading the whole display module and the GS sync and vertical-blank code it depends on.
+
+- tool `Bash`: Read display module and sync hooks
+
+- tool `Bash`: Read GS send/sync code, vblank handler, present call
+
+- tool `Bash`: Check gsKit PMODE and DISPFB macros
+
+- tool `Bash`: Find gsKit init source and macros
+
+- tool `Bash`: Replace display copy with direct scan-out
+
+## Claude
+
+Building the normal ISO.
+
+- tool `Bash`: Build normal ISO with direct scan-out
+
+## Claude
+
+It builds. This needs a visual check, which only you can do, so I'm launching PCSX2 with the new build at normal speed.
+
+- tool `Bash`: Launch PCSX2 to check direct scan-out visually
+
+## Claude
+
+PCSX2 is running the new build, and you can take over.
+
+The display now scans out straight from the PS1 VRAM copy in GS memory. The per-frame copy into gsKit's 640×480×32 buffer is gone; the change is `GpuGs_DisplayShow` in [gpu_gs.c](src/port/ps2/gpu_gs.c#L1421).
+
+Please look for:
+1. **Boot logos, title screen and menus:** the image should be centred as before, with no offset, wrapped edges or garbage at the sides.
+2. **Normal play:** no tearing or flicker. The game swaps between its two buffers in VRAM, and the display now follows that swap directly.
+3. **Fades and dark scenes:** colours should be unchanged. The PS1's mask bit is ignored by a fixed-alpha setting, so a wrong colour or a half-dark image would mean that setting is off.
+4. **Any interlaced screen** (taller than 256 lines), if you come across one. I'm not sure which screens in this game use it, so anything that looks doubled, squashed or flickery is worth telling me about.
+
+I haven't freed the 1.2 MB buffer yet. gsKit still allocates it, but nothing draws to it anymore. Once you're happy with how it looks, I'll measure the change, reclaim that memory, and then start the `DrawOTag` breakdown.
+
+## Claude
+
+PCSX2 has closed. Checking its log for crashes or display errors:
+
+- tool `Bash`: Check session log for problems
+
+## Claude
+
+The log looks clean: no crashes, no watchdog warnings and no stuck transfers. The session ran about 54 s and was at 33% idle at the end.
+
+It also switched through several video modes, including three interlaced ones I hadn't expected:
+- `640x448i` at 6.3 s, probably a boot screen
+- `320x448i` twice, at 15.0 s and 47.5 s, possibly the title or a menu
+- the usual `320x224p` and `320x240p`
+
+The interlaced modes are the riskiest part of this change, since the PS1 keeps both fields in one 448-line image. How did those screens look? Was the picture right everywhere, and was there any tearing, offset, colour change or squashed or doubled image?
+
+## User
+
+No, the title screen and the inventory screen, both 320x448i, have missing text and graphics. Not everything is gone: the title screen's background is fine, but most of the text for the menu choices is missing. The inventory screen has the Harry health status and some of the icons, but most of the text is gone.
+
+## Claude
+
+That fits a timing problem rather than a format one. Those two screens use `320x448i`, and with a 448-line image the PS1 has room for only one buffer. So the game draws into the same area that's being displayed: it clears the screen and redraws everything each frame. Before, the copy took a snapshot of the finished frame at the swap. Now the video output scans the buffer live, so it catches the background drawn but not the text and icons, which come later in the frame. Progressive gameplay was fine because there the game alternates between two buffers and never draws into the one being shown.
+
+**Fix:** show VRAM directly only when the display area doesn't overlap the current drawing area, which is the double-buffered case. When it does overlap, fall back to the snapshot copy. Next I'm checking where the port keeps the current drawing area.
+
+- tool `Bash`: Find draw environment tracking
+
+- tool `Bash`: Find GsSwapDispBuff implementation and PutDrawEnv
+
+- tool `Bash`: Find drawing area handling in gpu_gs
+
+- tool `Bash`: Read fill and draw-area handlers
+
+- tool `Bash`: Locate VRAM write entry points
+
+- tool `Bash`: Check invalidate callers, recover copy function
+
+## Claude
+
+All three VRAM-write paths (fills, copies and uploads) go through `cache_invalidate`, so one hook there plus the drawing-area commands covers everything. Writing it:
+
+- tool `Bash`: Add overlap tracking and copy fallback
+
+- tool `Bash`: Find prim_state entry
+
+- tool `Bash`: Add first-primitive area check, rebuild
+
+## Claude
+
+The build printed nothing, so I'm checking the logs:
+
+- tool `Bash`: Inspect build logs
+
+## Claude
+
+`GpuGs_StateLost` comes before the new state variables in the file. I'm moving their declarations up.
+
+- tool `Bash`: Move declarations and rebuild
+
+## Claude
+
+It builds. I'll also add a count of directly shown versus copied frames to the GS stats line, so we can confirm from the log which path each screen takes.
+
+- tool `Bash`: Read stats function
+
+- tool `Bash`: Add display path stats, rebuild
+
+- tool `Bash`: Check declaration lines
+
+- tool `Bash`: Tidy comment placement, rebuild
+
+## Claude
+
+Built. Launching PCSX2 for you to check the title and inventory screens again.
+
+- tool `Bash`: Launch PCSX2 to recheck interlaced screens
+
+## Claude
+
+PCSX2 is running the fixed build, and you can take over.
+
+**The cause:** the title screen and inventory are single-buffered. At 448 lines there's room for only one buffer in the PS1's VRAM, so the game redraws the very area on screen every frame. Showing VRAM directly caught it halfway through each redraw: the background was there, but the text and icons drawn later in the frame were missing.
+
+**The fix, in [gpu_gs.c](src/port/ps2/gpu_gs.c):**
+- The GS code now notices when a frame draws into the area currently on screen. It checks drawing-area commands, fills, VRAM copies and uploads, plus the drawing area in effect at the first primitive after each swap.
+- When a frame does that, the next swap uses the old snapshot copy, so those screens should look exactly as they did before today.
+- Direct scan-out is used only after a frame that left the displayed area alone, which is normal double-buffered gameplay.
+- Any video mode change starts with a copy, until a clean double-buffered frame is seen.
+
+**Please check:** the title screen, the inventory, and a bit of normal gameplay, including going into and out of the inventory, where the mode switches between 448i and 224p.
+
+The GS stats line in the log now counts frames scanned out directly against frames copied. When you're done, I'll check that gameplay took the direct path and the 448i screens took the copy.
+
+## Claude
+
+PCSX2 has closed. Checking which display path each screen took:
+
+- tool `Bash`: Show mode changes and display path counts
+
+## Claude
+
+The log shows the detection doing what it should, with no crashes. Counts are frames per stats interval:
+
+| screen | video mode | display path |
+|---|---|---|
+| Boot screen | `640x448i` | copy, every frame (60/60) |
+| Title and inventory (each time you opened it, about 7 times) | `320x448i` | copy, every frame (30/30) |
+| Gameplay and cutscenes | `320x224p` | scanned straight out of VRAM, every frame (30/30) |
+
+The mixed counts around each mode switch are intervals that straddle the change. Each 448i stretch took no more than a frame or two to settle on copying, and 224p went back to direct after the one snapshot frame that follows any mode change.
+
+How did it look this time? In particular:
+- the title menu text and the inventory text and icons
+- any flicker or a half-drawn frame when opening or closing the inventory
+- normal gameplay
+
+If everything looked right, I'll measure the gain, write it up, and move on to reclaiming the display buffer memory. The copy path is still needed for the 448i screens, but that buffer can shrink from 640×480 at 32-bit to 16-bit. Then I'll start the `DrawOTag` breakdown.
+
+## User
+
+The menus and gameplay look correct, but there is still a short garbage display when switching between video modes. Is there anything we can do to clean that up?
+
+## Claude
+
+Yes. On a switch, gsKit reprograms the video output, which then shows whatever is in its buffer. The first frame or two in the new mode can also come from a buffer the game hasn't finished drawing at the new size. Either way, the fix is to blank the output for a few frames after each mode change. The output then shows the background colour (black), which looks like the normal re-sync blink a TV does on a mode change anyway.
+
+I'll blank right after gsKit's setup and keep the output off for the first 3 frames in the new mode, which is 50 ms at 60 fps. Next I'm checking the background-colour register macro.
+
+- tool `Bash`: Find BGCOLOR macro
+
+- tool `Bash`: Blank output after mode changes, rebuild
+
+## Claude
+
+One catch: `init()` is also used by the software-renderer display path, which never calls `GpuGs_DisplayShow` and so would never turn the output back on. I'm limiting the blanking to the GS renderer.
+
+- tool `Bash`: Guard blanking to GS renderer, rebuild
+
+- tool `Bash`: Launch PCSX2 to check mode-switch blanking
+
+## Claude
+
+PCSX2 is running the new build, and you can take over.
+
+On every video mode change, the output now goes black right after gsKit's setup and stays black for the first 3 frames in the new mode, which is 50 ms. Then the display comes back as before. That hides both suspected sources of the garbage: gsKit showing its buffer's stale contents during setup, and the first half-drawn frames in the new size. The change is in `init()` and `Display_PresentGs` in [display_ps2.c](src/port/ps2/display_ps2.c), with a `blank` flag on `GpuGs_DisplayShow`. The software-renderer display path is left alone.
+
+Please switch modes a few times, for example the title screen into the game and back, or opening and closing the inventory. You should now see a brief black blink at each switch instead of garbage.
+
+- **Garbage still shows, but shorter:** the remaining frames come from the game itself, and I can raise the blank count.
+- **The blink is too long:** I can try 2 frames.
+- **Garbage looks the same as before:** the source is something else, for example before the mode-change code runs. Tell me and I'll dig further.
+
+- tool `Bash`: Check session log for mode switches and crashes
+
+## Claude
+
+PCSX2 has closed with no crashes. One thing stands out, though: the log has 78 video mode changes in 43 seconds. I'm checking whether that was you switching screens or something repeating on its own.
+
+- tool `Bash`: List mode change sequence
+
+## Claude
+
+False alarm: my search also counted the new `gs display:` stats lines. The real mode changes are as expected, one per screen switch, and the session ran normally (no crashes, 33% idle).
+
+How did the mode switches look this time? Was there a clean black blink, or is some garbage still visible?
+
+## User
+
+They looked clean. I'm wondering, is there a way to test how long it takes the PS2 to switch between 240p and 480i video output modes, compared to the PS1? I've noticed when playing the retail version of Silent Hill on my PS1 vs my PS2, the PS2 seems to lose video sync slightly longer. If that's something we could fix, that would be amazing, but I get the feeling that we can't change the timing in code. Still, I want you to investigate this.
+
+## Claude
+
+I'll check what gsKit actually does on a mode switch. A full reset of the GS would stop the video signal itself, and that would explain a longer sync loss.
+
+- tool `Bash`: Find gsKit source or disassemble init_screen
+
+- tool `Bash`: Disassemble gsKit_init_screen calls
+
+- tool `Bash`: Locate init_screen in disassembly
+
+- tool `Bash`: Check archive format and symbols
+
+## Claude
+
+The gsKit library is built with link-time optimization, so its archive has no machine code to read. I'll disassemble the linked copy in our ELF instead.
+
+- tool `Bash`: Disassemble linked gsKit_init_screen
+
+- tool `Bash`: Read the GS reset and SetGsCrt section
+
+## Claude
+
+I looked into this, and it turns out we can change it for the port, though not for the retail disc.
+
+**What the port does on every mode switch:** I disassembled `gsKit_init_screen` from our ELF. Each time the game changes video mode, the port re-runs it, and it does two things:
+1. **A full GS reset:** it writes `0x200` to `GS_CSR` (`sd v0,4096(s3)` with `s3 = 0x12000000`). That resets the whole GS, including the part that generates the video signal (the PCRTC), so the sync pulses stop altogether.
+2. **`SetGsCrt`:** a BIOS call that reprograms the video timing from scratch.
+
+So the TV briefly loses its signal entirely, then has to lock onto a new one.
+
+**What the PS1 does:** it changes the display mode with one GPU command (`GP1(08h)`), and the video signal keeps running throughout. Going between 240p and 480i at NTSC, the line rate stays the same (15.7 kHz). Only the vertical timing gains or loses its half-line offset, so a TV re-locks almost immediately.
+
+**Why retail Silent Hill does the same on a PS2:** a PS2 runs PS1 games on its IOP, which is an actual PS1 CPU, but the PS1's GPU is emulated with the GS. My understanding, which I can't verify from here, is that the PS1-mode driver reprograms the GS video timing on display mode changes in a similar way. That would explain the longer sync loss you see, and it can't be changed for the retail disc. For the port, the switch is our own code.
+
+**What we could do:** switch modes without resetting the GS. There are two lighter options:
+- **B:** skip the GS reset and call only `SetGsCrt`. It's simple and low risk, but `SetGsCrt` may still interrupt the signal briefly; I can't tell without testing.
+- **C:** keep the video signal untouched and only flip the interlace setting (`SMODE2`) and the display window (`DISPLAY1`/`DISPLAY2`). This is closest to what the PS1 does. The risk is that 240p and 480i may also need different vertical sync settings (`SYNCV`), which I'd have to determine, since those registers can't be read back.
+
+**How to measure it:**
+- **From software:** I can log how long the GS stops producing vertical-blank interrupts around a switch. That shows whether the video signal paused and for how long, on our side. It can't see when the TV re-locks.
+- **The TV's re-lock time** needs an outside observer. A slow-motion phone video (240 fps) of the screen during a switch is enough. Count the frames of blank or rolling picture on the PS1 retail game, the PS2 retail game, and the port with A, B or C.
+- **PCSX2 won't show the difference;** it doesn't emulate signal loss. This has to be tested on the console.
+
+**Proposal:** I add a build setting to choose between A (the current behaviour), B and C, plus the vertical-blank logging. You then run each one on the console and film a few switches, for example opening and closing the inventory. Deploying restarts the game on the PS2, so it needs you there with the camera ready. Should I set that up?
+
+## User
+
+For now, let's measure the difference in software, and I'll look at hardware later.
+
+## Claude
+
+I'll build the switch variants with logging and measure them in PCSX2 now. The same logging will give real numbers on the console when you get to it. For option C, I first need the vertical sync settings for both modes, so I'm checking whether the ps2sdk sources on disk record what `SetGsCrt` programs.
+
+- tool `Bash`: Search ps2sdk source for SetGsCrt/SYNCV
+
+- tool `Bash`: Look for SetGsCrt implementation
+
+- tool `Bash`: Probe gsKit display parameters and sync registers
+
+- tool `Bash`: Check constants and vblank handler
+
+- tool `Bash`: Remove probe; check build flag plumbing
+
+- tool `Bash`: Check how port files get compile flags
+
+- tool `Bash`: Read PS2 HAL compile section
+
+## Claude
+
+Now writing the code: the build option, the vertical-blank gap measurement, and the three switch methods.
+
+- tool `Bash`: Implement switch methods and measurement
+
+- tool `Bash`: Build and measure each switch method in PCSX2
+
+- tool `Bash`: Rebuild and measure each method
+
+- tool `Bash`: Show switch measurements per method
+
+## Claude
+
+All three methods ran without crashing in PCSX2. The last ISO built is method 2, so I'm rebuilding the default (method 0) to leave things as they were.
+
+- tool `Bash`: Rebuild default ISO (method 0)
+
+## Claude
+
+The three switch methods are built and measured in PCSX2. The default ISO is back to the current behaviour (method 0).
+
+**What I added:**
+- **A build setting for the switch method** (`SH1_MODESWITCH`, in [display_ps2.c](src/port/ps2/display_ps2.c)):
+  - **0, the default:** gsKit's full setup on every switch (GS reset, `SetGsCrt`, a new frame buffer). This is the current behaviour.
+  - **1:** `SetGsCrt` only, with no GS reset.
+  - **2:** only the interlace setting (`SMODE2`) and the display window; the video timing isn't touched.
+- **A log line after every switch:** how long the setup took, and the longest gap between vertical-blank interrupts over the next 30 frames. If the video signal stops, the interrupts stop too, so that gap is a software measure of signal loss. 16,683 µs means it never stopped. The interrupt handler change is in [libetc_ps2.c](src/port/ps2/libetc_ps2.c).
+
+**Results in PCSX2,** over the same boot, title and game sequence (6–7 switches each):
+
+| method | setup time per switch | longest vertical-blank gap |
+|---|---|---|
+| 0: full gsKit setup (current) | 1.1–16.8 ms | 16.69–16.72 ms |
+| 1: `SetGsCrt` only | 0.38 ms | 16.71–16.72 ms |
+| 2: `SMODE2` only | 0.02 ms | 16.72 ms |
+
+- **Setup time is a real difference.** The current method can take up to 17 ms of CPU time, which is a whole frame, so a switch can cost the game a frame. Methods 1 and 2 are effectively instant. Most of method 0's time goes on gsKit reallocating and clearing its frame buffer.
+- **Signal loss can't be measured in PCSX2.** Its vertical-blank interrupts never stop, even through a GS reset, because it doesn't emulate the video signal going down. All three methods look identical there.
+
+**On the console,** the same log lines will show whether the signal stops. For method 0, I'd expect a gap noticeably longer than 16.7 ms if the GS reset really interrupts the sync output. That would be the measured cause of the longer sync loss you've noticed, and method 1's gap would show whether `SetGsCrt` on its own interrupts it.
+
+**Caveats:**
+- **Method 2** doesn't rewrite the vertical sync timing (`SYNCV`), because I can't find out the BIOS values; they're unreadable even in PCSX2. So it's for a hardware test only, and a TV may show a slightly off vertical position or a roll in one of the modes.
+- **Methods 1 and 2** skip gsKit's buffer reallocation and keep the 640×480 buffer from the first setup. That's fine, because it's already sized for the largest mode.
+- **Not visually checked yet:** I haven't looked at methods 1 and 2 on screen, only that they run without crashing and log normally.
+
+Nothing is committed. For the hardware test later, build with `SH1_MODESWITCH=0`, `1` or `2`, deploy, switch modes a few times (for example, open and close the inventory), and send me the console log. Filming the TV at the same time would show how long the picture is actually lost.
+
+## User
+
+When you say "Methods 1 and 2 skip gsKit's buffer reallocation and keep the 640×480 buffer from the first setup. That's fine, because it's already sized for the largest mode.", can you explain that a little more? I thought we were getting rid of the 640x480x32 buffer from before.
+
+## Claude
+
+You're right to question that, and my sentence was wrong in two ways.
+
+**1. The buffer hasn't gone away; only its use changed.** Before today, every frame was copied into gsKit's buffer and the TV showed that buffer. Now:
+- **Double-buffered frames** (normal gameplay at 224p) are shown straight from the PS1 VRAM copy, and the buffer isn't touched.
+- **Single-buffered screens** (the title and inventory at 448i) still need it. That's the fix for the missing text: those screens redraw the area that's on screen, so we take a snapshot of each finished frame into this buffer and display the snapshot.
+
+So the buffer still has a job, but only for those screens. What I planned to reclaim was most of its size, not the buffer itself. It's 32-bit today, but PS1 pixels are 16-bit, so a 16-bit snapshot buffer holds exactly the same image at half the size.
+
+**2. It isn't "already sized for the largest mode."** gsKit sizes the buffer at each setup for that mode:
+- **progressive (240 lines):** 640×240×4 bytes = 600 KB
+- **interlaced (480 lines):** 640×480×4 bytes = 1.2 MB
+
+The first setup is 320×240 progressive, so with methods 1 and 2, which never reallocate, the buffer is only 600 KB. On the first 448i screen, the 448-line snapshot (1.1 MB) runs past its end. It doesn't break anything today, but only by luck: the overflow lands in the unused space below `0x130000`, where the texture cache starts. Method 0 doesn't have this problem, because it reallocates for each mode.
+
+**The clean fix** also does the memory reclaim I had planned:
+1. Stop using gsKit's buffer for the snapshot. Use our own fixed 16-bit buffer, sized for the largest PS1 display, 640×480×2 = 600 KB, at a fixed address in the GS memory map, like the texture cache.
+2. Allocate gsKit's own buffer as small as possible. It's only used during gsKit's setup, and we can't skip that entirely in method 0.
+3. Move the texture cache's lower bound down into the freed space.
+
+That makes methods 1 and 2 safe regardless of the starting mode, and frees about 600 KB to 1 MB of GS memory, depending on how small gsKit's buffer can go. It's also a further small saving for the 448i screens, since a 16-bit snapshot moves half the data.
+
+Should I do that now?
+
+## User
+
+Given that the PS1 is able to show the dual buffers for 320x224, the single buffer for 640x448, and the single buffer for 320x448, all without needing a secondary framebuffer copy for display, why can't we do the same on PS2? It seems rather wasteful to me to NOT show directly from the PS1 VRAM copy.
+
+## Claude
+
+We can, and you're right that the copy is a workaround. The reason my first attempt broke those screens is a PS1 GPU feature the port doesn't emulate yet.
+
+**How the PS1 manages it:** in interlaced modes, the PS1 GPU has a "drawing to display area" setting, the DFE bit in `GP0(E1h)`. When it's off, which is the normal setting for single-buffered interlaced screens, the GPU skips every pixel on the lines of the field currently being sent to the TV. It only writes the lines of the other field. The field being scanned out is never touched, so the game can redraw its single buffer every frame without the TV catching it half-drawn. The two fields alternate every vertical blank, so each field is shown complete while the other one is redrawn.
+
+**What the port does:** the GS draws every line at once, so it overwrote the field being scanned out. That's why the background showed but the later text and icons didn't. The copy hid this by taking a snapshot. That also makes the result look slightly different from a real PS1: we show both fields from the same moment, while the PS1 shows fields drawn one frame apart, which you'd only notice on moving images.
+
+**The GS has the matching features:**
+- **`SCANMSK`** (a GS drawing register) can block drawing to even lines (value 2) or odd lines (value 3). That's exactly the PS1's field skipping.
+- **`CSR.FIELD`** (readable) tells us which field the GS is scanning out right now.
+
+**So the plan is:**
+1. When the display is interlaced and the game's DFE bit is off, set `SCANMSK` to block the lines of the field currently being displayed. Update it as the field changes: at each packet flush, and at each vertical blank for anything queued.
+2. Show every mode directly from the VRAM copy, including the 448i screens. Remove the snapshot copy and the touch tracking I added today.
+3. Make gsKit's buffer as small as gsKit allows, and give the reclaimed memory to the texture cache.
+
+**Risks to check:**
+- **Field mapping:** which GS field corresponds to the PS1's even lines. If I get it backwards, we'd block the wrong lines and the missing-text problem would come back in half the lines. That's easy to spot on the title screen, and simple to flip.
+- **Field changes mid-draw:** the field can change partway through drawing a frame. On the PS1 that's decided pixel by pixel as each one is drawn; here it would be per batch. Batches are short compared with a field (16.7 ms), so any difference should be a line or two, and only on frames that cross a field change.
+- **PCSX2's deinterlacing** may blur differences between the fields. The final check should also be on the console.
+- **Single-buffered progressive screens** would tear on a real PS1 too. Showing them directly is faithful, so they don't need the mask.
+
+The one remaining case for a separate buffer is 24-bit movie playback, which the GS can't scan out directly from the PS1's packed format. That's for later, when movies are supported.
+
+Should I implement it?
+
+## User
+
+As far as I know, there aren't any single-buffered progressive screens in the game. You can verify that. Otherwise, proceed with the implementation.
+
+## Claude
+
+I'll verify that first. The touch tracking I added today already tells single-buffered frames apart, so it can find any progressive screen that redraws the area on screen. In the earlier session logs, 224p gameplay was always shown directly. But the very first stats interval at boot, which covers 240p and then 224p, had 34 copied frames, and that needs explaining. I'll add a temporary log line for any progressive frame detected as single-buffered (not counting the forced copy right after a mode change), then run it over boot, all 43 maps and the Demo cutscenes.
+
+- tool `Bash`: Add temporary single-buffer probe; read demo sweep usage
+
+- tool `Bash`: Find demo sweep log location
+
+- tool `Bash`: Sweep maps and cutscenes for single-buffered progressive frames
+
+## Claude
+
+While the sweep runs, I'm reading the code the `SCANMSK` change will touch: the texture-page slot addressing and the fill path.
+
+- tool `Bash`: Read slot addressing and fill_rect
+
+- tool `Bash`: Implement SCANMSK field skipping and direct display
+
+- tool `Bash`: Find all s_TexPage writes
+
+- tool `Bash`: Read polygon texpage update
+
+- tool `Bash`: Keep DFE bit, add vblank counter, wire display call
+
+- tool `Bash`: Check build result, remove stray log
+
+## Claude
+
+The new code compiles and links. I'll build the ISO from it once the sweep finishes, then wait for the sweep result before testing.
+
+- tool `Bash`: Read sweep results
+
+- tool `Bash`: Show context around probe hits
+
+- tool `Bash`: Build SCANMSK version and smoke-test boot
+
+## Claude
+
+It boots through every mode and reaches the title screen and the game without crashing. Whether the field masking hides the half-drawn frames is a visual check, so I'm launching PCSX2 for you.
+
+- tool `Bash`: Launch PCSX2 to check field-masked direct display
+
+## Claude
+
+I confirmed there are no single-buffered progressive screens, and PCSX2 is now running the field-masked build for you to check.
+
+**What I found:** I ran all 43 maps and the 52 Demo cutscenes with a probe for progressive frames that draw into the area on screen. Your expectation holds; the only hits were harmless.
+- **The first boot frames, before the logos:** the two 240-line buffers at y = 32 and y = 256 share 16 lines. The real PS1 also draws those lines while they're visible.
+- **One leftover frame right after leaving each 448i screen.**
+
+**What the new build does:**
+- **Every mode is shown straight from the PS1 VRAM copy,** including the 640×448i and 320×448i screens. The snapshot copy and the touch tracking are gone.
+- **Single-buffered interlaced screens work as on the PS1:** with DFE off, nothing is drawn on the lines of the field being scanned out. This uses the GS's `SCANMSK`, updated from `CSR.FIELD` at each vertical blank, and it applies to fills too. The polygon texture-page update no longer clears the DFE bit, matching the PS1.
+- **gsKit's buffer is now 16-bit** and only used during gsKit's setup. That gives the texture cache 9 more 64 KB slots (28 → 37).
+- **The mode-switch blanking stays.** The default switch method is still the full gsKit setup.
+
+**Please check the title screen and the inventory:**
+- All menu text and icons should be present. If roughly half the lines are missing or flicker, the field mapping is inverted, which is a one-line flip.
+- The picture should be complete, not doubled or shifted by a line.
+- Normal gameplay should look the same as before.
+
+PCSX2 may blend the two fields when it deinterlaces, so the final check on field behaviour will be on the console.
+
+## User
+
+Half the lines on the text on the menu screen are missing, but there are parts of the text that looks normal. On the inventory screen, it's "No. 1", with the "1" appearing normal, and "Name:", with the "ame:" appearing normal. On the title screen, it's "OPTION", with "ION" appearing normal.
+
+## Claude
+
+The symptom points at timing, not at an inverted field mapping. If the mapping were backwards, all text would be broken the same way. Instead, some letters look complete and others are missing every other line. That fits text that only ever gets drawn while the same field is on screen, so its other field's lines are never filled in.
+
+With field skipping, each field only gets drawn while the other one is displayed. A screen redrawn after every vertical blank fills both fields in turn. But if the game redraws only every second vertical blank, which is 30 fps, every redraw lands in the same field. The other field's lines then keep whatever was drawn earlier. The parts that look normal would be ones that happened to be drawn at least once in each phase, for example while the screen was opening.
+
+Before changing anything, I want to measure it: on those screens, how many vertical blanks pass between frames, which field is on screen at each swap, and the DFE bit the game sets.
+
+- tool `Bash`: Add temporary interlace timing probe and build
+
+## Claude
+
+The previous PCSX2 session has closed. The title screen comes up on its own about 4 s after boot, so I can capture the probe without your help.
+
+- tool `Bash`: Capture interlace timing at boot and title
+
+- tool `Bash`: Capture probe on the 320x448i title screen
+
+## Claude
+
+The probe's 400-line limit was used up by the boot screen. I'm raising it.
+
+- tool `Bash`: Rebuild with higher probe limit and capture title
+
+- tool `Bash`: Read input script format
+
+- tool `Bash`: Dump title frames and VRAM
+
+## Claude
+
+Those dumps landed on the boot screen. The script times are in emulated seconds, and the title appeared later than I'd guessed. I'll dump later in the run.
+
+- tool `Bash`: Dump during title screen
+
+- tool `Bash`: Convert dumps to PNG
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/title/f1500.png
+
+## Claude
+
+The VRAM copy looks complete at this scale. I'm zooming in on the menu text to check line by line.
+
+- tool `Bash`: Crop and enlarge menu text
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/title/crop.png
+
+- tool `Bash`: Flip field mapping, remove probe, rebuild
+
+- tool `Bash`: Launch PCSX2 with flipped field mapping
+
+## Claude
+
+PCSX2 is running the corrected build, and you can take over.
+
+**What was wrong:** the field mapping was inverted, the risk I mentioned before. I dumped the title screen's VRAM and every line of "START / DEMO / OPTION" was intact in both fields, so the drawing was right. The mask was blocking the wrong field, though: it stopped drawing into the field being redrawn and let it hit the field the TV was showing. The TV caught its field half-redrawn every frame, so every other line of the text drawn later in each frame was missing, while the other field stayed complete. The dump looked fine because both fields are finished by the time it's taken.
+
+**Fix:** when the GS reports field 0, it's actually scanning out the odd lines of VRAM, so field 0 now masks the odd lines and field 1 the even ones. The temporary probe is removed.
+
+**Please check the same places again:**
+- "OPTION" on the title screen
+- "No. 1" and "Name:" in the inventory
+- the rest of the menu text and icons
+- normal gameplay
+
+- tool `Bash`: Check session log
+
+## Claude
+
+PCSX2 has closed after a clean session: about 230 s, four visits to the 448i screens, and no crashes, watchdog warnings or stuck transfers. How did the title and inventory text look this time? Were all the lines there?
+
+## User
+
+No, they looked broken this time.
+
+## Claude
+
+Both mappings look broken, so the mapping isn't the whole story, and I'd rather measure than flip it back and forth. I'll check whether PCSX2 runs can capture the actual displayed output, not just the port's VRAM dumps, which have been fine every time.
+
+- tool `Bash`: Look for screenshot or capture support
+
+- tool `Bash`: Log VRAM operations during 448i title frames
+
+## Claude
+
+That hypothesis is wrong. Each 448i title frame does exactly one VRAM operation outside normal drawing: a fill (the screen clear) at (0,32) 320×448. Fills are masked, and there are no copies or uploads. So the drawing is correctly confined to one field per frame, and the VRAM dumps show both fields complete.
+
+**Where that leaves us:** if the drawing is right and VRAM is complete, the broken image must come from how PCSX2 presents an interlaced display that changes one field per frame. The likely culprit is its deinterlacing (Automatic, Blend, Bob and so on), which combines fields in its own way. A real PS2 would just scan out the fields one after another, so the console may already be fine. I can't see PCSX2's window, though, and I don't want to guess a third time.
+
+Could you help me with two things?
+1. **Describe what "broken" looks like now.** Is it the same missing-every-other-line pattern on the same letters, different letters, flickering, or a doubled or shaky image?
+2. **Take a screenshot in PCSX2** (F8 by default, saved to `~/.config/PCSX2/snaps/`) on the title screen. Also tell me the Deinterlacing setting under Graphics → Rendering.
+
+I'll keep this build. The only extra thing it does is log a probe line. If you can try another deinterlacing mode, for example Weave or Off, and the text then looks complete, that confirms it's PCSX2's presentation and not the port. The final check would then be on the console.
+
+## User
+
+I took screenshots with Automatic, No Deinterlacing, Bob Top Field First, Blend, and Weave, in that order.
+
+- tool `Bash`: List PCSX2 screenshots
+
+- tool `Bash`: Crop menu text from each screenshot
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/snap_weave.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/snap_auto.png
+
+- tool `Bash`: Log per-frame timeline of clear, mask, and swap
+
+## Claude
+
+Those are fills only; the mask and swap lines used up their 300-line budgets during the boot screen. I'm looking at the start of the title section instead.
+
+- tool `Bash`: Show timeline on the 640x448i boot screen
+
+- tool `Bash`: Show timeline on the 320x448i title
+
+- tool `Read`: /home/alex/.config/PCSX2/snaps/sh1_ps2_SHPS-00001_20261017101046.png
+
+- tool `Bash`: Dump full VRAM at title with current mapping
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/title2/vram.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/title2/crop.png
+
+- tool `Bash`: Restore probe-free SCANMSK version and rebuild
+
+## Claude
+
+The interlaced screens are still broken in PCSX2, and I can't explain why from the port's side. Per-field drawing (the real PS1 behaviour) can't be judged in PCSX2; only the console will show whether it works. The current build is the field-masked version without the probes. Nothing is committed.
+
+**What I checked:**
+- **Drawing:** the title frame clears the screen, then draws about 245 primitives. Each frame touches only one field, alternating every vertical blank, exactly as the PS1 rule specifies.
+- **VRAM:** dumps at each frame swap show the complete menu in both fields. The menu text is drawn directly from the font pages, not rendered off-screen.
+- **Timing:** drawing starts right after each vertical blank and finishes within a few milliseconds.
+- **PCSX2's output:** in every deinterlacing mode, including Weave, "START", "DEMO" and "OPT" are missing, while "ION" and everything else is shown. That doesn't match what VRAM holds at any frame swap.
+
+**Options:**
+1. **Use snapshots for single-buffered interlaced screens, as before.** The PS1-style field masking stays behind a build setting for a console test. The snapshot goes into a 16-bit buffer the port owns, so most of the memory saving is kept (600 KB at most instead of 1.2 MB), and all progressive gameplay is still shown directly. The title and inventory looked correct this way earlier today. *(Recommended for now.)*
+2. **Keep field masking as the default and test it on the console next.** If it works there, PCSX2's interlace handling is the odd one out. If it doesn't, we'd at least see the real failure.
+3. **Dig into PCSX2's interlace and `SCANMSK` handling,** for example by testing a tiny standalone program that draws one field at a time with `SCANMSK`. That would show what PCSX2 does, but it's a detour from the port itself.
+
+My recommendation is option 1 now, plus a field-masking build for your next console session. On hardware, the mode-switch timing logs would come from the same session. Should I go ahead?
+
+## User
+
+Let's go with option 1 for now, but keep 2 and 3 in our back pocket. The reason I wanted to optimize and check VRAM was that I want to know how viable it would be to have a 480p and a 720p mode. The game's internal resolution would change, but I'm hoping that the fill rate of the PS2 is high enough that this wouldn't make much difference to the frame rate. 480p mode would never have the switches between 240p and 480i, instead staying at 480p the whole time. The 320x224p mode would become 640x448, the 320x448i mode would become 640x448p, with aspect ratio fixes necessary to cancel out the stretching, and the 640x448i mode would simply become 640x448p. I realize that 480p mode would require more VRAM, but given that the Graphics Synthesizer is designed to shuttle textures in and out of VRAM quickly so they don't take up too much space, I hope that it's still viable. 1280x720p may be more difficult, but it does have precedent in homebrew software. Let me know your thoughts on the viability of each mode.
+
+## Claude
+
+I'll do option 1 first, then answer the 480p/720p question.
+
+For option 1, single-buffered interlaced screens (interlaced, 480 lines, DFE off) get snapshot-copied into a 16-bit buffer at the bottom of GS memory, below the texture cache. Everything else is still shown directly from VRAM. The PS1-style field masking (option 2) moves behind a build setting, `SH1_INTERLACE_FIELDS=1`.
+
+- tool `Bash`: Implement snapshot fallback, field masking behind a flag
+
+## Claude
+
+Both variants build. Launching PCSX2 so you can check the title and inventory with option 1.
+
+- tool `Bash`: Launch PCSX2 to check option 1
+
+## Claude
+
+Option 1 is built, and PCSX2 is running it for you to check. Single-buffered interlaced screens (interlaced, 480 lines, DFE off) are snapshot-copied into a 16-bit buffer at the bottom of GS memory. Everything else is still shown directly from VRAM, and the texture cache keeps its 37 slots. The PS1-style field masking is behind `SH1_INTERLACE_FIELDS=1` (option 2), noted as broken in PCSX2 and to be tested on hardware. Please check that the title and inventory text are complete again.
+
+## 480p and 720p
+
+**Short version:** 480p is viable. Fill rate isn't the problem, and the VRAM fits. The hard part is the same as in every upscaling PS1 emulator: keeping the high-resolution image and the PS1's 1:1 VRAM in agreement. 720p at full internal resolution doesn't fit in VRAM with double buffering. A 720p output signal showing an image rendered at a lower resolution is easy.
+
+### Fill rate: not the limit
+
+- **What the GS can do:** about 2.4 billion pixels a second untextured and about 1.2 billion textured. At 60 fps that's roughly 20 million textured pixels per frame.
+- **What Silent Hill needs:** about 72k pixels per frame at 320×224. Even assuming 4× overdraw (the fog pairs alone double the world), that's about 0.3 million pixels per frame.
+  - **640×448:** 4× that, about 1.2M per frame, or 6% of the fill rate.
+  - **1280×720:** about 13×, roughly 4M per frame, or 20%. Texture and CLUT switching (about 340 a frame) adds some cost, but it should still fit.
+
+**One catch:** GS sends in this port are currently synchronous. The CPU waits for each transfer, and once the GS has more pixels to draw, its FIFO backs up and that wait grows. So more GS work can turn into CPU time until the planned CPU/GS overlap (option 5) is done. Both come down to the same `DrawOTag` work we were about to start. The CPU-side cost per primitive doesn't change with resolution; it's the same conversion with scaled coordinates.
+
+### VRAM
+
+The 1 MB PS1 VRAM copy stays at 1:1 in every mode. It holds the textures, the CLUTs and anything the game reads back.
+
+| | 480p (640×448, 16-bit) | 720p (1280×720, 16-bit) |
+|---|---|---|
+| render buffers (×2, double-buffered) | 2 × 560 KB = 1.1 MB | 2 × 1.8 MB = 3.6 MB |
+| PS1 VRAM copy + CLUT cache | 1.06 MB | 1.06 MB |
+| left for the 4/8-bit texture cache (4 MB total) | about 1.8 MB (≈ 28 slots, today's original count) | negative: doesn't fit |
+
+- **480p** fits comfortably. We measured 0 texture uploads per frame in steady play, so a cache the size the port had until today is fine. On "shuttling textures": the GS can upload quickly, about 0.3–0.5 ms for a 64 KB page through the GIF path. That's fine for a few pages a frame, but would cost real time if the cache were too small and thrashed.
+- **True 720p** options:
+  - **Single buffer:** 1.8 MB plus the 1 MB copy leaves about 1.1 MB for textures. But then the game draws into the buffer being scanned out, which causes tearing, or needs the field-style workarounds.
+  - **Lower internal width** for the render buffers, such as 960×720 at about 1.4 MB each, still doesn't double-buffer comfortably.
+  - **Rendering at 640×448 or 640×360 and letting the GS output stretch it** to a 720p signal is what most PS2 homebrew "720p" actually does (OPL, the GSM video-mode tool). Horizontal stretching can be ×2 exactly. Vertical stretching only comes in whole multiples, so 448 lines would be letterboxed and 360 lines doubles cleanly. That's easy, but it isn't higher detail than 480p.
+
+### What makes it hard: the upscaling itself
+
+- **Two copies of the screen:** the game draws into the PS1's 1024×512 VRAM, and in a 2× mode the screen exists twice, at 1× in the copy and at 2× in the render buffers. Every effect that reads the framebuffer has to be handled, the same way DuckStation or PCSX2's upscaling does it:
+  - fades and screen copies (`MoveImage` of display areas)
+  - drawing that uses the screen as a texture (the port already counts "prims texturing from VRAM", 0 in gameplay so far)
+  - `StoreImage` readbacks
+  - the 448i title and inventory overlays
+- **Scaling rule:** each axis gets its own factor. 224p → 448 is ×2 on both axes. 320×448i → 640×448p is ×2 horizontally and ×1 vertically. 640×448i → 640×448p is ×1. Done that way the picture stays 4:3 with no stretching, so no separate aspect fix is needed. Only 2D elements built for one mode, like text and HUD sprites, need checking for seams or half-pixel gaps at 2×.
+- **No more mode switches:** in 480p, everything goes through one fixed 640×448 progressive output. This also removes the switch blinking and sync loss we just looked at.
+- **Hardware limits:** 480p needs a component cable and a display that accepts 31 kHz; composite and S-Video can't carry it. 720p needs an HDTV, and the GS's 720p mode works on all retail PS2 models.
+
+### Suggested path
+
+1. **First, the `DrawOTag` work and asynchronous GS sends.** They help today, and they make 480p cheaper.
+2. **A 480p prototype:** scale coordinates and scissor in `gpu_gs.c` into separate 2× buffers, output 480p, and leave VRAM effects at 1× at first. That shows the real frame rate and which effects break.
+3. **720p:** later, as output stretching of the 480p render, unless memory frees up.
+
+Tell me how option 1 looks. After that I'd start the `DrawOTag` breakdown.
+
+- tool `Bash`: Check option 1 session log
+
+## Claude
+
+PCSX2 has closed after a short session: about 26 s, one visit to a 448i screen, and no crashes. How did the title screen look with option 1? Was the menu text complete?
+
+## User
+
+Yes it was. Let's move on to the DrawOTag work, but one last thing before that. We've had a copy of the PS1 VRAM this whole time for legacy reasons while we had the software renderer, but I don't think we need to keep an exact copy. At this point, I just want PS2 VRAM to be analogous to PS1 VRAM, in that we have framebuffers, CLUTs, and textures, but they don't necessarily need to be in the same spots as the PS1 VRAM, and we don't need to have a copy of the PS1 VRAM. What can we do to achieve this?
+
+## Claude
+
+There are two "copies" in play today, and they're different things. Your goal is reachable for one of them, and the other is already what you're describing.
+
+### 1. The GS-side PS1 VRAM image (1 MB at `0x300000`)
+
+This isn't a copy; it is the port's PS1 VRAM. The game draws its framebuffers into it, and 16-bit textures are read straight from it. It's also the master data for 4/8-bit textures and CLUTs. So it already is "framebuffers, CLUTs and textures in PS2 VRAM". The parts that are converted into GS formats, the 4/8-bit texture pages and the CLUT rows, already live in their own places (the page cache and the CLUT cache).
+
+Rearranging it into separately placed framebuffers, textures and CLUTs isn't worth it. The game addresses VRAM only by PS1 (x, y) rectangles and freely reuses the same pixels in different roles:
+- a framebuffer area later sampled as a texture (fades, screen effects)
+- CLUTs stored in spare framebuffer rows
+- `LoadImage`, `MoveImage` and `StoreImage` working on arbitrary rectangles
+
+With relocated pieces, every one of those operations would have to work out which pieces a rectangle overlaps, in which roles, and keep them consistent. A single 1:1 image handles all of that for free. It would also save no GS memory unless large parts of PS1 VRAM were never used, and the game uses most of it over time.
+
+### 2. The EE-side copy, `g_PortVram` (1 MB of main RAM)
+
+This one is left over from the software renderer, and it can go. In the GS renderer it's only used for four things:
+- **Filling the 4/8-bit page cache and the CLUT cache:** the CPU reads the indices out of it on a cache miss.
+- **Staging `LoadImage` uploads:** the game's data is copied into it, then sent to the GS.
+- **Keeping it in step on the CPU:** every fill (screen clear) and every `MoveImage` is repeated on the CPU. That's real cost every frame. The clear alone is 72k pixel writes per frame in gameplay and 143k on the 448i screens.
+- **`StoreImage`:** answered from a GS readback already.
+
+**Without it:**
+- **`LoadImage`** uploads straight from the game's buffer.
+- **Fills and copies** happen only on the GS, so the CPU loops disappear. That's a direct win for the frame time we're about to work on.
+- **Cache misses** (rare: 0 per frame in steady play) read the page or CLUT back from the GS, about 30–60 KB each. Better still, the GS might convert it itself with a local-to-local transfer from the 16-bit image into a 4/8-bit page. I'm not sure the GS allows that format change, so it needs a test in PCSX2 and on hardware. Readback is the safe fallback.
+- **Drawing into texture pages** (render-to-texture) becomes simpler: today the CPU copy goes stale there and needs special handling. With the GS as the only master, a re-read picks up the new pixels.
+- **The software renderer and the GS/software compare mode** need the EE copy. I'd keep them building, with the copy only in those modes, or remove them if you consider them retired.
+
+### Proposal
+
+1. Measure what the CPU mirroring costs per frame now (fills, copies and uploads), so the gain is known.
+2. Remove `g_PortVram` from the GS renderer: direct uploads, GS-only fills and copies, and readback on cache misses.
+3. Test GS-side conversion for cache misses as an improvement.
+4. Verify with the deterministic benchmark (pixel-identical frame dumps) and the warp sweep.
+
+Since step 1 is profiling, it can be the start of the `DrawOTag` work. Should I go ahead? And should the software renderer stay buildable or be retired?
+
+## User
+
+Yes, let's start on that. Let's also retire the software renderer, as we can test against Duckstation instead.
+
+## Claude
+
+I'll start by mapping everything that touches `g_PortVram` and the software renderer.
+
+- tool `Bash`: Survey VRAM copy and software renderer usage
+
+- tool `Bash`: List renderer references in libgpu_port.c
+
+- tool `Bash`: Read libgpu_port.c top half
+
+- tool `Bash`: Read rest of libgpu_port.c
+
+## Claude
+
+Next I'm reading the GS side: uploads, readback and the "texturing from VRAM" path.
+
+- tool `Bash`: Locate readback and render-to-texture code
+
+- tool `Bash`: Read transfer, readback, CLUT, rt-texture code
+
+- tool `Bash`: Baseline Kaufmann benchmark with dumps and log
+
+## Claude
+
+While the benchmark runs, I'll only read code, since editing now could race its build. Next: what else depends on the software renderer, and the display module's soft path.
+
+- tool `Bash`: Find software renderer dependents and display soft path
+
+- tool `Bash`: See why benchmark failed
+
+## Claude
+
+My copy of the benchmark script changes into a directory relative to its own location, which is wrong once it lives in my scratchpad. I'm pointing it at the repo and rerunning.
+
+- tool `Bash`: Run baseline benchmark
+
+## Claude
+
+The baseline is running. Meanwhile I'm reading the remaining pieces: the dump code in `Display_PresentGs`, and how the capture tool uses the VRAM copy.
+
+- tool `Bash`: Read dump code and capture usage
+
+- tool `Bash`: Read remaining details for the edit script
+
+- tool `Bash`: Read dump function and function boundaries
+
+- tool `Bash`: Read baseline results
+
+## Claude
+
+The baseline is in: **46.89 fps** (6,335 frames in 8,097 vertical blanks), plus 10 frame dumps. Now I'm applying the changes.
+
+- tool `Bash`: Remove software display path and copies from display_ps2.c
+
+- tool `Bash`: Update display_ps2 header comment
+
+## Claude
+
+Now `libgpu_port.c`.
+
+- tool `Bash`: Simplify libgpu_port.c to GS-only, no EE VRAM copy
+
+## Claude
+
+Now `gpu_gs.c`: the readback helper, cache misses read from the GS, no CPU mirrors, direct uploads and `StoreImage`.
+
+- tool `Bash`: Show remaining VRAM copy references in gpu_gs.c
+
+- tool `Bash`: Read header comment and cache_get loop
+
+- tool `Bash`: GS-side readback, direct uploads, no CPU mirrors
+
+- tool `Bash`: Drop SH1_GPU and gpu_soft.c, build
+
+## Claude
+
+It builds. Next I'm checking for new compiler warnings in the changed files, then running the benchmark against the baseline.
+
+- tool `Bash`: Check warnings; benchmark and compare dumps
+
+- tool `Bash`: Distribution of uploads/readbacks per frame
+
+- tool `Bash`: Break down cache misses during cutscene
+
+- tool `Bash`: Identify what invalidates cached pages
+
+- tool `Bash`: Restore probe-free file; locate insertion points
+
+- tool `Bash`: Patch cached pages/CLUTs on fills instead of dropping them
+
+## Claude
+
+It links. Running the benchmark again: the frame dumps must still match the baseline, and readbacks should drop to 0.
+
+- tool `Bash`: Benchmark with fill patching
+
+- tool `Bash`: Warp sweep with the copy-free renderer
+
+- tool `Bash`: Which map failed
+
+- tool `Bash`: Inspect map0_s00 failure log
+
+- tool `Bash`: Compare game state sequence with earlier passing run
+
+- tool `Bash`: Reproduce map0_s00 in bench and normal builds
+
+- tool `Bash`: Resolve crash PC in benchmark build
+
+- tool `Bash`: Test map0_s00 bench crash on last commit, then restore work
+
+- tool `Bash`: Bisect: without GTE-side changes
+
+- tool `Bash`: Log lines leading up to the crash
+
+- tool `Bash`: Read capture VRAM write and other malloc use
+
+- tool `Bash`: Banded readback for dumps and captures, no malloc
+
+## Claude
+
+`GpuGs_Download` has no callers left, so I'm removing it. Then I'll rerun the map0_s00 benchmark-build test.
+
+- tool `Bash`: Rebuild and retest map0_s00 in benchmark build
+
+- tool `Bash`: Look at the new failure
+
+- tool `Bash`: Compare load-screen sequence: last commit vs now
+
+- tool `Bash`: Compare emulated time of the load
+
+- tool `Bash`: Print vblank and frame numbers during load
+
+- tool `Bash`: Compare dumps and post-load behaviour
+
+- tool `Bash`: Full warp sweep with normal build
+
+## User
+
+[Request interrupted by user for tool use]
+
+## User
+
+I'm ending this early because I feel confident in the results. Let's just move on to the DrawOTag work
+
+- tool `Bash`: Look for sampling or function-level profilers
+
+- tool `Bash`: Check EE timer usage
+
+- tool `Bash`: Find text section bounds and demo event prints
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/sample_ps2.c
+
+- tool `Bash`: Check _etext and demo hook points
+
+## Claude
+
+There's no `_etext` symbol, so I'll use `_fdata`, the start of `.data`, which follows `.text` closely, as the end bound. Then I'll hook the Demo menu and the build flag.
+
+- tool `Bash`: Hook sampler into demo menu and build
+
+## Claude
+
+Now the analysis tool.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/samples.py
+
+## Claude
+
+Now a sampled run of the Kaufmann cutscene in the benchmark build, which runs uncapped so no time is spent idle.
+
+- tool `Bash`: Sampled benchmark run of the Kaufmann cutscene
+
+## Claude
+
+Every sample landed outside the code, so the interrupted PC isn't what this handler reads from `EPC`. I'll log a few raw values to see what's there.
+
+- tool `Bash`: Probe raw EPC values in the timer handler
+
+- tool `Bash`: Find kernel exception hooks
+
+- tool `Bash`: See how the crash reporter gets the faulting PC
+
+- tool `Bash`: Read ee_debug API and crash install
+
+- tool `Bash`: Remove the sampler
+
+## Claude
+
+`git status` shows no changes to `port_link.py`, but it should still carry today's edits (the `SH1_GPU` removal and the new build options). I'll check what state the working tree is in.
+
+- tool `Bash`: Check working tree and stash state
+
+## Claude
+
+The whole working tree reports clean, with no stash entries, and even the untracked `Gemini Conversation.md` isn't listed. Checking whether that's because the changes were committed:
+
+- tool `Bash`: Inspect recent commits
+
+- tool `Bash`: List functions in the primitive path
+
+- tool `Bash`: Read the primitive conversion path
+
+- tool `Bash`: Check includes and build flags plumbing
+
+- tool `Bash`: Add light cycle counters to DrawOTag paths
+
+- tool `Bash`: Check end of prof.h
+
+- tool `Bash`: Apply light counters
+
+## Claude
+
+Building the benchmark with the light counters and running the Kaufmann cutscene. The frame rate will also tell me how much the counters themselves cost.
+
+- tool `Bash`: Run Kaufmann benchmark with light counters
+
+- tool `Bash`: Find fog pair stats users
+
+## Claude
+
+The fog-pair counts were a one-off diagnostic for the fog-pair fusion, which is done. I'll keep them in profiling builds (`SH1_PROF` or `SH1_LITEPROF`) only.
+
+- tool `Bash`: Make fog pair stats profiling-only
+
+## Claude
+
+The closing `#endif` landed inside the loop. Fixing its position:
+
+- tool `Bash`: Fix #endif placement
+
+## Claude
+
+If the light-counter builds keep the statistics on, they can't measure this saving. I'll enable them only in `SH1_PROF` builds.
+
+- tool `Bash`: Benchmark without fog pair stats
+
+- tool `Bash`: Frame rate excluding dump stalls
+
+- tool `Bash`: Split state lookup cost
+
+- tool `Bash`: Function sizes and Prim layout
+
+## Claude
+
+`prim_state` compiles to 5.3 KB, because `state_other`, `tex_state`, `cache_get` and the register helpers are all inlined into it. I'll read its fast path, the part that runs when nothing changed.
+
+- tool `Bash`: Disassemble prim_state fast path
+
+- tool `Bash`: Find writes to state globals
+
+## Claude
+
+Only the `GP0 E2`–`E6` handler writes those globals, so a generation counter bumped there whenever a value actually changes covers every case. Implementing it:
+
+- tool `Bash`: Generation-based state memo, slim fast path; benchmark
+
+## Claude
+
+The state lookup went from 400 to 334 kcycles a frame, and all 10 dumps still match. The memo path itself still costs about 140 cycles per call, so I'm checking what the fast path compiles to now.
+
+- tool `Bash`: Check slimmed prim_state code
+
+- tool `Bash`: Bounding-box fit check, shared tag for fog pairs; benchmark
+
+- tool `Bash`: Log DrawOTag first pass
+
+## Claude
+
+I've cut `DrawOTag` by 14% in the Kaufmann cutscene, from 1,763 to 1,523 kcycles a frame, about 240k cycles saved per frame. All 10 frame dumps are identical to before. Nothing is committed, and I haven't rerun the warp sweep after these changes.
+
+**How it was measured:** a new light counter set (`SH1_LITEPROF=1`) times the parts of `DrawOTag` with inline cycle-counter reads, which cost a few cycles each. The old profiling sections cost hundreds of cycles per call, which distorted per-primitive work. A sampling profiler doesn't work under the ps2sdk kernel, so I dropped it. The benchmark's frame rate is a poor measure here, because it sits at 60 fps for most of the cutscene and includes the dump stalls. So the cycle counts are the measure and the frame dumps check exactness.
+
+**Where the time went before:** walking the ordering table and handling each packet cost 166k a frame. The rest was about 960 polygon calls a frame (half of them fog pairs), at roughly 1,300 cycles each, split across parsing the PS1 packet, looking up GS state and packing GS data.
+
+**What changed** (in [gpu_gs.c](src/port/ps2/gpu_gs.c)), all exact:
+1. **Fog-pair statistics only in profiling builds:** every polygon ran a `memcmp` and two `memcpy`s just for a diagnostic log line. Parsing went from 436k to 304k.
+2. **State lookup:** a generation counter replaces rebuilding a key from 12 globals on every polygon, and the slow paths are no longer inlined, so the fast path doesn't save 10 registers. It went from 375k to 334k.
+3. **Packing:** a quad's bounding box decides whether it fits the PS1's maximum primitive size, so the 12 per-triangle checks only run for big quads. A fog pair's two polygons now also share one GIF tag. Packing went from 430k to 370k.
+
+**What's left, roughly in order of payoff:**
+- **Packing and parsing:** write GS data straight into the packet while parsing, instead of filling temporary arrays and copying them, and use 128-bit stores. These are the two biggest parts, at about 370k and 300k.
+- **Texture state:** about 330 cycles per texture change, around 160k a frame.
+- **Ordering-table walk:** about 110 cycles per packet, around 166k a frame.
+- **The bigger structural items:** overlapping CPU and GS work, and building packets in the scratchpad.
+
+I've logged the numbers in [PS2 Optimizations.md](PS2%20Optimizations.md). Should I continue with writing straight into the packet?
+
+## User
+
+Yes, but make sure to update the other .md files too. I'm trying to find another cutscene for benchmarking, but I don't remember the performance numbers we've captured. What has historically been the worst performing cutscene?
+
+## Claude
+
+I'll look up the Demo cutscene sweep results recorded in the docs.
+
+- tool `Bash`: Search walkthrough for cutscene frame rates
+
+- tool `Bash`: Find Demo sweep comparison results
+
+- tool `Bash`: Read Demo sweep results section
+
+## Claude
+
+The full per-cutscene numbers are in the sweep logs from October 10. `compare_sweeps.py` tabulates them, so I'll run it.
+
+- tool `Bash`: Check compare_sweeps usage and log dates
+
+- tool `Bash`: Tabulate port vs PS1 cutscene frame rates
+
+## Claude
+
+Now I need the Demo-list numbers for the slowest ones, since `bench_cutscene.sh N` takes a list index.
+
+- tool `Bash`: Find Demo list indices of slow cutscenes
+
+- tool `Bash`: Read structure of walkthrough and planning doc
+
+## Claude
+
+Writing the doc updates: a walkthrough section for today's work, checklist updates in the planning doc, and an optimization-log entry for the display and VRAM changes.
+
+- tool `Bash`: Update walkthrough, planning doc, optimization log
+
+## Claude
+
+The slowest cutscene in the port was **map6_s04 func_800E1D50**, the monster Cybil scene, at **28.1 fps**. It's also the slowest on the PS1, at 9.8 fps.
+
+These are from the last full Demo cutscene sweep, on October 10 in PCSX2. That's before the fog-pair fusion, the mesh batching and today's work, so every scene should be faster now. The bottom of that sweep:
+
+| cutscene | Demo list # | port fps | PS1 fps |
+|---|---|---|---|
+| map6_s04 func_800E1D50 (monster Cybil) | 36 | **28.1** | 9.8 |
+| MapEvent_KaufmannBarFightCutscene | 50 | 33.3 | 15.5 |
+| map5_s02 func_800D4B58 | 13 | 33.9 | 15.9 |
+| map7_s02 func_800DF21C | 33 | 35.7 | 18.8 |
+| map4_s04 func_800D1910 | 6 | 37.8 | 19.7 |
+| map4_s05 func_800D61AC | 16 | 38.4 | 18.6 |
+| *current benchmark: map3_s00 func_800D0CF8 (Kaufmann)* | 4 | 52.8 | 19.8 |
+
+**Suggestion:** map6_s04 func_800E1D50 (#36), or the Kaufmann bar fight (#50) as a second choice. Both are far from 60 fps, so improvements will show in the frame rate as well as the cycle counts. The current benchmark spends most of its time at 60 fps. The list number is what `bench_cutscene.sh` takes, for example `bench_cutscene.sh 36 <dir>`.
+
+**Docs:** I've brought them up to date:
+- **[Running Walkthrough.md](Running%20Walkthrough.md):** a new section for the last two days: Split Head, the Gemini review fixes, the GTE dirty bits, the display changes, the VRAM-copy removal and the `DrawOTag` first pass.
+- **[Planning Doc.md](Planning%20Doc.md):** finished items checked off. New open items for the hardware tests (`SH1_INTERLACE_FIELDS`, `SH1_MODESWITCH`), the 480p/720p assessment, the next `DrawOTag` steps and the benchmark-cutscene candidates.
+- **[PS2 Optimizations.md](PS2%20Optimizations.md):** a GS memory map and display entry, next to today's `DrawOTag` entry.
+
+Next I'll start on writing GS data straight into the packet while parsing, measured on the Kaufmann benchmark, unless you'd like me to switch the benchmark to one of these first.
+
+## User
+
+For now, let's use both #36 and #50 as benchmarks. Rename #36 to CybilFightStart in the demo menu to make it easier to find. Then, move on to writing GS data into the packet while parsing.
+
+## Claude
+
+I'll start with the rename. The Demo list is generated by `tools/port/cutscene_list.py`, so I'm checking how it names entries.
+
+- tool `Bash`: Find naming in cutscene_list.py
+
+- tool `Bash`: Read the display-name function
+
+## Claude
+
+The list is sorted by function name, not by label, so renaming the label keeps it at #36. Adding a small table of readable names:
+
+- tool `Bash`: Add CybilFightStart name and check indices
+
+- tool `Bash`: Baseline benchmark on #36 and #50
+
+- tool `Bash`: Profile CybilFightStart whole frame
+
+- tool `Bash`: Resolve the hot RTPS sites
+
+- tool `Bash`: Read polygon tail to restructure
+
+- tool `Bash`: Read polygon tail
+
+- tool `Bash`: Direct packet writes for quads that fit
+
+## Claude
+
+Benchmarking both cutscenes and checking the frame dumps against the baselines:
+
+- tool `Bash`: Benchmark direct packet writes on #36 and #50
+
+- tool `Bash`: Check exactness on the deterministic Kaufmann benchmark
+
+- tool `Bash`: Where the Kaufmann dump differs
+
+- tool `Bash`: Determinism check: same build twice on #36 and #50
+
+- tool `Bash`: Size of dump differences vs baseline
+
+- tool `Bash`: Same code, counters off: do dumps change?
+
+- tool `Bash`: Compute vertex values only where written; Kaufmann check
+
+- tool `Bash`: Benchmark #36 and #50 after the change
+
+## Claude
+
+Writing the results into the three docs, including the determinism finding about the new benchmarks:
+
+- tool `Bash`: Update the three docs
+
+## Claude
+
+I renamed #36 and moved quad writing straight into the packet. `DrawOTag` is down another 5–8% in all three benchmarks, and the Kaufmann frame dumps are identical. The docs are updated and nothing is committed.
+
+**Rename:** Demo #36 (map6_s04 func_800E1D50) shows as **CybilFightStart** in the Demo menu. It's an entry in a small name table in [cutscene_list.py](tools/port/cutscene_list.py). The list is sorted by function name, so it keeps its place at #36. #50 is still `MapEvent_KaufmannBarFightCutscene`.
+
+**Writing straight into the packet:** a quad that fits the PS1's maximum primitive size is now written straight into the GS packet right after the state lookup, with a fog pair's underlay first. That's nearly every quad. Vertex values are only computed where they're written, not into temporary arrays first. Big quads and triangles keep the old path. `DrawOTag` kcycles per frame:
+
+| | Kaufmann #4 | CybilFightStart #36 | Bar fight #50 |
+|---|---|---|---|
+| end of the first pass | 1,523 | 1,520 | 1,198 |
+| now | **1,396** | **1,418** | **1,132** |
+
+Since this morning, the Kaufmann cutscene has gone from 1,763 to 1,396 kcycles (−21%).
+
+**The two new benchmarks can't check exactness.** Each is deterministic for a given build, but its picture depends on timing. The same source with only the light counters switched off produced different dumps (a few to a few hundred pixels) and slightly different vertical-blank counts. So they measure speed only, and Kaufmann remains the pixel check. It only varies in one subtitle glyph between builds.
+
+**Where CybilFightStart's time actually goes:** it runs at about 28 fps, and `DrawOTag` is only about 15% of its frame. The game update takes 6.3M cycles a frame, led by `func_80057658`, the world mesh's per-vertex point light. That issues about 3,550 RTPS a frame, two per vertex. It's the same kind of hot spot that batching fixed for character meshes, and likely the biggest frame-rate win available for that scene.
+
+**Docs:**
+- [PS2 Optimizations.md](PS2%20Optimizations.md): the numbers, the benchmark caveat, and the `func_80057658` finding.
+- [Planning Doc.md](Planning%20Doc.md): finished items checked off, with new open items for the next `DrawOTag` steps and `func_80057658`.
+- [Running Walkthrough.md](Running%20Walkthrough.md): a short summary.
+
+**Next options:**
+1. **`func_80057658` (point light):** batch its RTPS. This is the big one for CybilFightStart.
+2. **More `DrawOTag`:** texture state (about 330 cycles per change), 128-bit stores, the ordering-table walk.
+
+I'd recommend 1. Which do you want?
+
+## User
+
+<ide_opened_file>The user opened the file /home/alex/Documents/silent-hill-1-ps2-port/PS2 Optimizations.md in the IDE. This may or may not be related to the current task.</ide_opened_file>
+
+Let's go with 1
+
+- tool `Bash`: Read func_80057658
+
+- tool `Bash`: Read Row2 macro and RTPS entry point
+
+- tool `Bash`: Add Gte_CmdRtpsRow2 and use it in func_80057658
+
+- tool `Bash`: Fix directive indentation; check flag plumbing
+
+## Claude
+
+The check-build flag doesn't reach `src/port`, so I'll put the comparison at the call site: a helper that runs both paths from the same register state and compares all 64 registers.
+
+- tool `Bash`: Add check-build comparison at call site
+
+- tool `Bash`: Check build: compare fast path on #36 and #50
+
+## Claude
+
+0 mismatches over 6.2 million calls across both cutscenes. Now the speed:
+
+- tool `Bash`: Benchmark #36 and #50
+
+## Claude
+
+CybilFightStart went from 27.5 to 30.8 fps. Recording it in the docs:
+
+- tool `Bash`: Update docs
+
+## Claude
+
+I sped up the point-light code in `func_80057658`: CybilFightStart is up 12% (27.5 → 30.8 fps) and the Kaufmann bar fight 4% (40.8 → 42.4 fps). The result is exact: a check build found 0 mismatches over 6.2 million calls.
+
+**What was slow:** the function uses RTPS to compute three dot products per vertex, not to project anything. The light vector and the normal sit in rotation rows 0 and 1. Each vertex then puts the same vector into row 2 and into the input vertex V0. Writing row 2 made the emulator unpack all three GTE matrices again before every RTPS, about 3,550 times a frame in CybilFightStart.
+
+**The fix:** a new entry point, `Gte_CmdRtpsRow2` in [gte.c](src/port/gte.c), does all three steps in one call. It writes row 2 and V0 in place, without marking the matrix for a full refresh, then runs the same RTPS code as before. The original macros stay in [bodyprog_80056D8C.c](src/bodyprog/gfx/bodyprog_80056D8C.c) for the PS1 build.
+
+**Exactness check:** in `-DSH_PORT_CHECK_BATCH` builds, each call runs both the new path and the original macros from the same GTE state and compares all 64 registers. That's where the 0 mismatches over 6.2 million calls come from, across both cutscenes.
+
+The frame rates are from benchmark builds, averaged over seconds without a frame-dump stall. All three docs are updated, and nothing is committed.
+
+Next, I can profile CybilFightStart again to see what leads its game update now, or go back to the remaining `DrawOTag` items: texture state, 128-bit stores and the ordering-table walk.
+
+## User
+
+Can these dot products be moved to the EE's MMI?
+
+## Claude
+
+Mostly, they already are. On the EE, `rtp_small` computes its three dot products with MMI: `rt_dot3` uses `PHMADH`, and `Gte_CmdRtpsRow2` goes through that same path. So the multiply-accumulates aren't where the time goes now.
+
+What remains per vertex is the rest of RTPS, which is scalar code:
+- **Perspective divide:** the GTE's reciprocal-table division, with a count-leading-zeros, a table lookup and two refinement steps. This is the largest part.
+- **Screen position:** two 32×32 multiplies with the offsets for SX and SY.
+- **Depth cue for IR0:** another multiply.
+- **Saturation and FLAG bits**, plus writing back about 15 GTE registers.
+
+MMI can't do much for these. They're sequential integer steps for one vertex, and MMI is wide but only helps when the same step runs across lanes.
+
+The bigger remaining saving is to batch the whole loop, as with `Gte_RtpBatch` for meshes:
+- **Only two results are needed:** the function reads just SXY2 and IR0 after each RTPS, so a batch could skip all the per-vertex register writes and the dispatch.
+- **Packing two vertices per MMI instruction:** with all vertices of a normal at hand, the dot products for two vertices could share one MMI instruction.
+- **Keeping it exact:** only the last vertex of each mesh would go through the real GTE, so the registers end up exactly as the PS1 leaves them.
+
+I'd expect that to save roughly another third of this function's GTE time, but that's an estimate I haven't measured yet. One wrinkle: the loop uses each result for the vertex before it, so a batch has to collect all results first, then compute the light values in a second pass.
+
+Do you want me to try it? It's verifiable the same way, with a check build comparing results.
+
+## User
+
+Let's keep this in mind, but go back to the Cybil fight scene and profile it again to figure out what else is slowing it down.
+
+- tool `Bash`: Profile CybilFightStart again
+
+- tool `Bash`: Function-level profile of CybilFightStart
+
+## Claude
+
+The point light is still by far the biggest cost. This profile instruments each function, which inflates small functions, but the ranking is clear. Exclusive time in the game update, per frame:
+
+| function | kcycles/frame | what it is |
+|---|---|---|
+| **`func_80057658`** | **3,469** | world mesh point light, including the emulated RTPS it calls. The port's GTE code isn't instrumented, so it counts toward the caller |
+| `Fs_QueueWaitForEmpty` | 1,131 | waiting for a file load to finish: waiting, not CPU work |
+| `func_80057B7C` | 885 | world mesh vertex transform (already batched) |
+| `Gfx_MeshDrawPort` | 775 | building the world mesh's PS1 packets |
+| `Gte_DataReadInline` + `Gte_CtrlWriteInline` | 456 | GTE register moves called as real functions. That's an artefact of this profiling build; normally they're inlined |
+| character meshes (`func_8005A900`, `func_8005AC50`, `func_8005AA08`, `func_8005A478`) | about 630 | |
+| `WorldEnv_LightTransform` | 192 | |
+| `Port_MemoCheck`, `Port_Nclip`, `Vw_AabbVisibleInScreenCheck` | about 450 | |
+
+`DrawOTag` is separate, at about 1.4M.
+
+**What this means:**
+1. **The point light is about 60% of the game update.** That's about 1,000 cycles per vertex for some 3,500 calls a frame. Today's fix removed the matrix refreshes, but each vertex still pays for a full emulated RTPS: dispatch, register writes, the divide and the flags. The batch I suggested is the main remaining lever: compute only the two values the function reads, and run only the last vertex through the GTE. I'd now expect a large share of that 3.5M to go, though the instrumentation inflates it, so I'll measure before promising a number.
+2. **File waits (1.1M) aren't CPU work.** They're time spent waiting on the disc. They're worth a separate look, for example whether the scene streams data while it plays.
+3. **The world mesh transform and packet building (about 1.7M together)** are the next tier after that.
+
+Should I go ahead with the point-light batch, checked the same way as before?
+
+## User
+
+Yes
+
+- tool `Bash`: Read function tail and rtp_small depth cue
+
+- tool `Bash`: Check mul32 signature
+
+- tool `Bash`: Add Gte_RtpsDotBatch
+
+- tool `Bash`: Read function frame and scratch struct fields
+
+- tool `Bash`: Add the batched port loop
+
+- tool `Bash`: Fix SZ preset, hook in, add check harness
+
+## Claude
+
+Now the reference copy of the original loop for the check build:
+
+- tool `Bash`: Add original-loop reference and compile check build
+
+- tool `Bash`: Run check build on #36, #50, #4
+
+## Claude
+
+0 mismatches over 46,000 meshes in the check build (light values, the scratch fields and all 64 GTE registers compared). Now the speed:
+
+- tool `Bash`: Benchmark #36 and #50
+
+- tool `Bash`: Compare game update before/after batch
+
+## Claude
+
+The batch is a real but modest gain. CybilFightStart's game update dropped from 5,849 to 5,446 kcycles a frame, about 400k or 7%. Recording it:
+
+- tool `Bash`: Update docs
+
+## Claude
+
+The point-light batch works and is exact, but the gain is about 7%, much smaller than the profile suggested. CybilFightStart's game update dropped from 5,849 to 5,446 kcycles a frame, and the profiling build went from 36.9 to 39.0 fps. Over the whole cutscene, the benchmark build took 4% fewer vertical blanks for CybilFightStart (1,918 → 1,849) and 7% fewer for the bar fight (6,492 → 6,040).
+
+**How it works** (in [bodyprog_80056D8C.c](src/bodyprog/gfx/bodyprog_80056D8C.c) and [gte.c](src/port/gte.c)):
+1. A first pass collects every vertex-to-light vector in the same order the original loop visits them.
+2. `Gte_RtpsDotBatch` computes the screen position, depth and depth cue for all of them except the last, using the GTE's exact arithmetic. That skips the dispatch and register writes per vertex.
+3. The original light arithmetic then runs on those results.
+4. The very last vertex goes through the real GTE, with its result queue preset to the earlier results, so every GTE register ends exactly as before.
+
+**Exactness:** the check build runs the batched loop and the original loop from the same state, and compares the light values, the whole scratch structure and all 64 GTE registers. 0 mismatches over 46,000 meshes across both cutscenes.
+
+**Why it's smaller than expected:** the function-level profile inflated this function. Its many small calls each paid for the instrumentation, so the 3.5M was mostly profiling overhead.
+
+**Next candidates for CybilFightStart:**
+- **`Fs_QueueWaitForEmpty`** (about 1.1M a frame): the scene is waiting on file loads, not doing CPU work. It may be worth seeing what it streams mid-scene.
+- **The world mesh transform (`func_80057B7C`) and packet building (`Gfx_MeshDrawPort`):** about 1.7M together.
+
+All three docs are updated, and nothing is committed.
+
+## User
+
+Let's look at the file loads
+
+- tool `Bash`: Find callers of Fs_QueueWaitForEmpty
+
+- tool `Bash`: Log Fs_QueueWaitForEmpty callers during the scene
+
+- tool `Bash`: Resolve callers; timeline
+
+- tool `Bash`: Remove probe and stale warp.txt
+
+## Claude
+
+The file loads aren't a per-frame cost. They all happen at the start of the scene, and during the fight itself the game is purely CPU-bound.
+
+**What the log shows** (CybilFightStart, one run):
+
+| when | caller | files queued | waited |
+|---|---|---|---|
+| scene start | `func_800E1D50` (the cutscene itself) | 4 | 34 vertical blanks |
+| scene start | `WorldGfx_Draw` | 4 | 39 vertical blanks |
+| scene start | `WorldGfx_Draw` | 4 | 26 vertical blanks |
+| later | `Chara_ProcessLoads`, `open_main` | 0 | 2 each (nothing to wait for) |
+
+That's about 100 vertical blanks, roughly 1.6 s, of loading before the action starts. The EE was 94–98% idle then, just waiting on the disc. After that there are no more loads, and the EE sits at 0% idle until the scene ends.
+
+**Why the profile showed 1.1M a frame:** the function-level profile averages over a window that included that start-up load. It's wait time, not CPU work, and it doesn't slow the fight itself. Speeding it up would mean faster loading, which is a separate topic: comparing load times against the PS1, or preloading. It wouldn't raise the cutscene's frame rate.
+
+**For frame rate, the targets stay CPU work during the fight:**
+- the world mesh transform (`func_80057B7C`) and packet building (`Gfx_MeshDrawPort`), about 1.7M together
+- the remaining point-light cost
+- `DrawOTag`, about 1.4M
+
+**Cleanup:** I removed the temporary logging. I also deleted a leftover `build/port/warp.txt` from the warp sweep I stopped earlier. It only redirected the game to a map after each Demo cutscene had finished, so today's cutscene numbers aren't affected.
+
+Which should I go after next: the world mesh transform and packet building, or `DrawOTag`?
+
+## User
+
+Let's do the world mesh transform and packet building
+
+- tool `Bash`: Read func_80057B7C
+
+- tool `Bash`: Locate the two functions
+
+- tool `Bash`: Read port version of func_80057B7C
+
+- tool `Bash`: Add mesh light/transform/packet counters
+
+## Claude
+
+Game code is compiled by `ee_compile_check.sh`, which doesn't pass `SH1_LITEPROF` yet, so I'm adding it there.
+
+- tool `Bash`: Pass LITEPROF to game code; measure #36
+
+## Claude
+
+The point light is still the largest part, at 2.1M cycles a frame, so my batch removed less than I'd expected. I'm splitting it into the batch's arithmetic and the rest.
+
+- tool `Bash`: Split the point light cost
+
+- tool `Bash`: Find the return in Port_PointLight
+
+- tool `Bash`: Apply split counters and measure
+
+## Claude
+
+The batch's arithmetic alone costs about 370 cycles per vertex (1.42M for 3,800 vertices), which is a lot for a few multiplies and a table lookup. I'm checking the generated code for helper calls.
+
+- tool `Bash`: Inspect batch inner loops for helper calls
+
+- tool `Bash`: Read the batch inner loop code
+
+- tool `Bash`: Read clz32
+
+## Claude
+
+The source already uses the EE's `PLZCW` instruction for this, so the call means the `_EE` branch isn't being compiled. I'll check whether `gte.c` gets `_EE` defined at all.
+
+- tool `Bash`: Check whether _EE reaches gte.c
+
+- tool `Bash`: Read EE GTE test runner
+
+- tool `Bash`: Run EE GTE exactness test (with MMI)
+
+## Claude
+
+The MMI GTE code is exact: all seeds match on the EE. Next I'm checking where else `_EE` guards code outside `src/port/ps2/`, then enabling it.
+
+- tool `Bash`: Find _EE guards outside the HAL
+
+- tool `Bash`: See the other _EE matches
+
+## Claude
+
+Only `gte.c` and `vw_calc.c` are affected. Switching their guards to the compiler's own R5900 define:
+
+- tool `Bash`: Enable EE paths in the game build; rerun GTE tests
+
+## Claude
+
+The EE and host GTE tests still pass. Next, the game-level check build, which now exercises the real MMI paths: point light, mesh batch and Gemini's bone matrices.
+
+- tool `Bash`: Check build with MMI paths active
+
+## Claude
+
+All checks report 0 mismatches with the MMI paths live. Now the speed, plus the Kaufmann pixel check:
+
+- tool `Bash`: Benchmark #36, #50 and Kaufmann with MMI on
+
+## Claude
+
+Both cutscenes are clearly faster, and the Kaufmann frame dumps are still identical. Recording the finding:
+
+- tool `Bash`: Document the _EE finding
+
+## Claude
+
+Profiling the world mesh code turned up a build bug: the GTE emulator's EE-specific code had never been compiled into the game. Fixing it made CybilFightStart 7.6% faster and the bar fight 5.2% faster, and everything is still exact.
+
+**The bug:** the fast PS2 code in [gte.c](src/port/gte.c) sits behind `#ifdef _EE`. That covers the `PHMADH` dot products, the `MULT`/`MFHI` multiply and `PLZCW` for counting leading zeros. Only `src/port/ps2/` is compiled with `-D_EE`, and `gte.c` and the game code aren't. So the game always ran the generic C fallbacks.
+- **Why the tests never caught it:** the GTE test's EE build passes `-D_EE` itself, so it exercised code the game never ran.
+- **Gemini's MMI bone-matrix path** in `vw_calc.c` was compiled out the same way, so the scalar fallback is what actually ran.
+- **How it showed up:** the point-light batch was calling the library helper `__clzdi2`, with about 18 register spills around each call, for every vertex.
+
+**The fix:** both files now also check the compiler's own `_MIPS_ARCH_R5900` define, so the EE code is used in the game.
+
+**Exactness:**
+- **GTE test:** all 7 seeds on the EE and on the host compare every register and FLAG, all matching.
+- **Check build** (CybilFightStart and Kaufmann): every comparison reports 0 mismatches. That covers the mesh batch, the character vertex and normal batches, the point light and the bone matrices.
+- **Kaufmann frame dumps:** identical.
+
+**Speed** (benchmark builds, vertical blanks for the whole cutscene):
+
+| | before | after |
+|---|---|---|
+| CybilFightStart #36 (801 frames) | 1,849 | **1,709** |
+| Bar fight #50 (about 4,030 frames) | 6,040 | **5,723** |
+
+Within CybilFightStart's world mesh, the point-light batch fell from 1,419 to 988 kcycles a frame and the transform from 910 to 640.
+
+**Where CybilFightStart's frame goes now** (kcycles a frame):
+
+| part | kcycles |
+|---|---|
+| point light | 1,654 (batch 988, the light arithmetic after it 469) |
+| `DrawOTag` | 1,410 |
+| mesh transform | 640 |
+| mesh packets (`Gfx_MeshDraw`) | 476 |
+
+**Next step for the point light:** its batch still does its dot products in scalar code. It wasn't written with `PHMADH` the way `rtp_small` is. Moving those to MMI is the next step there, and checkable the same way. After that, the mesh packets.
+
+All three docs are updated, and nothing is committed. Should I continue with the point light's MMI dot products?
+
+## User
+
+Yes
+
+- tool `Bash`: Read rt_dot3
+
+- tool `Bash`: MMI dot products in Gte_RtpsDotBatch
+
+- tool `Bash`: Reindent block
+
+## Claude
+
+The game-data check compares the new path against the original loop. I'll run it, then benchmark:
+
+- tool `Bash`: Check build, then benchmark
+
+## Claude
+
+Exact, but slower: the batch went from 988 to 1,146 kcycles a frame. On the EE, the 128-bit store-and-reload around `PHMADH` costs more than the nine scalar multiplies it replaces. I'm reverting it.
+
+- tool `Bash`: Revert, confirm, note in log
+
+- tool `Bash`: Experiment: scalar instead of rt_dot3
+
+- tool `Bash`: Remove rt_dot3 and m_rt_mmi
+
+- tool `Bash`: GTE tests, benchmarks, Kaufmann dumps
+
+- tool `Bash`: Document
+
+## Claude
+
+Moving the point light's dot products to MMI made it slower, so I reverted it. The same test showed the existing MMI dot product elsewhere was also a net loss, and removing it gave a small exact gain.
+
+**Point light with MMI:** I rewrote `Gte_RtpsDotBatch`'s dot products with `PHMADH`. It was exact (0 mismatches over 110,000 meshes in the check build) but slower: the batch went from 988 to 1,146 kcycles a frame. Each `PHMADH` needs the values written to memory as a 128-bit block and read back, and that costs more than the nine scalar multiplies it replaces.
+
+**The same applies to `rt_dot3`:** that's the `PHMADH` dot product the mesh transform batch and per-command RTPS use. Now that the scalar path really uses the fast `MULT`/`MFHI` multiply and `PLZCW`, scalar is slightly faster there too. I removed `rt_dot3` and its MMI copy of the matrix:
+
+| | before | after |
+|---|---|---|
+| CybilFightStart mesh transform (kcycles a frame) | 640 | 613 |
+| CybilFightStart vertical blanks | 1,709 | 1,702 |
+| bar fight mesh transform | 521 | 497 |
+
+It's still exact: the GTE test passes on the EE and the host, and the Kaufmann frame dumps are identical.
+
+MMI only pays off when data stays in the 128-bit registers across several operations, like whole vertex batches. It doesn't help for one dot product at a time. I noted that in [PS2 Optimizations.md](PS2%20Optimizations.md) and updated the Planning Doc entry.
+
+**CybilFightStart now** (kcycles a frame):
+
+| part | kcycles |
+|---|---|
+| point light | about 1,650 (batch 988, the light arithmetic after it 469) |
+| `DrawOTag` | 1,410 |
+| mesh transform | 613 |
+| mesh packets | 476 |
+
+The point light's batch is now plain scalar arithmetic, mostly the GTE's exact divide, and there's no cheap trick left for it. The other part, the 469k of light arithmetic after the batch, is the decompiled code itself. A tighter port version of it is possible, and the check build would verify it.
+
+Nothing is committed. Next options: that light arithmetic, the mesh packets (`Gfx_MeshDraw`, 476k), or `DrawOTag` again (texture state and the ordering-table walk). Which do you want?
+
+## User
+
+Let's start with the light arithmetic
+
+## Claude
+
+Pass 2 does about 120 cycles of work per vertex. Most of that is keeping the original's scratch-memory variables updated as it goes: the screen position, the depth and the matrix rows. Each light value only depends on that vertex's own results, so the loop can run in registers. Only the final scratch state has to match the original, and the check build compares the whole scratch structure, so it will catch any difference.
+
+- tool `Bash`: Register-only light arithmetic
+
+- tool `Bash`: Check build, then benchmark
+
+- tool `Bash`: Document
+
+## Claude
+
+I cut the point light's arithmetic pass to well under half its cost, from 469 to 182 kcycles a frame in CybilFightStart, and it's still exact.
+
+**What changed:** the original loop updates the scene's scratch variables for every vertex (the screen position, the depth, the matrix rows and the current normal). That's a lot of memory writes. Each light value depends only on its own vertex's results and lands in that vertex's own slot. So the new loop works entirely in registers, and the scratch variables get only their final values: the last vertex's, which still goes through the real GTE as before. The change is in [bodyprog_80056D8C.c](src/bodyprog/gfx/bodyprog_80056D8C.c).
+
+**Exactness:** the check build compares the light values, the entire scratch structure and all 64 GTE registers against the original loop. 0 mismatches over 117,000 meshes across CybilFightStart and the bar fight.
+
+**Speed:**
+
+| | before | after |
+|---|---|---|
+| CybilFightStart light arithmetic (kcycles a frame) | 469 | **182** |
+| CybilFightStart whole point light | 1,654 | **1,368** |
+| CybilFightStart vertical blanks (801 frames) | 1,702 | **1,662** |
+| Bar fight light arithmetic | 387 | **193** |
+
+The bar fight's total vertical blanks barely moved (5,723 → 5,725). That scene's timing varies with the build and its light is a smaller share of the frame, so its own counter is the better measure there.
+
+**The point light now** (kcycles a frame):
+
+| part | kcycles |
+|---|---|
+| batch (mostly the GTE's exact divide) | 988 |
+| collecting the vectors | 180 |
+| arithmetic | 182 |
+
+The batch is near its floor without changing the divide itself. Folding the collect pass into the batch might save part of that 180k.
+
+All three docs are updated, and nothing is committed. Since this morning, CybilFightStart has gone from 1,969 to 1,662 vertical blanks for the same 801 frames, about 16% less time. Next up could be the mesh packets (476k) or `DrawOTag` (1.4M). Which do you want?
+
+## User
+
+Let's do the mesh packets
+
+- tool `Bash`: Read port Gfx_MeshDraw
+
+- tool `Bash`: Read memo helpers and start of Gfx_MeshDrawPort
+
+- tool `Bash`: Outline Gfx_MeshDrawPort branches
+
+- tool `Bash`: Read the lit-and-fogged path
+
+- tool `Bash`: Memoize the lit-and-fogged path's colours
+
+## Claude
+
+The existing mesh check compares the packets against the original code, so it covers this change too:
+
+- tool `Bash`: Check build, then benchmark
+
+## Claude
+
+No change, so CybilFightStart doesn't take that path. I'll count faces per path with a temporary probe instead of guessing again.
+
+- tool `Bash`: Count faces per mesh path in CybilFightStart
+
+## Claude
+
+All of CybilFightStart's world faces take the lit path without fog, roughly 2,300 faces a frame at about 200 cycles each. Reading that loop:
+
+- tool `Bash`: Read the lit path loop
+
+- tool `Bash`: Rewrite lit loop with locals
+
+## Claude
+
+`POLY_GT4` corners are 12 bytes apart, not 8, and `field_18` is an `s32`. Fixing both:
+
+- tool `Bash`: Fix corner stride and depth type
+
+- tool `Bash`: Check build, then benchmark
+
+## Claude
+
+Mismatches, so my rewrite differs somewhere. I'll look at what the mesh check compares, and print a mismatch.
+
+- tool `Bash`: Read mesh check harness
+
+- tool `Bash`: Read mismatch reporting
+
+- tool `Bash`: See mismatch details
+
+- tool `Bash`: Rebuild check build; show mismatches
+
+- tool `Bash`: Scratch struct field types
+
+- tool `Bash`: Original local types
+
+## Claude
+
+The original keeps the bound in a `u32` (`temp_t0_3`), so its screen-bounds test compares unsigned, and a negative coordinate counts as huge. My version compared signed. Matching it:
+
+- tool `Bash`: Fix, check, benchmark
+
+- tool `Bash`: Check on Kaufmann and other scenes; dumps
+
+- tool `Bash`: Document
+
+## Claude
+
+The world mesh packets are about 15% cheaper in both benchmark scenes, and the packets are still identical to the original's.
+
+**Where the time went:** every world face in CybilFightStart takes `Gfx_MeshDrawPort`'s lit path without fog. That's about 2,300 faces a frame at roughly 200 cycles each. My first attempt memoized the colours of the lit-and-fogged path, which the counters showed did nothing. A temporary probe then showed these scenes never use that path, which is why.
+
+**What changed** (in [bodyprog_80056D8C.c](src/bodyprog/gfx/bodyprog_80056D8C.c)):
+- **The lit loop uses locals:** the face's vertex indices, depth and light bytes stay in registers, instead of being stored to scratch memory and read back on every face. The scratch fields get the original's final values at the end.
+- **The colour memo is checked once per mesh,** not once per corner. Its six inputs can't change inside the loop.
+- **One detail had to match exactly:** the original keeps its screen bound as an unsigned number, so the bound test compares unsigned. My first version compared signed and drew extra faces. The mesh check caught it immediately, and the fixed version matches.
+- **The flashlight path's colours are now memoized as well**, from the first attempt. That's exact by construction, but no benchmark exercises it.
+
+**Checks:** the mesh check compares every packet and the ordering table against the original. 0 mismatches in CybilFightStart, the bar fight, Kaufmann and Demo cutscenes #1–3. The Kaufmann frame dumps are identical.
+
+**Speed:**
+
+| | before | after |
+|---|---|---|
+| CybilFightStart mesh packets (kcycles a frame) | 479 | **404** |
+| CybilFightStart vertical blanks (801 frames) | 1,661 | **1,652** |
+| bar fight mesh packets | 310 | **278** |
+
+Over today's work, CybilFightStart went from 1,969 to 1,652 vertical blanks for the same 801 frames, which is 16% less time.
+
+**CybilFightStart now** (kcycles a frame):
+
+| part | kcycles |
+|---|---|
+| `DrawOTag` | 1,410 |
+| point light | 1,368 (batch 988) |
+| mesh transform | 613 |
+| mesh packets | 404 |
+
+`DrawOTag` is the largest remaining piece. All three docs are updated, and nothing is committed.
+
+## User
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent:
+   - Find the console crash logs from the first boss fight (Split Head) and fix the crash. Then fix Harry's wrong aim in that fight.
+   - Add a todo for a codebase-wide audit of PS1-stack-layout assumptions. The user tabled it.
+   - Review Gemini's bone-matrix MMI implementation (vw_calc.c), check it in the open world, and measure the speedup.
+   - Optimize the remaining MVMVA sites, then the snow particle RTPS. The batch was reverted because it gave no gain.
+   - Answer questions about VRAM usage. Show the display directly from the PS1 VRAM image in GS memory.
+     - Single-buffered 448i screens broke. The user chose option 1: snapshot copy for single-buffered interlaced screens, with PS1-style SCANMSK field drawing behind a flag.
+     - Options 2 (test the field masking on hardware) and 3 (investigate PCSX2's interlace handling) are "kept in our back pocket".
+   - Blank the output on video mode switches. Measure mode-switch timing in software; the user will do the hardware tests later.
+   - Assess the viability of 480p and 720p modes. Answered; this is a future item.
+   - Remove the EE copy of PS1 VRAM and retire the software renderer ("we can test against Duckstation instead").
+   - DrawOTag optimization, including writing GS data straight into the packet.
+   - "make sure to update the other .md files too" (Planning Doc.md, Running Walkthrough.md, PS2 Optimizations.md). These should be kept updated with each piece of work.
+   - Use Demo #36 and #50 as benchmarks. Rename #36 to "CybilFightStart" in the Demo menu.
+   - Profile CybilFightStart and optimize its hot spots, in this order:
+     - the point light, func_80057658
+     - the file loads (investigated: start-of-scene only)
+     - the world mesh transform and packets
+     - the light arithmetic
+     - the mesh packets (current)
+   - Keep in mind for later: a fuller batching or MMI approach for the point light.
+
+2. Key Technical Concepts:
+   - PS2 port of the Silent Hill decomp. GS renderer in src/port/ps2/gpu_gs.c. Software GTE emulator in src/port/gte.c.
+   - Exactness checks: `-DSH_PORT_CHECK_BATCH` via SH1_EXTRA_CFLAGS, which applies to game code only, not src/port. Also gte_test (host and EE run_ee.py) and frame-dump comparison (compare_dumps.py).
+   - Benchmarks: `bench_cutscene.sh N` using demo.txt "sweep N 300 N".
+     - Kaufmann (#4, map3_s00 func_800D0CF8) is deterministic and used for pixel exactness.
+     - #36 CybilFightStart (map6_s04 func_800E1D50) and #50 MapEvent_KaufmannBarFightCutscene: their pictures depend on timing, so they're for speed only. Compare whole-run vertical blanks and light counters.
+   - SH1_LITEPROF=1 light counters (LP_BEGIN/LP_END in include/port/prof.h), now also passed to game code via ee_compile_check.sh. SH1_PROF profiling builds inflate GTE costs; -finstrument-functions inflates small functions.
+   - GS memory map:
+     - 0x000000: gsKit 16-bit buffer and 448i snapshot (SNAP_ADDR 0)
+     - 0x0A0000–0x2F0000: texture page cache, 37 slots
+     - 0x2F0000: CLUT cache
+     - 0x300000: PS1 VRAM image, scanned out directly via DISPFB1
+   - Build flags: SH1_MODESWITCH=0/1/2, SH1_INTERLACE_FIELDS=1, SH1_LITEPROF=1.
+   - Key discovery: `_EE` is defined only for src/port/ps2/, so gte.c's and vw_calc.c's EE/MMI paths were never compiled into the game. They are now keyed on `_MIPS_ARCH_R5900` (GTE_EE).
+   - Measured lesson: PHMADH with a 128-bit store and reload around each use is slower than scalar multiplies. rt_dot3 was removed.
+   - Decomp code relying on the PS1 stack layout: Split Head bugs fixed under SH_PORT.
+
+3. Files and Code Sections:
+   - src/maps/characters/split_head.c: `#ifdef SH_PORT` fixes.
+     - `ptr0 = &sp38[i]; ptr1 = &sp38[k];` instead of `&sp18[i*16]+32` (two places).
+     - `sp50[unkIdx].vy` instead of `sp20[unkIdx + 4].vy` (box height, which drives aim).
+   - src/bodyprog/view/vw_calc.c: Gemini's MMI path fixes.
+     - Translation uses `(s16)inMat->t[i]` with u32 wraparound add.
+     - "hi","lo" added to the asm clobbers.
+     - Guard is now `#if defined(_EE) || defined(_MIPS_ARCH_R5900)`.
+   - src/port/gte.c:
+     - Per-register `g_GteCtrlDirty` bits; ctrl_refresh only redoes the changed matrices and range checks.
+     - `GTE_EE` define: `#if defined(_EE) || defined(_MIPS_ARCH_R5900)`.
+     - New `Gte_CmdRtpsRow2(const short* v)`: writes row 2 and V0 in place, then runs rtp_small.
+     - New `Gte_RtpsDotBatch(row0,row1,v[][3],xy,sz,ir0,count)`: scalar; the PHMADH attempt was reverted with a comment.
+     - rt_dot3 and m_rt_mmi removed.
+   - include/port/gte.h: declarations for the above. CtrlWriteInline sets `g_GteCtrlDirty |= 1u << reg`.
+   - src/bodyprog/gfx/bodyprog_80056D8C.c:
+     - Port_PointLight: pass 1 collects the vectors; per-normal Gte_RtpsDotBatch for all but the last; then a register-only apply loop writing `var_t0[idx]`. The last vertex goes through the GTE with the FIFO preset: SXY regs 12–14 = xy[last-3..last-1]; SZ regs 16–19 = sz[last-4..last-1].
+     - Check harnesses under SH_PORT_CHECK_BATCH: Port_PointLightCheck/Original and Port_RtpsRow2Check.
+     - LP counters around light, transform and draw, and inside Port_PointLight.
+     - Lit-fog path: PORT_FOG_COLOR2 and Port_DcplMemo, a 2048-slot memo.
+     - Most recent: Gfx_MeshDrawPort `__block1530` lit loop rewritten with locals. Port_MemoCheck is called once before the loop. Corner colours are written at `(u8*)&poly0->r0 + k*12` (POLY_GT4). The bound test is unsigned: `u32 xmin2 = (u32)(xmin*2)` with each `(u32)((s16)xyN + xmin) < xmin2`. Final scratch field_10, field_18 and field_14 are written after the loop.
+   - src/port/ps2/gpu_gs.c:
+     - DisplayShow scans out VRAM directly, with display_copy into SNAP_ADDR for interlace480 && !DFE.
+     - SCANMSK path behind SH_PORT_INTERLACE_FIELDS.
+     - download_rect / GpuGs_StoreImage; GpuGs_LoadImage(x,y,w,h,src,stride).
+     - cache_fill patches cached pages and CLUTs on fills.
+     - s_StateGen memo; quad_fits/quad_loop direct packet writes.
+     - Fog-pair stats only under SH_PORT_PROF; LP counters and names.
+   - src/port/ps2/display_ps2.c:
+     - Software path removed; banded dump_rect.
+     - 3 blank frames after a mode change.
+     - SH_PORT_MODESWITCH methods with a log line.
+   - src/port/libgpu_port.c: GS-only, no g_PortVram. Capture_Display signature changed.
+   - src/port/ps2/capture_ps2.c: banded readback.
+   - src/port/ps2/libetc_ps2.c: g_PortVBlankMaxGap and g_PortVBlankSeq.
+   - src/port/gpu_soft.c: deleted.
+   - tools/port/port_link.py: SH1_GPU removed. Added SH1_MODESWITCH, SH1_INTERLACE_FIELDS and SH1_LITEPROF.
+   - tools/port/ee_compile_check.sh: passes `${SH1_LITEPROF:+-DSH_PORT_LITEPROF}` and exports SH1_LITEPROF.
+   - tools/port/cutscene_list.py: `NAMES = {("map6_s04","func_800E1D50"): "CybilFightStart"}`, used in label().
+   - include/port/prof.h: LP enum (DRAWOTAG … MESH_DRAW, PL_COLLECT/BATCH/APPLY).
+   - Docs updated throughout: PS2 Optimizations.md, Planning Doc.md, Running Walkthrough.md.
+   - Scratch scripts: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/bench2.sh (usage `bench2.sh LABEL [Ns]`) and lite.sh (Kaufmann with dump compare against base).
+
+4. Errors and fixes:
+   - A stale build/port/demo.txt and warp.txt broke sweeps. Removed them.
+   - A 1 MB malloc for dumps corrupted file I/O (TLB miss in sifrpc). Switched to banded readback.
+   - SCANMSK field mapping: neither mapping worked in PCSX2. Fell back to the snapshot (option 1, user-chosen).
+   - The sampling profiler didn't work: kernel EPC. Removed it.
+   - The two new benchmarks' dumps differ between builds from timing alone. They are used for speed only.
+   - Edits failing on assertion and placement, and an `#endif` misplacement. Fixed.
+   - MMI dot products were slower. Reverted, and rt_dot3 removed.
+   - Lit-loop rewrite mismatch: the original's temp_t0_3 is u32, so the comparison is unsigned. Fixed. Earlier, the corner stride (12, not 8) and the field_18 type (s32) were fixed too.
+   - The user interrupted tool runs twice:
+     - before profiling Kaufmann: "Start PCSX2 and then let me take control..."
+     - a warp sweep: "I'm ending this early because I feel confident in the results".
+
+5. Problem Solving:
+   - CybilFightStart vertical blanks went 1,969 → 1,652 for 801 frames.
+   - DrawOTag in Kaufmann went 1,763 → 1,396 kcycles.
+   - File loads only happen at scene start (about 100 vblanks), with no per-frame cost.
+   - Current CybilFightStart breakdown (kcycles/frame): DrawOTag 1,410; point light 1,368 (batch 988); mesh transform 613; mesh packets 404.
+
+6. All user messages:
+   - "Last time I was playing through the game and creating a log before it crashed on console, in the first boss fight. Do we still have those logs?"
+   - "The console has been restarted since then. Let's try to dig into the issue."
+   - "Another issue I noticed in the fight was that Harry was unable to aim properly at the boss during the fight..."
+   - "Let's mark down checking the whole codebase for these kinds of assumptions as a todo, but I'm tabling it for now. Now, read the Gemini Conversation..."
+   - "Yes" (run the open-world check and measure)
+   - "Alright, let's move to the remaining MVMA sites"
+   - "Let's go with RTPS from the snow particles"
+   - "Start PCSX2 and then let me take control so I can start a new game... While I play the new game, profile the particle system cost."
+   - "This is a typical scene as far as the snowfall goes. What kinds of measurements can you make?..."
+   - "Yes, let's do that"
+   - "Alright, we're in the profling scene"
+   - "Let's proceed"
+   - "Yes. Explain the potential benefits of optimizing the movement loop and DrawOTag?"
+   - "Yes, but first, I would like to know about our VRAM usage at the moment"
+   - "For that 640x480x32 display buffer, are we even using it if we already have the PS1's entire VRAM resident in the PS2's VRAM?"
+   - "Yes"
+   - "No, the title screen and the inventory screen, both 320x448i, have missing text and graphics..."
+   - "The menus and gameplay look correct, but there is still a short garbage display when switching between video modes..."
+   - "They looked clean. I'm wondering, is there a way to test how long it takes the PS2 to switch between 240p and 480i..."
+   - "For now, let's measure the difference in software, and I'll look at hardware later."
+   - "When you say 'Methods 1 and 2 skip gsKit's buffer reallocation...'... I thought we were getting rid of the 640x480x32 buffer from before."
+   - "Given that the PS1 is able to show the dual buffers... why can't we do the same on PS2?..."
+   - "As far as I know, there aren't any single-buffered progressive screens in the game. You can verify that. Otherwise, proceed with the implementation."
+   - "Half the lines on the text on the menu screen are missing..."
+   - "No, they looked broken this time."
+   - "I took screenshots with Automatic, No Deinterlacing, Bob Top Field First, Blend, and Weave, in that order."
+   - "Let's go with option 1 for now, but keep 2 and 3 in our back pocket. The reason I wanted to optimize and check VRAM was that I want to know how viable it would be to have a 480p and a 720p mode..."
+   - "Yes it was. Let's move on to the DrawOTag work, but one last thing before that... we don't need to have a copy of the PS1 VRAM. What can we do to achieve this?"
+   - "Yes, let's start on that. Let's also retire the software renderer, as we can test against Duckstation instead."
+   - "I'm ending this early because I feel confident in the results. Let's just move on to the DrawOTag work"
+   - "Yes, but make sure to update the other .md files too. I'm trying to find another cutscene for benchmarking... What has historically been the worst performing cutscene?"
+   - "For now, let's use both #36 and #50 as benchmarks. Rename #36 to CybilFightStart in the demo menu to make it easier to find. Then, move on to writing GS data into the packet while parsing."
+   - "Let's go with 1" (the point light)
+   - "Can these dot products be moved to the EE's MMI?"
+   - "Let's keep this in mind, but go back to the Cybil fight scene and profile it again to figure out what else is slowing it down."
+   - "Yes" (the point-light batch)
+   - "Let's look at the file loads"
+   - "Let's do the world mesh transform and packet building"
+   - "Yes" (MMI dot products for the point light)
+   - "Let's start with the light arithmetic"
+   - "Let's do the mesh packets"
+
+7. Pending Tasks:
+   - Report the mesh-packet results to the user. The docs were already updated in the last tool call.
+   - Future items:
+     - DrawOTag: texture state (~330 cycles a change), 128-bit stores, the OT walk, CPU/GS overlap.
+     - Further point-light batching.
+     - Hardware tests: SH1_INTERLACE_FIELDS and SH1_MODESWITCH.
+     - 480p/720p.
+     - The codebase audit (tabled).
+   - Nothing is committed. Commit only if the user asks.
+
+8. Current Work:
+   I just finished the mesh-packet optimization for CybilFightStart's lit path in Gfx_MeshDrawPort (bodyprog_80056D8C.c, `__block1530`):
+   - locals instead of scratch reads/writes
+   - Port_MemoCheck once per mesh
+   - unsigned bound test matching the original's u32 temp_t0_3
+   - final scratch values written after the loop
+
+   Results:
+   - Mesh check: 0 mismatches on #36, #50, #4 and #1–3. Kaufmann dumps identical.
+   - Mesh packets: CybilFightStart 479 → 404 kcycles a frame, 1,661 → 1,652 vertical blanks; bar fight 310 → 278.
+
+   I also added the lit-and-fogged colour memos (PORT_FOG_COLOR2 and Port_DcplMemo). They are exact by construction but not exercised by the benchmarks. All three docs are updated. The final user-facing summary of this step has not been sent yet.
+
+9. Optional Next Step:
+   Send the user the results of "Let's do the mesh packets": the lit path in locals, 479 → 404 kcycles, exact. Mention that the lit-fog memo isn't exercised by the benchmarks. Then ask what to do next, offering:
+   - DrawOTag at 1.4M, the largest remaining part: texture state and the OT walk
+   - further point-light work, with the batch at 988k
+
+   Don't start new work without the user's choice.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+The messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.
+
+## User
+
+<command-name>/compact</command-name>
+            <command-message>compact</command-message>
+            <command-args></command-args>
+
+## User
+
+<local-command-stdout>Compacted </local-command-stdout>
+
+## User
+
+Proceed with DrawOTag optimization
+
+- tool `Bash`: Check repo state and list functions in GS renderer
+
+- tool `Bash`: Read GS renderer packet and state helpers
+
+- tool `Bash`: Read state and polygon emission code
+
+- tool `Bash`: Read settings, command loop, DrawOTag, and profiling header
+
+- tool `Bash`: Find previous benchmark scripts
+
+- tool `Bash`: Copy bench scripts and show latest profile
+
+- tool `Bash`: Benchmark committed build on both cutscenes
+
+## Claude
+
+I'm getting a fresh profile of `DrawOTag` on both benchmark scenes from the committed build. While it runs, I'm reading the code that walks the ordering table and handles the texture state.
+
+- tool `Bash`: Read texture cache and base state code, and doc notes
+
+- tool `Bash`: Read DrawOTag sections of optimization doc
+
+- tool `Bash`: Check compiler flags and object locations
+
+- tool `Bash`: Locate GS renderer object and compiler
+
+- tool `Bash`: Inspect function sizes in the GS object
+
+- tool `Bash`: Find objdump and list function sizes
+
+## Claude
+
+The baseline benchmark is still running. Meanwhile I'm reading the compiled code of the texture-state path to see where its ~330 cycles go.
+
+- tool `Bash`: Disassemble tex_state
+
+## Claude
+
+The baseline benchmark for both scenes is still running, about 10 minutes in total. I'll pick the `DrawOTag` targets from its breakdown when it finishes.
+
+- tool `Bash`: Show baseline benchmark results
+
+- tool `Bash`: Read Capture_Packet
+
+- tool `Bash`: Read Kaufmann exactness script
+
+- tool `Bash`: Run Kaufmann baseline for exactness reference
+
+## Claude
+
+While the Kaufmann reference run goes, I'll wait for its build to finish before editing sources.
+
+- tool `Bash`: Check build progress and read cache code
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+## Claude
+
+Now the texture memo:
+
+- tool `Bash`: Add texture-state memo and generation counter
+
+- tool `Bash`: Fix memo hash and check Kaufmann baseline
+
+## Claude
+
+The Kaufmann reference matches the old base exactly. Now I'm building the change and running Kaufmann for exactness, then both benchmarks for speed.
+
+- tool `Bash`: Test exactness on Kaufmann then benchmark both scenes
+
+## Claude
+
+Both changes are built and running: Kaufmann for exactness first, then CybilFightStart and the bar fight for speed, about 15 minutes in total.
+
+- tool `Bash`: Show results
+
+- tool `Bash`: Disassemble new tex_state
+
+## Claude
+
+Both changes are kept: they're exact, but they're worth only about 3% of `DrawOTag`. I'll record them in the docs.
+
+- tool `Bash`: Find doc sections to update
+
+- tool `Bash`: Update the three docs
+
+## Claude
+
+This round of `DrawOTag` work saved only about 3%, and I think there's little left to gain by measuring it in PCSX2. The output is unchanged: all 10 Kaufmann frame dumps are identical to before.
+
+**What changed** (in [gpu_gs.c](src/port/ps2/gpu_gs.c)):
+- **One copy of the polygon code per shape:** `polygon()` now picks one of eight copies by shape. In each copy, whether the polygon is a quad, gouraud-shaded or textured is fixed, so the vertex loops unroll and the per-vertex checks go away.
+- **The texture state is remembered:** the GS register values for a texture are stored by texture page, colour table and raw mode. They're reused until a page or colour table moves in the cache. A reuse skips the cache lookups but updates the same usage clocks, so the caches evict and upload exactly as before.
+
+**Speed** (`DrawOTag`, kcycles a frame):
+
+| scene | before | after |
+|---|---|---|
+| Kaufmann | 1,398 | **1,355** |
+| CybilFightStart | 1,409 | **1,371** |
+| bar fight | 1,131 | **1,094** |
+
+Over the whole run, CybilFightStart went from 1,652 to 1,647 vertical blanks and the bar fight didn't change.
+
+**Why the gain is small:**
+- **The lookups weren't the cost:** a texture change still costs about 400 cycles even with them skipped. Most of it is switching the packet into register-write mode for the three texture registers and back.
+- **The rest is spread out:** it's a few dozen instructions here and there per packet, with no single hot spot left.
+- **PCSX2 can't show what matters next:** it doesn't model the PS2 CPU's caches (except with a very slow option), so its counts mostly reflect how many instructions run. The likely remaining costs on a real PS2 are cache misses on the scattered packets, and whether the polygon code still fits the 16 KB instruction cache. That code has grown to 14.7 KB, though CybilFightStart's most-used copy is only about 1.8 KB.
+
+I'd hold further `DrawOTag` tuning until you can profile on hardware; I noted that in all three docs. In PCSX2, the larger remaining costs in CybilFightStart are the point light (1,368 kcycles a frame) and the mesh transform (613). Nothing is committed.
+
+## User
+
+Do another run through of all the cutscenes for performance profiling. Figure out where our remaining bottlenecks are.
+
+- tool `Bash`: Find sweep tooling and earlier sweep notes
+
+- tool `Bash`: Read sweep tools and profiling hooks
+
+- tool `Bash`: Read profiler implementation and build flags
+
+- tool `Bash`: Read report formatting and bench options
+
+- tool `Bash`: Read bench-mode and liteprof report code
+
+- tool `Bash`: Look for existing proffn symbol resolver
+
+- tool `Bash`: See earlier function-profile output
+
+- tool `Bash`: Read rest of sweep script and count cutscenes
+
+- tool `Bash`: Write sweep wrapper and the two-sweep script
+
+- tool `Bash`: Run both all-cutscene profiling sweeps
+
+## Claude
+
+While the sweeps run, I'm writing the script that will summarise them. First, a look at the profiling build's report format from an earlier log.
+
+- tool `Bash`: Inspect profiling report format
+
+- tool `Bash`: Write sweep analysis script
+
+## Claude
+
+The two sweeps are running in the background: the benchmark sweep first, then the profiling one. The script that summarises them is ready.
+
+- tool `Bash`: Check sweep results and run analysis
+
+- tool `Bash`: Show the rest of the analysis
+
+- tool `Bash`: Compute busy time and its split per cutscene
+
+## Claude
+
+Before trusting the busy figures I need to know exactly what the heartbeat's frame count and idle percentage measure, so I'm checking them in the code.
+
+- tool `Bash`: Find how heartbeat idle is measured
+
+- tool `Bash`: Check what fps and frame counts measure
+
+- tool `Bash`: Read main-loop pacing under bench and 60fps
+
+- tool `Bash`: Median-based function profile, heavy cutscenes aggregated
+
+- tool `Bash`: Locate the unfamiliar hot functions
+
+- tool `Bash`: Read map6_s02 func_800D2364
+
+- tool `Bash`: Read the rest of func_800D2364
+
+## Claude
+
+Last check: which cutscenes didn't finish in each sweep.
+
+- tool `Bash`: List cutscenes that did not finish
+
+- tool `Bash`: Compare timeouts with the previous sweep
+
+## Claude
+
+The same eight cutscenes timed out in the last full sweep, so that's nothing new. Recording the results in the docs:
+
+- tool `Bash`: Record sweep results in the three docs
+
+## Claude
+
+In PCSX2, nearly every cutscene now runs at or near 60 fps. Only CybilFightStart falls clearly short, at about 51 fps. The remaining cost is concentrated in `DrawOTag` and the world mesh, plus one map-specific effect.
+
+**How I measured:** two sweeps of all 52 Demo cutscenes.
+- **Benchmark sweep:** gives the real cost per frame and the main parts. I counted only the time the game is busy, not the time it spends waiting to show a frame. The budget for 60 fps is about 4.9M cycles a frame.
+- **Function profile:** shows where the rest goes. Its figures are inflated, so I used it only to rank functions.
+
+**The six heaviest cutscenes** (thousands of cycles a frame):
+
+| cutscene | fps | busy | `DrawOTag` | point light | mesh transform | mesh packets | rest |
+|---|---|---|---|---|---|---|---|
+| CybilFightStart | 50.6 | 4,751 | 1,396 | 1,420 | 634 | 419 | 882 |
+| KaufmannBarFight | 59.6 | 4,203 | 1,061 | 1,230 | 494 | 271 | 1,147 |
+| map6_s02 func_800CF0B8 | 59.5 | 3,871 | 1,204 | 390 | 176 | 120 | **1,981** |
+| CafeCutscene | 59.5 | 3,854 | **1,736** | 0 | 550 | 481 | 1,086 |
+| map2_s01 func_800CED88 | 59.2 | 3,636 | **1,719** | 0 | 678 | 617 | 623 |
+| map5_s02 func_800D4B58 | 60.0 | 3,559 | 758 | 1,174 | 528 | 286 | 812 |
+
+**Share of the busy time** across the 14 busiest cutscenes:
+
+| part | share |
+|---|---|
+| `DrawOTag` | 34% |
+| world mesh point light | 18% |
+| world mesh transform | 12% |
+| world mesh packets | 9% |
+| everything else | 28% |
+
+**What's inside "everything else":**
+1. **map6_s02's effect grid (`func_800D2364`):** the biggest single new target, about 1.7–2.0M cycles in both map6_s02 cutscenes. Every frame it projects 8 layers of 289 points (about 770 three-point GTE projections) and then loops over a 16×16 grid. The projections can be batched exactly, like the character mesh projections.
+2. **World mesh in fogged maps:** in map3_s06, map2_s01 and CafeCutscene, `Gfx_MeshDrawPort` takes its fog paths. Those are not the lit path I sped up for CybilFightStart, and these maps also have the highest `DrawOTag` costs.
+3. **Character mesh pipeline:** the four `func_8005A478`/`A900`/`AA08`/`AC50` functions, with the packet builder `func_8005AC50` the largest.
+4. **Snow particles:** heavy in CutsceneOpening and map2_s00, but neither of those is short on time.
+
+**Coverage:**
+- 44 cutscenes finished in the benchmark sweep. The same 8 timed out in the last full sweep on 2026-10-10.
+- The slow profiling build also stalled in 8 more, so its ranking misses those.
+
+**Caveat:** PCSX2 doesn't model the PS2's caches, and the `DrawOTag` share in particular may be higher on a real PS2.
+
+My suggested order:
+1. map6_s02's effect grid: a single function with an exact batch pattern we already use.
+2. The world mesh's fog paths: they lift the fogged maps.
+3. The point light: still the largest part in the forest and town cutscenes.
+
+The results are in all three docs. Nothing is committed: the `DrawOTag` changes from the last step are still pending too.
+
+## User
+
+Let's start with #1
+
+- tool `Bash`: Read Gte_RtpBatch API and its uses
+
+- tool `Bash`: Read Gte_RtpBatch and a caller with its check
+
+- tool `Bash`: Read rest of the grid function and types
+
+- tool `Bash`: Read map6_s02 helper functions
+
+- tool `Bash`: Check struct and macro definitions
+
+- tool `Bash`: Find cutscene indices and macro body
+
+- tool `Bash`: Check includes and counter definitions
+
+- tool `Bash`: Check how game code reaches the GTE API
+
+## Claude
+
+Now the edit:
+
+- tool `Bash`: Add batched grid projection with check harness
+
+- tool `Bash`: Add light counters for the grid function
+
+## Claude
+
+Now three runs on map6_s02's two cutscenes (#1, #2):
+1. a baseline with the batch switched off
+2. the check build, comparing the batch against the GTE for every point
+3. the new build
+
+- tool `Bash`: Write test script and compile-check
+
+- tool `Bash`: Run baseline, check build, and new build
+
+## Claude
+
+The grid batch is written and compiles cleanly. Three runs are going: the baseline with the batch off, the check build, then the new build, on map6_s02's two cutscenes.
+
+- tool `Bash`: Show grid results
+
+- tool `Bash`: Find helper definitions in gte.c
+
+- tool `Bash`: Add Gte_RtpGrid and a shared projection helper
+
+## Claude
+
+Now `Port_GridBatch` uses the lattice version, writing straight into the game's arrays:
+
+- tool `Bash`: Switch grid batch to the lattice function and compile-check
+
+## Claude
+
+The sed missed the baseline line, so I'm removing it by hand: there's no need to re-run the baseline.
+
+- tool `Bash`: Run check build and benchmark for the lattice version
+
+## Claude
+
+The lattice version (`Gte_RtpGrid`) is running through the check build and then the benchmark on map6_s02's two cutscenes.
+
+- tool `Bash`: Show lattice results
+
+- tool `Bash`: Compute busy cycles per frame for each run
+
+## Claude
+
+Busy time per frame dropped by 12% in #1 and 19% in #2. Recording it in the docs:
+
+- tool `Bash`: Record the grid work in the docs
+
+## Claude
+
+map6_s02's effect grid, the "rest" outlier in the sweep, now costs about 45% less per frame, and it's exact. Busy time per displayed frame dropped 12% and 19% in map6_s02's two cutscenes.
+
+**What changed:**
+- **The grid is projected in one batch:** every frame, `func_800D2364` projects 8 layers of 289 points through the GTE. Each layer's first 284 points now go through one batched call into the same arrays.
+- **The GTE ends as on the PS1:** the last three points and the final two run through the GTE as before, so its registers end exactly as the original leaves them.
+- **The points form an even grid** in [map6_s02_2.c](src/maps/map6_s02/map6_s02_2.c). So the new `Gte_RtpGrid` in [gte.c](src/port/gte.c) reaches each point's rotated position by adding a fixed step to the last one, instead of nine multiplies per point. That gives the same integers, since nothing is rounded before the final shift. Only the perspective divide and the screen projection remain per point.
+- **`Gte_RtpBatch` shares that projection code** now, so a fix to one applies to both.
+
+**Check:** the check build compares the batch against the original GTE loop for every point, both screen position and depth. 0 mismatches over 4.7 million points, and the existing character and world-mesh batch checks still pass.
+
+**Speed** (kcycles a frame):
+
+| | #1 map6_s02 func_800CF0B8 | #2 map6_s02 func_800CFC34 |
+|---|---|---|
+| effect grid before | 1,179 | 1,046 |
+| plain batch (first attempt) | 844 | 705 |
+| lattice batch | **653** | **515** |
+| busy per frame, before → after | 4,122 → **3,621** (−12%) | 2,877 → **2,332** (−19%) |
+
+What's left in the function is ordinary C: the per-cell level update and the cell visibility and packet loop, about 365 and 275 kcycles in the two cutscenes. That could be trimmed later, but it's smaller than the other candidates.
+
+The docs are updated. Nothing is committed: these changes sit alongside the earlier `DrawOTag` ones. Next on the list is the world mesh's fog paths, for the fogged maps: map3_s06, map2_s01 and CafeCutscene.
+
+## User
+
+Let's do that
+
+- tool `Bash`: Locate mesh draw function and helpers
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: Check POLY_G4 layout and SetPriority
+
+- tool `Bash`: Rewrite the fog, lit-fog and flat mesh paths with locals
+
+- tool `Bash`: Compile normal and check builds
+
+- tool `Bash`: Look up cutscene indices
+
+- tool `Bash`: Check build on fogged scenes, Kaufmann dumps, and benchmarks
+
+## Claude
+
+The check, the Kaufmann dump comparison and the speed runs are all queued in one background job. It will take a while: the check build is slow, and it covers eight cutscenes.
+
+- tool `Bash`: Show check and benchmark results
+
+- tool `Bash`: Compare busy time and mesh counters before and after
+
+## Claude
+
+The fog paths came out exact, but the gain is small: 2–3% of busy time in the fogged cutscenes. Recording that:
+
+- tool `Bash`: Record fog-path work in the docs
+
+## Claude
+
+The fog paths are done and exact, but the gain is modest: busy time per frame is 2–3% lower in the fogged cutscenes.
+
+**What changed** (in [bodyprog_80056D8C.c](src/bodyprog/gfx/bodyprog_80056D8C.c)): `Gfx_MeshDrawPort` has five face loops, chosen by point light and fog. I rewrote the four I hadn't touched yet the way I did the lit loop:
+- **One shared visibility test**, `Port_FaceTest`: the depth, depth cull, back-face test and screen bound test.
+- **Locals instead of scratch memory:** each face's values stay in locals, and the scratch fields get the original's final values after the loop.
+- **Memoized colours:** colours come from the memos, checked once per mesh. The lit loop with black fog used to compute four colour blends per face with no memo.
+
+**Checks:**
+- The mesh check compares packets and the ordering table against the original. 0 mismatches over 1.47M meshes in 10 cutscenes, including Kaufmann, CybilFightStart, the bar fight, map2_s01, map3_s06, CafeCutscene and CutsceneOpening.
+- Its report now counts meshes per path:
+  - fog: 851k
+  - lit: 377k
+  - lit and fogged: 244k (Kaufmann's map uses it heavily)
+  - lit with black fog: 1.6k
+  - flat: 0. It never ran in these cutscenes, so it's exact by construction but untested.
+- The Kaufmann frame dumps are identical.
+
+**Speed:**
+
+| cutscene | mesh packets (kcycles a frame) | busy per frame |
+|---|---|---|
+| map2_s01 | 617 → **478** | 3,636 → **3,522** (−3%) |
+| map3_s06 | 273 → **238** | 2,497 → **2,455** (−2%) |
+| CafeCutscene | 481 → **399** | 3,854 → **3,781** (−2%) |
+| Kaufmann (lit and fogged) | 393 → **344** | |
+
+**Why it's small:** in these maps the packet building was only about 10–15% of the frame. The big cost in fogged maps is `DrawOTag`, at 1.6–1.7M cycles in map2_s01 and CafeCutscene, because every fogged face is two polygons. That points back to `DrawOTag` work. I'd still rather tune that with hardware numbers, since PCSX2 doesn't model the caches that matter most there.
+
+The docs are updated. Nothing is committed, and the working tree holds four uncommitted pieces:
+- the `DrawOTag` changes
+- the effect grid
+- the fog paths
+- the sweep notes
+
+## User
+
+Ok, what are some other places that we can speed things up without testing on hardware just yet?
+
+- tool `Bash`: Read Port_PointLight to see which outputs it uses
+
+## Claude
+
+Yes, there are several. These are all mostly about how many instructions the CPU runs, which PCSX2 measures well enough. Cache behaviour is the part that needs hardware. Ranked by what I expect each to save:
+
+1. **The point light, which can reuse work per vertex.** Still the biggest part of the game update: 1.4M cycles a frame in CybilFightStart and 0.6–1.2M in the forest and town cutscenes.
+   - Each vertex is visited once for every face normal that uses it, about 3,800 visits a frame in CybilFightStart.
+   - Only one of the three dot products depends on the normal. The light dot product, the distance, the perspective divide and the depth cue depend only on the vertex, so they could be computed once per vertex.
+   - Per repeat visit, that would leave one dot product and one multiply.
+   - It stays exact: the same integers, just not recomputed.
+   - How much it saves depends on how often vertices repeat across normals, which I'd measure first with a quick count.
+2. **The character mesh pipeline:** `func_8005AC50`'s packet building and the setup around it.
+   - The transform and lighting are already batched, but the packet loop still has the original style, re-reading scratch memory per face.
+   - The same treatment as the world mesh would apply, checked with a packet comparison like the mesh check.
+   - I'd guess 100–200k cycles a frame in the busy cutscenes, wherever characters are on screen.
+3. **Profiling gameplay, not only cutscenes.** Everything so far comes from cutscenes. Exploring with the flashlight in fog, combat, and the snow in the town streets may weigh things differently, for example the lit-and-fogged path or the snow particles, which matter in gameplay. A light-counter run over gameplay save points would tell us, and it might reorder this list.
+4. **Waiting on file loads mid-cutscene:** `Fs_QueueWaitForEmpty`.
+   - Some cutscenes stall on loads: averaged over the cutscene, about 0.9M cycles a frame in map7_s01 func_800DAE00 and 0.6M in CybilFightStart.
+   - These are hitches rather than steady cost.
+   - Keeping files in the PS2's larger RAM, or reading them ahead, would remove them. That's option 7 in the doc.
+   - PCSX2's disc timing differs from a real drive, so the exact gain needs hardware, but whether a stall is gone can be checked now.
+5. **Small `DrawOTag` savings that don't depend on caches**, maybe 50–100k cycles a frame:
+   - statistics counters on every polygon in normal builds
+   - the demo and capture checks on every packet
+   - the setup check on every call
+6. **Smaller items:**
+   - the effect grid's remaining C, about 300k cycles a frame in map6_s02 only
+   - `WorldEnv_LightTransform`, about 120k
+   - snow particle drawing
+
+I'd start with #1, first counting how often vertices repeat, since it decides whether the point light can get much cheaper. #3 is worth doing early too, because it checks we're optimizing what players will actually run.
+
+## User
+
+Let's start on #1
+
+## Claude
+
+First I'll count how often vertices repeat, with a temporary counter in the collect pass. Meanwhile I'm reading the rest of `Gte_RtpsDotBatch` to plan the split.
+
+- tool `Bash`: Read the point-light batch
+
+- tool `Bash`: Count vertex repetition in the point light
+
+## Claude
+
+Only 15% of visits repeat a vertex: 3.04M visits for 2.59M unique vertices, about 1.18 visits each. I'm removing the temporary counter.
+
+- tool `Bash`: Remove the temporary repetition counter
+
+- tool `Bash`: Check working tree state
+
+## Claude
+
+You've committed the earlier work ("More minor optimizations"). The working tree is clean again with the counter removed, so the counter never got into a commit.
+
+**The count says reusing work per vertex wouldn't save much.** In CybilFightStart, the point light makes 3.04M vertex visits for 2.59M unique vertices: only 15% of visits repeat one.
+
+**What that means:** the expensive per-vertex part is the squared distance, the perspective divide and the depth cue. It would run about 15% less often. The batch is 988k cycles a frame, so the estimate is a 100–150k saving: about 2–3% of CybilFightStart's busy time, and less elsewhere. It would also make the batch more complex, with a per-mesh vertex memo and two code paths to check.
+
+**Other exact angles on the point light, in my view:**
+- **A lookup table for the divide:** the result depends only on the 16-bit depth while the screen distance is fixed, so a table could replace the computation. But it would be a 256 KB table read in random order, which would likely cost more on a real PS2 than computing it. I'd rule it out without hardware.
+- **Trimming the batch:** it stores depths for every vertex, but only the last four are ever read. It also uses 64-bit sums where 32-bit ones may provably fit for these inputs. That's maybe 5–10% of the batch: real, but small.
+
+The point light seems to be near the limit of exact, compute-only gains. Its remaining cost is mostly the GTE's divide, which has to be done per vertex.
+
+**My suggestion:** skip the per-vertex reuse and move to #3, profiling gameplay, which may show bigger targets than cutscenes have. Or #2, the character packet loop, which uses a method that has already worked. If you'd still like the point-light reuse, or the small batch trims, for the last few percent, I can do that instead.
+
+## User
+
+Let's move to #2 for now
+
+- tool `Bash`: Locate character pipeline functions
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: Read s_GteScratchData2 definition
+
+## Claude
+
+`field_21C` is an s32 array, so a corner's colour is just `field_21C[index]`, and the depths are s16. Writing the port version and its check:
+
+- tool `Bash`: Add port character packet loop with packet check
+
+- tool `Bash`: Baseline, check build, and new benchmark for character packets
+
+## Claude
+
+The port version of the character packet loop is written and compiles. The background job runs the baseline, then the check build across the character-heavy cutscenes, then the new build with the Kaufmann dump comparison.
+
+- tool `Bash`: Show character packet results
+
+- tool `Bash`: Revert the character packet change and note the result
+
+## Claude
+
+I reverted the character packet change: it was exact but saved only about 2%.
+
+**What I tried:** I rewrote `func_8005AC50`, the character mesh packet loop, the way that worked for the world mesh: each face's values in locals, the scratch fields' final values written after the loop. I also gave it a check that compares the packets, the ordering table and the whole scratch struct against the original.
+
+**Checks:** 0 mismatches over 1.2M meshes in nine cutscenes, and Kaufmann's frames were identical.
+
+**Speed** (kcycles a frame):
+
+| cutscene | before | after |
+|---|---|---|
+| Kaufmann | 110 | 108 |
+| CybilFightStart | 119 | 117 |
+| bar fight | 131 | 129 |
+
+**Why it didn't help:** the loop really costs only 110–130k cycles a frame; the instrumented profile had inflated it to about 210k. And the compiler already handled the original's scratch-memory reads and writes well, so moving them into locals changed little. The world mesh rewrite paid off because its loops also computed colours on every face, which the memos removed.
+
+The docs record both negative results: this one, and the point light's 15% vertex repetition.
+
+**Where that leaves the list:** in PCSX2's cost model, the exact compute-only targets are now mostly small. What remains large is:
+- `DrawOTag`, the biggest part; its next steps want hardware numbers;
+- the point light's per-vertex divide, at its exact limit;
+- the world mesh transform, already batched.
+
+So I'd go to #3 next: profile gameplay instead of cutscenes. Exploring with the flashlight, combat and the town streets in snow may weigh things differently, for example the lit-and-fogged path or the snow particles. That would tell us whether anything big is left before the hardware tests.
+
+## User
+
+claude rc
+
+## Claude
+
+"claude rc" looks like it was meant to be typed in your shell, so I haven't acted on it. If you were trying to start Remote Control for this session, run it from your terminal or use Claude Code's slash command for it.
+
+Should I go ahead with #3, profiling gameplay instead of cutscenes?
+
+## User
+
+/claude rc
+
+## Claude
+
+`/claude rc` didn't run: there's no `/claude` command installed in this session, so I haven't done anything with it. If you meant to start Remote Control, that has to be done outside this chat. If it's a command you expect to have, it needs adding as a project skill or an organization plugin.
+
+Should I start #3, profiling gameplay?
+
+## User
+
+I want to start remote control, but I don't know how
+
+## Claude
+
+I'm checking the Claude Code docs so I give you the right steps.
+
+- tool `ToolSearch`: 
+
+- tool `WebFetch`: 
+
+- tool `Bash`: Pull the key steps from the fetched docs
+
+## Claude
+
+Since you're in the VS Code extension, it's one command typed into the prompt box (from the Claude Code docs):
+
+1. **Type `/remote-control` (or just `/rc`)** and send it. Earlier you typed `/claude rc`, which isn't a command, so nothing happened.
+2. **Accept the one-time prompt** the first time: choose **Enable Remote Control**.
+3. **Connect from your phone or another computer:**
+   - The prompt box footer shows a **Remote Control** indicator once it's on, and Claude Code also posts the session's link in the conversation.
+   - On the other device, open that link, or find the session in the list at **claude.ai/code** or in the Claude mobile app.
+   - The VS Code version doesn't show a QR code; the terminal version does.
+4. **To turn it off,** run `/remote-control` again.
+
+**Requirements:**
+- You need to be signed in with a claude.ai Pro, Max, Team or Enterprise account; API keys don't work. If it complains about your login, run `claude auth login` in a terminal and choose the claude.ai option.
+- On a Team or Enterprise plan, an Owner has to switch Remote Control on in the admin settings first.
+- VS Code has to stay open on this machine: the session runs here, and only the steering comes from the other device.
+
+The terminal equivalent, if you ever want it, is `claude remote-control`, or `claude rc` at a shell prompt. That's probably what you were thinking of.
+
+Once you're connected, tell me whether you'd like me to start #3, profiling gameplay.
+
+## User
+
+To profile gameplay, let’s use the gameplay demos that run on the title screen. Make sure to uncap the frame rate so we can measure performance better.
+
+## Claude
+
+I'll check how the title-screen attract demos run in the port, and whether the benchmark build already uncaps them.
+
+- tool `Bash`: Read attract demo benchmark tooling and main-loop pacing
+
+## Claude
+
+In benchmark builds the attract demos already skip the game's own vertical-blank waits. Now I'm checking whether presenting a frame still waits for one, which would cap the rate at 60.
+
+- tool `Bash`: Find vblank waits in frame presentation
+
+- tool `Bash`: Read VSync wait and display present code
+
+- tool `Bash`: Read rest of Display_PresentGs
+
+- tool `Bash`: Find attract demo sequencing and logging
+
+- tool `Bash`: Read demo sequencing in demo.c
+
+- tool `Bash`: Read demo start/stop and file table
+
+- tool `Bash`: Check includes in demo.c
+
+- tool `Bash`: Add attract demo start/stop log lines
+
+- tool `Bash`: Run the five attract demos in benchmark and profiling builds
+
+## Claude
+
+While that runs, I'm writing the summary script for the attract-demo windows.
+
+- tool `Bash`: Write attract demo analysis script
+
+## Claude
+
+Both runs are going in the background: the benchmark run, then the profiling run, each through all five attract demos. The analysis script is ready for when they finish.
+
+- tool `Bash`: Show attract demo results and analysis
+
+## Claude
+
+The benchmark run is clean. All five demos ran uncapped, with 0–4% idle, at 90 to 243 fps on average. The profiling run stopped early, after demo 1 started, so I'm checking why.
+
+- tool `Bash`: Find why the profiling run stopped
+
+- tool `Bash`: Show log lines around the hang
+
+- tool `Bash`: Read the watchdog code
+
+- tool `Bash`: Enlarge profiler table and bound its probing
+
+## Claude
+
+The named-section profiler in [prof.c](src/port/prof.c) uses the same kind of table, so I'm checking it too.
+
+- tool `Bash`: Read named-section profiler table
+
+## Claude
+
+The named-section table only ever holds the fixed section names in the code, well under its 256 slots, so it's safe. I'm re-running the profiling build through the five demos.
+
+- tool `Bash`: Re-run the profiling build over the attract demos
+
+- tool `Bash`: Verify the rerun script
+
+## Claude
+
+That script dropped the rebuild lines, so it's running the old profiling build. I'm stopping it and writing the script out in full.
+
+- tool `ToolSearch`: 
+
+- tool `TaskStop`: 
+
+- tool `Bash`: Rebuild the profiling build and rerun the demos
+
+- tool `Bash`: Check for leftover PCSX2 instances
+
+## Claude
+
+There's no leftover PCSX2 instance. The new run is building the corrected profiling build and then playing the five demos.
+
+- tool `Bash`: Show profiling results for all demos
+
+## Claude
+
+All five demos finished this time, so the profiler fix works. To label the demos, I'm checking which maps they play in.
+
+- tool `Bash`: Find which maps each demo plays
+
+## Claude
+
+Now recording the gameplay results and the profiler fix in the docs:
+
+- tool `Bash`: Record gameplay profile and profiler fix in docs
+
+## Claude
+
+In PCSX2, the gameplay demos have plenty of headroom: every demo stays above 60 fps for every one-second stretch. The slowest second I saw was 69 fps.
+
+**The frame rate was already uncapped:** benchmark builds run the attract demos without waiting for the vertical blank, stepping by the demo's own timing so they play exactly the same frames. Idle time was 0–4%, so the figures below are raw speed. I added a log line when each demo starts and stops (in [demo.c](src/bodyprog/demo.c)) to split the measurements.
+
+| demo (map) | average fps | slowest second | busy cycles a frame | `DrawOTag` | point light | world mesh (transform + packets) |
+|---|---|---|---|---|---|---|
+| 0 (map2_s00) | 129 | 95 | 2.23M | 797k | none | 270k |
+| 1 (map2_s00) | **90** | **69** | 3.26M | 991k | 565k | 383k |
+| 2 (map1_s01) | 102 | 80 | 2.87M | 853k | 416k | 309k |
+| 3 (map1_s02) | 154 | **69** | 1.89M | 672k | 370k | 288k |
+| 4 (map1_s03) | 243 | 78 | 1.17M | 400k | 256k | 181k |
+
+**What the gameplay profile shows:**
+- **Mostly the same split as the cutscenes:** `DrawOTag` about 30%, the point light about 17%, the world mesh about 12%. Gameplay is lighter overall: demo 1 at 3.3M cycles a frame against CybilFightStart's 4.75M.
+- **One addition is the snow:** `Particle_SnowDraw` takes about 270k cycles a frame in the three outdoor demos (instrumented figure, so inflated). Particle updates come on top of that.
+- **Smaller items:** `WorldEnv_LightTransform` at 90–200k, and the character pipeline's four functions together at 300–430k (both instrumented).
+
+**A profiler bug, now fixed** (in [prof_fn.c](src/port/prof_fn.c)): the first profiling run hung in demo 1. The function profiler's table had 1,024 slots and was never emptied. Gameplay touches more functions than that, and once the table was full, looking up a new function looped forever. That probably also caused the eight extra stalls in the earlier all-cutscene profiling sweep. The table now has 8,192 slots and drops a sample instead of looping, and the re-run finished all five demos.
+
+**What this means for the plan:** gameplay doesn't reveal a big new bottleneck. In PCSX2 it's already above 60 fps, and its costs are the ones we've worked on, plus snow. The remaining big items are `DrawOTag` and the point light's exact limit. That makes hardware measurement the most useful next step: PCSX2 can't show cache effects, and real-PS2 timings will decide what matters.
+
+Without hardware, the snow particles are the most promising remaining target, since they show up in actual gameplay. The earlier snow batch attempt showed no gain, though.
+
+The docs are updated. The demo log lines, the profiler fix and the doc notes are uncommitted.
+
+## User
+
+Let’s try for some gains on the snow particles. There might still be some way to speed things up
+
+## Claude
+
+I'll start by reading the snow particle code and what was tried before.
+
+- tool `Bash`: Locate snow particle code and past notes
+
+- tool `Bash`: Read past snow attempt and the draw loop
+
+- tool `Bash`: Read Particle_SnowDraw and movement update
+
+- tool `Bash`: Read the rest of Particle_SnowDraw
+
+- tool `Bash`: Read the start of the movement loop
+
+- tool `Bash`: Read the start of Particle_Update's loops and its includes
+
+- tool `Bash`: Add light counters around particle loops
+
+## Claude
+
+That compiles. Next is a reusable benchmark script for attract demos 0–2: busy time, light counters, and demo 0's frame dumps compared against a baseline.
+
+- tool `Bash`: Write and run the snow benchmark baseline
+
+## Claude
+
+While the baseline runs, I'm reading the helpers each flake calls:
+- `func_80055A50`, the depth colour
+- `Game_FlashlightIsOn`
+- the random number generator
+- `Particle_BoundaryClamp`
+
+- tool `Bash`: Read the per-flake helper functions
+
+- tool `Bash`: Check timestep macro and RNG
+
+## Claude
+
+All of these are cheap: plain loads, constant divisions and a short random number generator. I'll wait for the baseline numbers before choosing a change.
+
+- tool `Bash`: Show baseline output
+
+- tool `Bash`: Look for the saved snow batch patch
+
+## Claude
+
+That patch is gone, so I'll rewrite it if it's worth it. First, a finer split: I'm adding a counter around just the RTPS part of each flake's draw. Its call count also gives the number of flakes.
+
+- tool `Bash`: Add an RTPS counter inside the snow draw
+
+- tool `Bash`: Run snow benchmark with the RTPS split
+
+## Claude
+
+The snow costs less than the profile suggested: about 180k cycles a frame, which is 6–8% of busy time in the snowy demos. Per frame, that's 63–78k for moving the flakes and 105–116k for drawing them. So any exact speedup here is limited to a few percent.
+
+The baseline is attract demos 0–2, which are the snowy ones:
+
+| demo | average fps | slowest second | busy per frame | `DrawOTag` | snow movement | snow drawing |
+|---|---|---|---|---|---|---|
+| 0 | 133 | 94 | 2.16M | 798k | 78k | 116k |
+| 1 | 90 | 69 | 3.26M | 992k | 63k | 111k |
+| 2 | 102 | 76 | 2.87M | 854k | 65k | 105k |
+
+**Where I'm looking:**
+- **Drawing:** each flake gets one GTE projection and a few cheap helpers. The earlier attempt batched the projections and was judged on Kaufmann, which may not even have snow, so it may have been tested on the wrong scene. The patch wasn't kept, so I'd have to rewrite it.
+- **Movement:** three random-number calls per flake, cheap position maths, and a ground-height lookup when a flake lands. There's little to cut without changing the results.
+
+To decide, I'm running one more benchmark with a counter around each flake's projection. It also counts how many flakes are drawn, which shows how much batching could save. If it's around half the drawing cost, I'll rewrite the batch and verify it on demo 0's frame dumps. If it's much less, the honest answer is that the snow has little exact headroom left.
+
+- tool `Bash`: Show RTPS split results
+
+## Claude
+
+The flake count settles it: there's little left to gain from the snow.
+
+- tool `Bash`: Record the snow measurements in the docs
+
+## Claude
+
+I didn't find a worthwhile exact speedup in the snow: the most any change could save is about 1.5% of the frame.
+
+**Measurements** (attract demos 0–2, the snowy ones, thousands of cycles a frame):
+
+| demo | busy per frame | moving the flakes | drawing them | of which the GTE projection | flakes drawn |
+|---|---|---|---|---|---|
+| 0 | 2,242 | 78 | 119 | 75 | 198 |
+| 1 | 3,263 | 63 | 114 | 69 | 182 |
+| 2 | 2,713 | 65 | 108 | 67 | 178 |
+
+**Why there's little left:**
+- **The snow is cheap overall:** about 190 flakes a frame and 170–200k cycles in total, 6–8% of busy time. The profile's figure of about 270k for the draw function alone was inflated by the instrumentation.
+- **Projection:** each flake's projection costs about 370 cycles, because it goes through the full GTE emulation (register file, FIFO and flags). Batching all but the last flake, as for the effect grid and the meshes, would bring that to about 150. That saves around 40k cycles a frame, about 1.5% of busy time, for a two-pass rewrite of the draw.
+- **Movement:** about 350 cycles a flake, spent on three random-number calls, position maths, and a ground-height lookup when a flake lands. None of that can be cut without changing the results.
+
+I stopped here rather than write the batch. If you'd still like that 1.5%, I can do it.
+
+**What changed:** I left the new snow counters in. They only exist in light-counter builds, and demo 0's frames were identical with them on. The measurements are in all three docs.
+
+Uncommitted so far: the attract-demo log lines, the profiler hang fix, the snow counters and the doc notes.
+
+**Overall:** gameplay now runs at 89–243 fps in PCSX2, and every target I've measured is either done or close to its exact limit. What's left is mainly `DrawOTag`, where hardware numbers would decide the next step. So now is a good time for the hardware tests: these optimizations, `SH1_INTERLACE_FIELDS` and the mode-switch timing.
+
+## User
+
+Before we do that, let’s implement saving. What do we need to do to get the PS1 save function saving to a PS2 memory card?
+
+## Claude
+
+I'll look at how the game talks to the memory card and what the port does with those calls today.
+
+- tool `Bash`: Find port memory card code
+
+- tool `Bash`: Survey the existing card layer
+
+- tool `Bash`: Read memory card handling in libapi_port.c
+
+## Claude
+
+Today the port answers every libcard call with "no card in either slot": each request is accepted, then times out. Next, how the game itself does its card I/O:
+
+- tool `Bash`: Find the game's memory card code
+
+- tool `Bash`: List memcard.c functions and card API calls
+
+- tool `Bash`: Find where card file functions are resolved
+
+- tool `Bash`: Read generated stub file and its generator
+
+- tool `Bash`: Check loaded IOP modules and the device test
+
+## Claude
+
+I know enough to lay out the plan. All of the game's saving logic is already decompiled and runs unchanged in [memcard.c](src/bodyprog/memcard.c). What's missing is the PS1 system layer underneath it, which the port currently fakes as "no card in either slot."
+
+**What the game expects:**
+- **Card detection through libcard:** `_card_info`, `_card_clear` and `_card_load`. Results come back as kernel events: success, new card, no card (timeout) or error. The game polls them with `TestEvent`.
+- **A presence test:** after `_new_card`, a raw `_card_write` of sector 0. It's a probe, so it shouldn't really write.
+- **BIOS file functions on `bu00:` (slot 1) and `bu10:` (slot 2):**
+  - `open`, including creating a file with a block count
+  - `read`/`write`/`lseek`/`close` (sizes in 128-byte sectors), some calls asynchronous
+  - `firstfile`/`nextfile` to list saves, and `erase`, `rename` and `format`
+- **PS1 card rules:** 15 blocks of 8 KB each, and a header with title and icon at the start of each save.
+
+**Where the port stands:**
+- **libcard:** [libapi_port.c](src/port/libapi_port.c) answers every card request with a timeout.
+- **Directory and maintenance calls:** `firstfile`/`nextfile`/`erase`/`format` are empty stubs.
+- **The file calls (`open`/`read`/`write`/`close`/`lseek`/`rename`) resolve to the PS2 SDK's own C library,** which the port's file loading also uses. That only works today because the game never gets past "no card". So the game's calls have to be renamed to port versions at link time.
+
+**What to build** (port layer only, the game code stays as is):
+1. **The PS2 memory card driver:** load `rom0:MCMAN` and `rom0:MCSERV`, the versions that match the `SIO2MAN`/`PADMAN` already loaded for the controllers, and use the SDK's `libmc` to read and write files on the card.
+2. **A PS1 card per slot, kept in memory:** the standard 128 KB PS1 card layout (directory block plus 15 save blocks). It's loaded from the PS2 card when the game first checks the slot, and only changed blocks are written back. PS1 slot 1 maps to PS2 memory card slot 1, and slot 2 to slot 2. Multitap slots report "no card".
+3. **libcard on top of it:** the detection calls and the presence probe, delivering the same events a PS1 would. The I/O can finish immediately and signal completion; a save might hitch for a frame, which the game's "saving…" screen covers.
+4. **The BIOS file functions for `buXY:` paths,** implemented over the PS1 card in memory, with the game's calls renamed to them at link time.
+5. **A save folder the PS2 browser understands:** `icon.sys` plus an icon, so it shows up as a Silent Hill save, not as corrupted data.
+6. **Testing:**
+   - PCSX2's first memory card file is currently unformatted, so it needs formatting first.
+   - Then a save and load round trip in the port.
+   - Then exporting the PS1 card image and loading the save in the original game in DuckStation, the best proof that the format is right.
+
+The main decision is how saves are stored on the PS2 card:
+
+- tool `AskUserQuestion`: 
+
+- tool `Bash`: Read save file layout constants
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/bodyprog/memcard.c
+
+- tool `Bash`: Check card API callers and PS1 file definitions
+
+- tool `Bash`: Check fsqueue open use and DIRENTRY/flag definitions
+
+- tool `Bash`: Check PS1 flag values and PS2 SDK libmc availability
+
+- tool `Bash`: Read MemCard_Update and card initialisation
+
+- tool `Bash`: Check how the game uses directory filenames
+
+- tool `Bash`: Read pad module loading and port source list
+
+- tool `Bash`: Read libmc API declarations
+
+- tool `Bash`: Read mcGetInfo/mcSync docs and open-mode constants
+
+- tool `Bash`: Find the open-mode values libmc expects
+
+- tool `Bash`: Check for PS2-specific open-mode values
+
+- tool `Bash`: Read libapi_port.c fully
+
+- tool `Bash`: Check event spec values and event tests
+
+- tool `Bash`: Check port file include conventions
+
+## Claude
+
+Before writing the PS2 side, I'll check whether the SDK already defines the `icon.sys` layout the PS2 browser needs, and whether it ships an example icon.
+
+- tool `Bash`: Look for icon.sys struct and sample icons in the SDK
+
+- tool `Bash`: Read mcIcon struct and the SDK's memory card sample
+
+- tool `Bash`: Read sample icon.sys values and SJIS helper
+
+- tool `Bash`: Find the SJIS helper and its library
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/psx_card.c
+
+## Claude
+
+Fixing one detail: slot 2's image also needs 64-byte alignment for the card driver's transfers.
+
+- tool `Bash`: Align each card image to 64 bytes
+
+## Claude
+
+Now the PS2 side:
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/memcard_ps2.c
+
+## Claude
+
+Now the wiring: an exported module loader in the controller code, the polling call in `TestEvent`, removing the old libcard stubs, renaming the game's calls in `memcard.c`, and linking `libmc`.
+
+- tool `Bash`: Wire up polling, macros, module loading and libmc
+
+- tool `Bash`: Guard libmc to the main thread, then compile and link
+
+- tool `Bash`: Find io_common uses in the card driver
+
+- tool `Bash`: Use explicit IOP open modes and relink
+
+- tool `Bash`: Check PCSX2 memory card configuration
+
+- tool `Bash`: Read pcsx2_run.py ini handling and memcard keys
+
+## Claude
+
+I'll point PCSX2's whole memory-card folder at `build/port/memcards` for test runs, so test cards stay out of your PCSX2 config. Now the test-only format option in the build script:
+
+- tool `Bash`: Read build option handling in port_link.py
+
+- tool `Bash`: Add test card folder option and test-only card format
+
+## Claude
+
+Both options are in. First test: boot with a fresh test card and check the card is formatted, found, and polled without errors.
+
+- tool `Bash`: Build and boot with a fresh test memory card
+
+- tool `Bash`: Read scripted input and warp tool docs
+
+- tool `Bash`: Add host mirror and self-test, build, and run
+
+- tool `Bash`: Validate the PS1 card image structure
+
+- tool `Bash`: Find memory card items in the planning doc
+
+- tool `Bash`: Record memory card work in the docs
+
+## Claude
+
+Last, I'm rebuilding without the self-test, keeping the test-card options, so the ISO is ready for a hand-played save.
+
+- tool `Bash`: Rebuild the test ISO without the self-test
+
+## Claude
+
+Saving to the PS2 memory card is implemented, and its file layer passes an automatic self-test in PCSX2. An actual in-game save still needs testing, which means playing to a save point, so I'm handing that part to you.
+
+**How it works:**
+- **The game's save code is unchanged.** I implemented the PS1 card functions it calls on top of the PS2 card ([psx_card.c](src/port/psx_card.c)):
+  - libcard's card detection and its completion events;
+  - the BIOS file calls on `bu00:`/`bu10:`.
+- **One save in the PS2 browser:** on each PS2 card, everything goes in one folder, `BASLUS-00707SH1`. It holds a 128 KB PS1 card image (`CARD.MCD`), `icon.sys` and an icon made from the game's own PS1 save icon. The PS2 driver side is in [memcard_ps2.c](src/port/ps2/memcard_ps2.c).
+- **The game sees a normal 15-block PS1 card.** Its save file `BASLUS-00707SILENT00` holds 11 slots in one block, exactly as on a PS1.
+  - PS1 slot 1 is the PS2 card in port 1, and slot 2 the one in port 2.
+  - The folder is only created the first time you save.
+- **Card checks don't cost frame time:** the game asks about every card slot each frame. The port checks each PS2 card at most twice a second, without waiting, and answers from the last result in between. Actual reads and writes only happen on the save and load screens, and they go straight to the card.
+
+**What I tested:**
+- **First boot with a fresh card:** the card was found in slot 1, and the game saw an empty PS1 card.
+- **The self-test passed:** it created a file, wrote it asynchronously, listed it, read it back and erased it, and the image re-read from the PS2 card matched.
+- **The format is right:** the PS1 card image it wrote checks out as a valid card (header, checksums, directory, data).
+
+**Test runs never touch your own PCSX2 cards.** There's a new `--memcards` option for `pcsx2_run.py`, and test builds format a blank card and keep a copy of the PS1 card at `build/port/card1.mcd`. While doing this I also fixed a hang in the function profiler.
+
+**To test a real save:**
+1. Start PCSX2 with the test card: `python3 tools/port/pcsx2_run.py build/port/sh1_ps2.iso --memcards build/port/memcards --realtime --seconds 3600 --stall 0`. The ISO is already built.
+2. Start a new game, save at the first save point, then reset and load that save from the title screen.
+3. If you open the PS2 browser (PCSX2's BIOS), check how the icon looks. I generated it without seeing it, so it may need adjusting.
+
+After that I can load `build/port/card1.mcd` in DuckStation with the original game, to confirm the save is a genuine PS1 save.
+
+**Still open:**
+- testing on a real PS2;
+- the folder name, which should change to the real title ID once that's settled.
+
+The docs are updated, and nothing is committed.
+
+## User
+
+I have two .mcs files in this folder (/media/sf_VirtualBox_Shared_Folder) that I want to use. Copy both of them to Mcd001.ps2 that's already in use in PCSX2. I feel confident enough in saving that I just want to use the .ps2 memory card files I'm already using, and I don't have any precious data on them anyways. I will then test saving and loading.
+
+## Claude
+
+Here's the plan:
+1. Turn the two `.mcs` exports (single PS1 saves) into one PS1 card image.
+2. Have a one-off port build import that image into your `Mcd001.ps2`, formatting the card first, since it's unformatted.
+
+Doing the import through the port means PCSX2's own card emulation writes the PS2 filesystem, so I don't need a separate card tool. First, a look at the files:
+
+- tool `Bash`: Inspect the two .mcs save files
+
+- tool `Bash`: Build a PS1 card image from the two .mcs saves
+
+## Claude
+
+Now the one-off import option: when the PS2 card has no save folder yet, a test build with `SH1_MC_IMPORT=1` creates it from `host:import1.mcd`.
+
+- tool `Bash`: Find the no-save-folder branch
+
+- tool `Bash`: Add the host image import option
+
+## Claude
+
+Building the import ISO, then running it once on your normal PCSX2 cards. I'm keeping a backup copy of `Mcd001.ps2` in the scratchpad first, just in case.
+
+- tool `Bash`: Import the saves into the user's Mcd001.ps2
+
+## Claude
+
+The import worked: `Mcd001.ps2` was formatted, and the save folder was created from your two saves. Next, the normal ISO without test options, and a check run that it loads the image from your card:
+
+- tool `Bash`: Build normal ISO and verify the imported save loads
+
+## Claude
+
+Your saves are on the card. A normal build now finds `Mcd001.ps2`, formatted, in slot 1, and loads the PS1 card image holding both saves. Adding the import option to the docs:
+
+- tool `Bash`: Note the import option in the walkthrough
+
+## Claude
+
+Both saves are now on your PCSX2 `Mcd001.ps2`, and the ISO is ready for you to test saving and loading.
+
+**What I did:**
+1. **Combined the saves:** I put your two exports (`SHF1.mcs` and `SHF2.mcs`) into one PS1 memory card image. They're the game's first two save files, `BASLUS-00707SILENT00` and `SILENT01`, each holding up to 11 slots.
+2. **Imported them with a one-off build:** your card was still unformatted, so it formatted the card in port 1. Then it created the `BASLUS-00707SH1` save folder from that image. PCSX2's card emulation did all the writing, so the PS2 filesystem is genuine.
+3. **Rebuilt `build/port/sh1_ps2.iso` as a normal build** (no test options) and checked it. On boot it finds `Mcd001.ps2`, formatted, in slot 1, and loads both saves from it.
+
+**Notes:**
+- I kept a backup of the original card, as it was before formatting, at `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/Mcd001.ps2.backup`.
+- `Mcd002.ps2` is still unformatted, so slot 2 shows as having no card.
+- The import is a new build option, `SH1_MC_IMPORT=1`, recorded in the walkthrough. Nothing is committed.
+
+For your test, the title screen's Load should show your existing saves. Then save somewhere new in-game, reset and load it back. If anything misbehaves, tell me what the game showed.
+
+## User
+
+Saving and loading seems to work just fine. Now, export the PS2 save to a .psu file in the same way that launchELF does it, so I can copy it to my real PS2 memory card
+
+## Claude
+
+A `.psu` is a straight copy of a PS2 save folder: a 512-byte directory entry for the folder, entries for `.` and `..`, then each file's entry followed by its data, padded to 1 KB. uLaunchELF copies those entries as they are on the card, modes and timestamps included. So I'll read the folder out of `Mcd001.ps2`'s PS2 filesystem rather than rebuild it. First, whether a memory card tool such as mymc is already installed:
+
+- tool `Bash`: Check for card tools and the card header
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/mc_export_psu.py
+
+- tool `Bash`: List the card and export the save to .psu
+
+- tool `Bash`: Parse the exported .psu back and check its contents
+
+## Claude
+
+The export is at `/media/sf_VirtualBox_Shared_Folder/BASLUS-00707SH1.psu`, ready to copy to your real PS2 card with uLaunchELF.
+
+**What's in it** (169 KB): the `BASLUS-00707SH1` folder with its three files.
+- `icon.sys`
+- `SH1.ICO`, the icon
+- `CARD.MCD`, the PS1 card image holding both save files: `BASLUS-00707SILENT00` and `SILENT01`, including the save you just made.
+
+**How it was made:** the new [mc_export_psu.py](tools/port/mc_export_psu.py) reads the folder straight out of `Mcd001.ps2`. It reads PCSX2's raw card format (data pages plus their ECC area), follows the card's file-allocation table and copies the directory entries. Like uLaunchELF, it keeps the card's file modes and timestamps, and pads each file to 1 KB. Parsing the `.psu` back, every file is intact and both save files have valid headers.
+
+**On the PS2:** copy `BASLUS-00707SH1.psu` to a USB stick, then in uLaunchELF's file browser use "psu Paste" onto `mc0:/`, so the port finds it in memory card slot 1. Running the port from a PS2 with that card in slot 1 should show your saves. On hardware the card driver hasn't been tested yet, so that also covers it.
+
+**To export again later,** for example after more saving: `python3 tools/port/mc_export_psu.py ~/.config/PCSX2/memcards/Mcd001.ps2 BASLUS-00707SH1 out.psu`. Add `--list` to see what's on a card.
+
+Nothing is committed.
+
+## User
+
+Alright, build and deploy the game so that I can do some testing on console. Be sure to log performance and check for crashes.
+
+## Claude
+
+I'll check how deployment to the console works in this repo; an earlier commit added a build-and-deploy script.
+
+- tool `Bash`: Find the deploy tooling and notes
+
+- tool `Bash`: Read deploy workflow notes
+
+- tool `Bash`: Read the build-and-deploy script and check running services
+
+- tool `Bash`: Build with light counters and start the deploy services
+
+- tool `ToolSearch`: 
+
+- tool `Monitor`: PS2 console log: boot, crashes, hangs, memory card
+
+## Claude
+
+The build is ready on the server. **Boot the game on the PS2 through Neutrino now.**
+
+**What's in this build:**
+- everything since your last console test: the `DrawOTag` work, the effect-grid batch, the world mesh paths and memory card saving;
+- light counters, so the log records a per-frame cost breakdown along with the frame rate and idle time.
+
+**Memory card:** saving now goes to the real PS2 card in slot 1. To see your existing saves, paste `BASLUS-00707SH1.psu` onto `mc0:/` with uLaunchELF first. Without it, the game shows an empty card and creates the save folder the first time you save.
+
+**While you test:**
+- The console log goes to `build/port/ps2_log.out`.
+- I'm watching it, and I'll tell you if any of these show up:
+  - the startup line;
+  - a crash or exception;
+  - a watchdog warning or a stuck transfer;
+  - a memory card event.
+- Tell me when you're done, or when something happens, and I'll go through the log: frame rate and idle time over the session, the cost breakdown for the scenes you played, and any errors.
+
+If the PS2 hangs, `ping` and `md` can still reach it as long as Neutrino's network is up. If it's completely stuck, press RESET; it reloads the same ISO.
+
+## Claude
+
+The PS2 booted the new build (10:19:48). The other line in that log entry is the normal startup message about null reads, not an error. I'm still watching the log.
+
+## Claude
+
+The memory card driver started on the console. I'm still watching.
+
+## Claude
+
+The real card works: the game found it in slot 1 and loaded the PS1 card image from the save folder, so the `.psu` copy is in place. I'm still watching the log.
+
+## Claude
+
+The log reported a stuck VRAM readback (`VRAM download stuck`), which the recovery code cleared. It was a 16×1 read at (0,0), the size of a 16-colour CLUT read when a colour table enters the cache. The game kept running, but the read may have returned wrong data: if a texture shows wrong colours, that's the likely cause. I'm checking what was happening just before it.
+
+- tool `Bash`: Show the log context around the stuck download
+
+- tool `Bash`: Read the GS readback code
+
+- tool `Bash`: Align GS readbacks to whole 128-byte DMA bursts
+
+## Claude
+
+Before testing it in PCSX2, I need to know whether rebuilding the ISO would swap it under the game running on your console. I'm checking when the file server switches to a new build.
+
+- tool `Bash`: Check when the file server switches ISOs
+
+- tool `Bash`: Check exactness with the wider readbacks in PCSX2
+
+- tool `Bash`: Show which Kaufmann dump differs
+
+- tool `TaskStop`: 
+
+- tool `ToolSearch`: 
+
+- tool `PushNotification`: 
+
+- tool `Bash`: Rebuild the console build with the fix and deploy it
+
+- tool `Monitor`: PS2 log after fix deploy: boot, crashes, stuck reads (first 3)
+
+## Claude
+
+The fixed build (10:28:16) is deployed, and the game is restarting on the PS2. Meanwhile, the Kaufmann dump that differed:
+
+- tool `Bash`: Locate the pixels that differ in dump 6
+
+## Claude
+
+That's the known variance, not the fix. The 75 pixels form a 10×12 box at (111–120, 192–203), one character in the subtitle line; subtitle text timing varies slightly between runs, as noted before. The readback change doesn't alter the picture.
+
+Now waiting for the restarted game's log.
+
+## User
+
+The game did restart successfully. Are you getting the log?
+
+- tool `Bash`: Check the console log since the restart
+
+- tool `Bash`: Check card lines and readbacks since the restart
+
+## Claude
+
+Yes, the log is coming through, and the fix works:
+- The new build (10:28:16) started and has been running for about 90 seconds.
+- There hasn't been a single stuck readback since the restart; the old build had them every second.
+- Both memory cards were found, and slot 1's saves loaded.
+- There have been no crashes or watchdog warnings.
+- Right now it's sitting at 40% idle, so with plenty of headroom.
+
+**What the problem was:** the old build froze for about a second each time a 16-colour CLUT was loaded into the cache. The GS-to-memory DMA moves data in 128-byte bursts, and those reads were only 32 bytes, so on real hardware they never finished. PCSX2 doesn't emulate that limit. Readbacks are now rounded to 64-pixel boundaries, so they're always whole bursts, and the Kaufmann frames are unchanged in PCSX2.
+
+**Carry on testing.** I'm still watching for crashes, hangs and stuck reads. When you're done, tell me roughly what you played, and I'll summarise the frame rate and the per-frame cost breakdown from the log. If something looks wrong, such as odd colours, a stall or a crash, tell me what you were doing, ideally with a rough time.
+
+## User
+
+A couple minor things:
+The text isn’t formatted correctly for the save file metadata. For example, the Sewer file in file 1 of my save has “Time: 2:0U:0T” and says that it is save # “0F”. 
+In the item menu, the number of bullets is formatted wrong. In that same save file, the handgun has “0>” bullets.
+
+## Claude
+
+Every wrong character is a digit with the wrong value. '0' plus 14 gives '>', plus 22 gives 'F', plus 36 gives 'T', and plus 37 gives 'U'. So 14 bullets came out as tens 0, ones 14, and 22 as tens 0, ones 22. Wherever these numbers are formatted, the division by 10 returns 0, and the whole value lands in the ones digit. Single-digit values like the hours look right only because they don't need a tens digit. I'm looking for the routine the game uses to draw numbers.
+
+- tool `Bash`: Find the game's number drawing functions
+
+- tool `Bash`: Read Gfx_StringDrawInt
+
+- tool `Bash`: Search for other 32-bit shifts by 32
+
+- tool `Bash`: Check the other shift and any shifts of 32 or more
+
+- tool `Bash`: Fix the quotient in both number-drawing functions
+
+- tool `Bash`: Rebuild and find where the warnings are recorded
+
+## Claude
+
+One `-Wshift-count-overflow` warning is left after the fix, so there's another case my search missed. Let me find where the compile check keeps per-file warnings:
+
+- tool `Bash`: Read the compile check script
+
+- tool `Bash`: List the undefined-behaviour warnings with locations
+
+- tool `Bash`: Read the player_control and item screen loops
+
+- tool `Bash`: Check the animation table sizes and indices
+
+- tool `Bash`: Look at the declarations around the animation table
+
+- tool `Bash`: Find the weapon animation table declaration
+
+- tool `Bash`: Disassemble the function containing the loop
+
+- tool `Bash`: Read the compiled copy loop
+
+- tool `Bash`: Read the loop body at da40
+
+- tool `Bash`: Read the remaining two flagged loops
+
+- tool `Bash`: Find the functions, array sizes and loop bounds
+
+- tool `Bash`: Check the map6_s04 loop's compiled bounds
+
+- tool `Bash`: Inspect the outer loop's counter and exit
+
+- tool `Bash`: Check the vector loop's compiled iteration count
+
+## Claude
+
+The register stores here are hard to read in the overview, so I'm looking for the actual writes to `field_24[0..3]`: stores at offsets 0x24, 0x2C, 0x34 and 0x3C from the struct pointer.
+
+- tool `Bash`: Find the stores into field_24
+
+## Claude
+
+Simpler test: compile the file again with `-fno-aggressive-loop-optimizations`. If the code comes out identical, GCC didn't use the undefined behaviour to change anything.
+
+- tool `Bash`: Compare code with and without aggressive loop optimisations
+
+- tool `Bash`: Show the difference in func_80066184
+
+- tool `Bash`: Read the other flagged item-screen loops
+
+- tool `Bash`: Check item screen array sizes
+
+- tool `Bash`: Disable loop UB optimisations for game code and rebuild
+
+## Claude
+
+No more loop warnings. The one remaining shift warning should be the stale log for the Japanese text file, which this build doesn't compile. Checking:
+
+- tool `Bash`: Confirm the leftover warning is stale
+
+- tool `Bash`: Check Kaufmann dumps with the new flag
+
+## Claude
+
+Both problems came from undefined behaviour in the decompiled C, which GCC compiles differently from the PS1's compiler. They're fixed in the source, but not on your console yet.
+
+**1. Wrong digits (save info and ammo counts).** The number-drawing function `Gfx_StringDrawInt` divides by 10 with `quotient = (val / 10) >> 32`.
+- That form reproduces the PS1 compiler's machine code, but shifting a 32-bit value by 32 is undefined in C, and the EE's GCC turns the quotient into 0.
+- So every number came out as a single "digit" holding the whole value: 14 bullets printed as `0>`, 22 as `0F`, 37 minutes as `0U`.
+- On the port it's now a plain division, in both the US and Japanese text code. This was the only case: the build reported exactly this shift warning and no others.
+
+**2. A related item-screen problem I found while checking.** I looked through GCC's other warnings about undefined behaviour and found loops it had shortened.
+- The decompiled code declares some arrays smaller than the PS1 code actually uses them, and the loops run on into the following variables, as the PS1 did. GCC instead assumes the loop must stop at the declared end.
+- In the inventory screen, the setup loop for the 10 displayed items stopped after 7, so items 7–9 kept whatever transforms they had before, and the lighting setup was cut the same way.
+- Fix: the game code is now compiled with `-fno-aggressive-loop-optimizations` (in [ee_compile_check.sh](tools/port/ee_compile_check.sh)), so loops keep their written counts everywhere. All such warnings are gone.
+- I checked the other flagged loops (Harry's weapon animations, map6_s04, an effect function). GCC hadn't changed them, so they were already fine.
+
+The Kaufmann benchmark is running in PCSX2 now, to make sure the compiler flag changes nothing visible.
+
+**Deploying will restart the game on your PS2. Tell me when it's a good moment.** Or I can deploy as soon as the check passes. The log from your current session is still being recorded.
+
+- tool `Bash`: Show the Kaufmann check result
+
+- tool `Bash`: Build the console ISO without deploying
+
+## Claude
+
+The fixed build (10:41:19) is ready. The PCSX2 check passed: Kaufmann's frames are unchanged apart from the usual one-character subtitle difference.
+
+Your game is still running the 10:28 build. When you're at a good moment to restart, tell me and I'll deploy. Then check the save screen's time and file number, and the handgun's ammo count. I'll keep watching the log after the restart.
+
+## User
+
+Deploy
+
+- tool `Bash`: Deploy the fixed build to the PS2
+
+- tool `Bash`: Wait for the new build to start on the PS2
+
+- tool `Monitor`: PS2 log (10:41 build): crashes, hangs, stuck reads, cards
+
+## Claude
+
+The fixed build (10:41:19) is deployed and has started on the PS2. I'm watching the log again for crashes, hangs, stuck reads and card events.
+
+Please check:
+- **The save screen:** the play time and save number of your Sewer save should read normally now, for example "Time: 2:37:36".
+- **The item menu:** the handgun's ammo count should be a proper number.
+- **Items further along the inventory:** anything beyond the first seven should look the same as the rest. That's the setup loop GCC had cut short.
+
+Tell me when you're done, and I'll summarise performance and any errors from the session.
+
+## User
+
+I got a black screen after the Konami logo. What happened?
+
+- tool `Bash`: Read the log since the new build started
+
+- tool `Bash`: Check the log end and ping the PS2
+
+- tool `Bash`: Resolve the stopped program counter
+
+## Claude
+
+`0x81FE0` is below the game's code, which starts at `0x100000`, so it's in the PS2 kernel: the EE is idling with every thread waiting. That fits vertical-blank interrupts stopping at about 1036.3 s. It's on the title screen, where the display switches video mode, and a mode switch means reprogramming the GS. If the GS stops producing its vertical sync, nothing wakes the game again.
+
+I can't tell from here whether today's changes caused it or whether it's an intermittent hang in the restart or mode-switch path. The same code booted fine with the 10:28 build, and the new build booted fine in PCSX2. The most informative next step is to see whether it happens again on a clean boot:
+
+**Please press RESET on the PS2.** It boots Neutrino and the same new ISO from scratch, and I'll watch whether it gets past the title screen. If it hangs at the same point again, it's this build, and I'll narrow down which of the two changes is responsible. If it doesn't, it was the remote restart, and I'll note it as an intermittent hang to track.
+
+## User
+
+Just FYI, I have never been able to restart Neutrino by just pressing Reset. I’ve always had to hold the button to power off the console, then turn it back on
+
+## Claude
+
+Thanks, that's useful. So a stuck PS2 needs a full power cycle: hold the power button to turn it off, turn it back on, and start Neutrino again from uLaunchELF as usual. The server is already serving the new ISO, so Neutrino will boot the 10:41 build.
+
+I'll fix the deploy script's message, which still says to press RESET, and record this for future sessions.
+
+- tool `Bash`: Fix the recovery instructions in script and docs
+
+- tool `Write`: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/ps2-stuck-needs-power-cycle.md
+
+- tool `Bash`: Add the memory to the index
+
+## Claude
+
+Please power-cycle the PS2 and start Neutrino again. It'll boot the 10:41 build from scratch.
+
+A cold boot is a good test for this hang:
+- **If it hangs again at the title screen,** the cause is in this build, and I'll narrow it down to one of the two changes.
+- **If it gets through,** the hang came from the remote restart that `deploy` uses, not from the fixes.
+
+I'm still watching the log, so I'll see the boot. The deploy script now says to power-cycle instead of pressing RESET, and I've noted this for future sessions.
+
+## User
+
+It did not hang this time. It also looks like the text issues are fixed.
+
+## Claude
+
+A cold boot works, and the text is fixed. That makes the earlier hang a problem with the remote restart that `deploy` uses, not with the fixes.
+
+I hadn't written up today's console fixes yet, so I'm adding them to the docs now, along with the restart hang.
+
+- tool `Bash`: Record today's console fixes in the docs
+
+## Claude
+
+Good: the cold boot ran without hanging, and the text is right. So the earlier hang came from the warm restart that `deploy` uses, not from today's fixes.
+
+All of today's console findings are now in the walkthrough and the planning doc:
+- the stuck CLUT readbacks
+- the wrong digits
+- the loops GCC cut short
+- the restart hang, which is on the planning doc's to-investigate list
+
+Saving and loading on the real card is ticked off, too.
+
+I'm still watching the log, and the light counters are recording performance. When you're done, tell me roughly what you played, and I'll summarise frame rate, idle time and the cost breakdown by scene, plus any errors. Everything from the last two days is uncommitted; I can commit it whenever you like.
+
+## User
+
+Is there a soft reset button combo I can use to go back to the main menu?
+
+## Claude
+
+I'll check the game's code for a soft-reset combination rather than guess.
+
+- tool `Bash`: Find warm reset triggers in the game code
+
+- tool `Bash`: Read the warm reset check
+
+- tool `Bash`: Check the port's exit-to-browser combo
+
+## Claude
+
+Yes, the game has two soft resets, and both work in the port. They return to the title screen:
+
+1. **Hold Start + Select for about 2 seconds.**
+2. **Hold Triangle + Square, then press Start.**
+
+Avoid the PS1's third combination, L1 + L2 + R1 + R2 + Start + Select. In the port, holding those six buttons for a second exits to the PS2 browser. That's there because RESET doesn't work under Neutrino.
+
+The soft reset does nothing on the main menu itself, during a demo (demos end on their own), or while a save is being loaded or written.
+
+## Claude
+
+The first watcher expired without reporting anything, although the cold boot's startup line should have reached it. I'm checking that the log is still coming in and re-arming a single watcher.
+
+- tool `Bash`: Check the log is still being written
+
+## Claude
+
+The log is coming in: the cold boot started at 1401.7 s, and lines are still arriving at 1915 s. I didn't get an event from the other watcher for that boot, so I'm replacing it with a fresh one.
+
+- tool `TaskStop`: 
+
+- tool `Monitor`: PS2 log: crashes, hangs, stuck reads, restarts
+
+- tool `Bash`: Check the cold-boot session so far for errors
+
+## Claude
+
+The log is fine and I'm watching it again. Over the 8½ minutes of your current session (since the cold boot at 1401.7 s), it shows no crashes, exceptions, watchdog warnings or stuck readbacks. The new watcher also reports restarts, so I'll see a soft reset or a new boot. When you're done, tell me and I'll summarise performance.
+
+## User
+
+Alright, I’ve tested a variety of areas, and performance seems much better than the last long console session I played. There are still some performance issues in some areas, and a few graphical bugs I’d like to fix up, but first, I’m curious about revisiting the viability of 480p as we discussed.
+
+## Claude
+
+First, a quick look at what the log recorded for your session, then the earlier 480p notes.
+
+- tool `Bash`: Summarise session frame rate and find 480p notes
+
+- tool `Bash`: Retrieve the earlier 480p assessment
+
+## Claude
+
+Here's where 480p stands now. The earlier assessment holds, and some of what's happened since makes it easier.
+
+**Two different things could be called "480p":**
+1. **A 480p output of the current image.** The GS outputs a progressive 640×480 signal, and the PS1 picture is scaled up by the GS's display unit, doubled vertically and horizontally as needed.
+   - Detail stays at the original resolution, but it's a clean, flicker-free progressive signal.
+   - The display mode would never switch again, so no more blank frames or sync drops between 240p and 480i.
+   - The interlaced 448-line screens (title, inventory) would show as whole progressive frames. That removes the problem we worked around with the snapshot copy.
+   - Small job: mostly the display setup in `display_ps2.c`.
+2. **True 2× rendering at 640×448,** which is what the earlier assessment was about. Detail doubles: geometry is drawn at twice the resolution, with sharper edges and more precise texture placement.
+
+**What's changed since the 2× assessment:**
+- **It fits in GS memory.** The screen is now shown straight from the PS1 VRAM image, which frees the old display buffer. Two 2× render buffers (2 × 560 KB) plus the 1:1 PS1 VRAM and the CLUT cache leave room for about 28 texture-cache slots, against 37 today. That's the count the port ran with until last week.
+- **Drawing cost:** the GS would fill about 4× the pixels, roughly 6% of its capacity, so fill rate isn't the problem. GS transfers are still synchronous, so some GS time could show up as CPU waiting, but I'd estimate under 1 ms a frame.
+- **CPU cost:** `DrawOTag`'s work per polygon stays the same, since coordinates just scale.
+
+**The real work is keeping the 2× screen and the PS1's 1:1 VRAM in agreement.** Silent Hill reads its own screen in places:
+- **Distortion effects:** map6_s02's effect grid draws sprites textured from the display buffer. These would sample the 2× buffer with doubled UVs.
+- **Readbacks and screen copies:** `StoreImage` of screen areas, and `MoveImage` between display areas.
+- **Uploads into the screen:** movies and full-screen images written with `LoadImage`. These need scaling up into the 2× buffer.
+- **Small details:** 1-pixel lines become half as thick, and text and HUD sprites need checking for gaps at 2×.
+
+Handled the way DuckStation and PCSX2 do it, the 2× buffer is authoritative for the screen. It gets copied down to 1× only when the game reads the screen, and scaled up when the game writes into it.
+
+**My suggestion is to do it in two steps:**
+1. **The 480p output first.** It's small, it fixes the mode-switch blinking and the interlaced screens for good, and it shows whether your setup handles 480p.
+2. **Then true 2× rendering,** starting with gameplay and adding the screen-reading effects one by one. That takes several sessions.
+
+One thing I need to know first: does your PS2 connect to the TV with a **component (YPbPr) cable**, to a display that accepts 480p? Composite and S-Video can't carry 480p. Without component, this would only be testable in PCSX2.
+
+## User
+
+Let’s table #1 for now. I do have a component cable to properly test 480p, so that’s not in question. As for #2, since we have the source code available, we should allow the game to essentially adapt its code to account for higher resolutions, so we don’t have to do any framebuffer downscaling for effects or whatever. What do you think of that?
+
+## Claude
+
+Partly yes. Having the source is the right tool for the effects, but I wouldn't move the whole game to a 640×448 coordinate system.
+
+**Where I agree:** the effects that read the screen should be adapted in the game code, not handled by a general syncing mechanism.
+- I listed downscaling the 2× screen to the 1:1 VRAM, and scaling uploads back up, because that's what emulators have to do: they can't change the game.
+- We can change the game. So each effect that uses the screen as a texture or copies it can be rewritten to work on the 2× buffer directly, such as map6_s02's distortion grid or screen-to-screen copies.
+- That's simpler and gives better results than generic syncing. The renderer would just need a way for that code to say "this primitive samples the 2× screen."
+
+**Where I'd hold back:** making the whole game draw at 640×448 itself has costs the renderer approach avoids.
+- **Every 2D element would need changing:** the HUD, text, menus, the map and inventory screens, fades and full-screen effects. They're all written for 320×224 coordinates, across hundreds of call sites. Each missed one is a misplaced element.
+- **The PS1 command format gets in the way:** draw areas are limited to the PS1's 1024×512 VRAM coordinates. Two 640×448 buffers don't fit in that space, and texture coordinates are 8-bit. We'd have to extend the format, for both the game's packet code and the renderer.
+- **Game logic uses screen coordinates:** culling, screen bound tests and some effect placement read projected positions. Changing the projection changes their behaviour.
+- **We'd lose 1:1 comparison with DuckStation,** which is how we've verified the port all along.
+
+Scaling in the renderer handles all the 2D for free: it doubles every coordinate uniformly, so the HUD and menus just work.
+
+**One thing native rendering would give you:** finer 3D positions. The GTE rounds screen coordinates to whole PS1 pixels, so when the renderer doubles them, models still snap to even pixels and wobble like on a PS1. A larger projection distance in the game would avoid that. But we can get the same benefit without touching the game: the port's GTE emulation can keep the sub-pixel precision it computes anyway and hand it to the renderer, which is DuckStation's PGXP idea. It's exact for game logic, because the game still sees the same rounded values.
+
+**So my proposal combines both:**
+1. **The renderer draws at 2×.** Every coordinate is doubled in `gpu_gs.c` into separate 2× screen buffers, and 2D needs no changes.
+2. **Inventory the effects that read the screen.** The renderer already counts primitives that texture from VRAM, readbacks and screen copies. A sweep over cutscenes, attract demos and warps would list which code does it, in which maps.
+3. **Adapt those effects in the source,** one by one, to use the 2× screen directly. No generic downscaling.
+4. **Optionally, sub-pixel 3D precision** from the GTE emulation, to remove the wobble.
+
+If that direction sounds right, I'd start with step 2, since its findings decide how much work step 3 is.
+
+## User
+
+Let’s start with 2
+
+## Claude
+
+I'll build the inventory as a light diagnostic build (`SH1_SCREENREAD=1`), then run it over everything we can automate.
+
+**What it records:** every way the game can use the screen's contents rather than just draw to it:
+1. **Textured primitives** whose texels come from a screen area, the display buffers set with `PutDispEnv`. Polygons and sprites both count, judged by their actual UV range, not the whole texture page.
+2. **`StoreImage` readbacks** of screen areas.
+3. **`MoveImage` copies** from or into screen areas.
+4. **`LoadImage` uploads** into screen areas, such as movie frames or full-screen images.
+
+Each distinct case is logged once, with its first occurrence and context: the texture page and CLUT or the rectangle, the game function that called the libgpu function, the game state and the current map. That way the cases can be traced to the code.
+
+First, where the libgpu functions live, and whether the log already names the current map:
+
+- tool `Bash`: Find libgpu image functions and map logging
+
+- tool `Bash`: Read libgpu image/env functions and warp map logging
+
+- tool `Bash`: Read rectangle, vram_copy and the image entry points
+
+- tool `Bash`: Add the screen-read inventory and link it
+
+- tool `Bash`: Read the warp sweep tool's usage
+
+## Claude
+
+The warp sweep boots once and walks all 43 maps, 40 emulated seconds each. Running all three in sequence in one background job, roughly two to three hours:
+
+- tool `Bash`: Write the screen-read sweep script
+
+## Claude
+
+The warp sweep writes its log to `build/port/warp_sweep_ps2.log`, so the script also copies that into the scratchpad. Starting the job:
+
+- tool `Bash`: Run the screen-read sweeps in the background
+
+- tool `Bash`: Confirm the warp log copy line
+
+## Claude
+
+The copy line didn't get added, but the warp sweep leaves its log at `build/port/warp_sweep_ps2.log` anyway, so nothing is lost.
+
+The inventory build is running, roughly two to three hours: all 52 cutscenes, then the five attract demos, then the warp sweep over all 43 maps. Each distinct case of the game using the screen's contents gets logged with its context:
+- textured polygons or sprites whose texels come from the screen;
+- copies from or into the screen;
+- uploads into the screen, and readbacks of it.
+
+Your PS2 is unaffected. It keeps reading the ISO it booted from, and the server only switches on a deploy. One thing to remember: the ISO now in `build/port` is the diagnostic build, so I'll rebuild the normal one before the next deploy.
+
+When the sweeps finish, I'll group the cases by kind and by code, trace each to the game function behind it, and list what each would need with a 2× screen. Menus aren't covered by these runs, so a short manual pass through the inventory, map, options and save screens will fill that gap afterwards.
+
+## Claude
+
+The console log watcher has expired without reporting anything: no crashes, hangs or stuck reads on the PS2 in its last half hour. Since you've finished testing there, I'm not re-arming it. The inventory sweeps are still running.
+
+- tool `Bash`: Check sweep completion and screen-read counts
+
+- tool `Bash`: Group screen-read events by kind, key and context
+
+- tool `Bash`: Show the grouped report
+
+- tool `Bash`: Resolve StoreImage callers and find MoveImage calls
+
+- tool `Bash`: Locate the two StoreImage callers
+
+- tool `Bash`: Read the water effect and TIM post-load code
+
+- tool `Bash`: Find primitives textured from 15-bit frame-buffer pages
+
+- tool `Bash`: Find all frame-buffer texture page users
+
+## Claude
+
+Now that I know the pattern, I'm listing every site in the source, with its function, so the inventory also covers maps the sweep didn't exercise in that state:
+
+- tool `Bash`: List frame-buffer texture page sites with their functions
+
+## Claude
+
+The sweep plus the source search give a clear picture. Recording it in the docs:
+
+- tool `Bash`: Record the screen-read inventory in the docs
+
+## Claude
+
+The game uses its own screen in only two ways, much less than I expected. That's from all 52 cutscenes, the five attract demos and all 43 maps, plus a search of the source for maps the runs didn't reach.
+
+**1. Feedback and motion-blur effects:** 16 sites in 13 functions.
+- They draw the other frame buffer back over the current frame with blending: trails, echoes, the distortion grid.
+- The sites:
+  - `Screen_BackgroundMotionBlur`, shared code
+  - the shared function in `unk_draw_m1s03.c`, used in map1_s03, map5_s01, map6_s01 and map6_s02
+  - map1_s05 (the Split Head fight)
+  - map4_s01, map4_s03 and map6_s00
+  - map6_s02's effect grid, map6_s04, and map7_s00, s02 and s03
+- They all have the same shape: a sprite or quad textured from the 15-bit page over a frame buffer.
+
+**2. The lens-flare occlusion test** ([water.c](src/bodyprog/water.c)): each frame, an 8×8 block of the screen at the light's position is copied off-screen. Next frame, two pixels are read back: if they're white, the light isn't hidden and the flare is drawn. It's the only time the CPU reads screen contents.
+
+**Not found anywhere:** polygons textured from the screen, uploads into the screen, copies into it, or other readbacks.
+
+**What this means for 2×:** with that few cases, there's no need for any general syncing between the 2× and 1× images.
+- **Feedback effects:** because all 16 have the same form, one renderer rule handles them: "a texture page over a frame buffer samples that buffer's 2× copy with doubled UVs." That keeps them at full resolution with no game changes. We could adapt the 16 sites in the source instead, but I don't see a benefit, since the rule changes nothing in how they look.
+- **The lens flare:** the one place where adapting the game's code makes sense. The test can sample the 2× screen at doubled coordinates.
+
+**Not covered by the automated runs:**
+- **FMV movies,** whose decoded frames are uploaded into the screen, almost certainly. That would need scaling up into the 2× buffer.
+- **The menus:** inventory, map, options, save and load. Also the title screen and the credits.
+
+For those, I'd fix a small logging bug in the inventory build first: once its table filled, it logged every occurrence. Then you'd go through the menus once and let an FMV play, on the console or in PCSX2, whichever you prefer. The docs are updated. After that we'd have the complete list for step 3.
+
+## User
+
+We don’t have FMV playback implemented yet. Where can we start with that?
+
+## Claude
+
+I'll look at what the game's movie player calls and what the port does with those calls today. The generated stub list already shows `DecDCTvlc`, `DecDCTout` and `DecDCToutCallback` (the PS1's MDEC video decoder library), and `StSetRing`, `StSetStream`, `StGetNext` and `StFreeRing` (libcd's streaming).
+
+- tool `Bash`: Find the game's movie player code and its API calls
+
+- tool `Bash`: Read the movie player (first part)
+
+- tool `Bash`: Read the rest of the movie player
+
+- tool `Bash`: Read how the port reads XA files and packs the disc
+
+- tool `Bash`: Read how XA audio streaming works in the port
+
+## Claude
+
+Movies are within reach. The disc data is already on the port's DVD, and the audio side mostly exists. I'd take the approach you suggested for effects here too: write a port version of the movie player using the source, rather than emulating the PS1's streaming library, MDEC chip and 24-bit display mode.
+
+**What already exists:**
+- **The movie data:** `HILL.` holds the PS1 disc's raw sectors, video and audio interleaved as on the PS1. Movies are found by start sector in the game's file table.
+- **The audio:** the IOP already has an XA player for the cutscene voices ([xa.c](src/port/iop/sh1spu/xa.c)). It reads raw sectors from `HILL.`, filters one file and channel, decodes the ADPCM and feeds the SPU. A movie's soundtrack is the same kind of stream, so it should only need starting on the movie's audio channel.
+
+**What's missing**, with the port's own `movie_main` under `SH_PORT`:
+1. **Reading frames:** read the movie's raw sectors, keep the video sectors, and assemble each frame from its chunks using the 32-byte STR header in each video sector (chunk number and count, frame number, size, width and height).
+2. **Decoding:** in C on the EE, for now: the bitstream (the PS1's run-level VLC), then dequantizing, the inverse DCT and YUV-to-RGB.
+   - At 320×224 and 15 frames a second, I'd estimate about 30% of the EE. The game is doing nothing else during a movie, so that's fine.
+   - Later this could move to the PS2's IPU, its MPEG decoder, which does the same inverse DCT and colour conversion in hardware.
+3. **Display:** upload each decoded frame straight to a 32-bit GS buffer and show it. This skips the PS1 VRAM and its 24-bit display mode completely, and it also takes movies off the 2× list: scaling up a movie becomes just drawing it bigger.
+4. **Audio and timing:** start the XA player on the movie's audio channel, and show frame N at N divided by the frame rate, timed by the vertical-blank counter. The frame rate follows from the PS1's 150 sectors a second and the sectors per frame.
+5. **Controls:** keep the game's existing ones, skipping with its skip button and stopping at the frame limit it passes in.
+
+**Where I'd start:** a decoder prototype on the PC, steps 1 and 2.
+- It reads the opening movie from the disc image and writes frames as images.
+- That lets me get the bitstream format right quickly, without building and booting for each try. I can compare frames with DuckStation's output of the same movie, which is the reference you've had me use.
+- Then the same C code moves into the port, followed by display, audio and timing.
+
+Should I start the prototype?
+
+## User
+
+Yes
+
+## Claude
+
+I'll find the extracted disc data that the ISO is built from, and the movie entries in the game's file table.
+
+- tool `Bash`: Find the disc data and movie file entries
+
+- tool `Bash`: List the disc data and find the file table
+
+- tool `Bash`: Find the file enum and the disc layout
+
+- tool `Bash`: Find the file table definition
+
+- tool `Bash`: Get movie file table entries and XA file list
+
+- tool `Bash`: Dump the first sectors of the opening movie
+
+- tool `Bash`: Check for PIL and create the tool folder
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/str/strdec.c
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/str/strdec.h
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/str/strdump.c
+
+- tool `Bash`: Fix the quantization table, compile and decode frames
+
+## Claude
+
+The safety check blocked the clean-up of the output folder. That removal isn't needed anyway: I'll write into a new folder.
+
+- tool `Bash`: Compile the decoder and decode sample frames
+
+- tool `Bash`: Make a contact sheet of decoded frames
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/str1/sheet.png
+
+- tool `Bash`: Decode intro movie frames for a colour check
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/str2/sheet.png
+
+## Claude
+
+The colours are right too: the purple sunset sky, skin tones, Cybil's uniform, the blue night scene. Recording the result:
+
+- tool `Bash`: Record the decoder prototype in the docs
+
+## Claude
+
+The decoder works on the first try. It decodes the game's movies straight from the disc data, and the frames look right.
+
+**Results:** both movies I tried decode completely, with no bitstream errors in any frame:
+- **The opening movie (`M1_03500`):** Harry waking up in the jeep after the crash. It's nearly monochrome, which is how that scene looks.
+- **The intro (`C1_20670`):** the colours are right. The purple sunset behind Harry and Cheryl, Cybil's uniform, the blue night scene.
+- The frame sheets are at `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/str2/sheet.png` (intro) and `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/str1/sheet.png` (opening).
+
+**The format:**
+- The movies are 320×208 at 15 fps, 9 video sectors a frame, using the PS1's version-2 bitstream.
+- Each movie's audio is an interleaved XA stream on file 1, channel 1. That's the format the IOP's XA player already handles for voice lines.
+
+**The decoder** ([strdec.c](tools/port/str/strdec.c)) is plain C with no host dependencies, ready to move into the port:
+- It reads the bitstream (MPEG-1 coefficient codes, 10-bit DC and escapes), dequantizes with the PS1's default table, runs the inverse DCT and converts YCbCr to RGB.
+- [strdump.c](tools/port/str/strdump.c) is the PC test harness. It assembles frames from the raw sectors in `HILL.` and writes images.
+
+**Next steps:**
+1. **The port's `movie_main`:** read the movie's sectors with the port's CD layer, decode on the EE, and show each frame from a 32-bit GS buffer, bypassing the PS1 VRAM and its 24-bit mode.
+2. **Sound and timing:** start the XA player on the movie's audio channel, and show frames at 15 fps against the vertical-blank counter. The game's skip button and frame limit stay as they are.
+3. **Accuracy:** compare frames pixel by pixel with DuckStation. The PS1's MDEC uses integer arithmetic with its own rounding, and mine currently uses floating point, so small differences are expected.
+4. **Speed:** an integer IDCT for the EE. If that's still too slow, the PS2's IPU, its MPEG decoder hardware.
+
+The docs are updated. Should I continue with step 1?
+
+## User
+
+Yes
+
+## Claude
+
+I'll put the movie loop in [stream.c](src/screens/stream/stream.c) under `SH_PORT`, so it keeps the game's own controls: `Joy_Update`, the skip button, the soft-reset check and the frame limit. The PS2 side goes in a new `movie_ps2.c`:
+- reading the movie's raw sectors ahead, asynchronously, so the disc never stalls a frame;
+- decoding with `strdec.c`, which moves into the port;
+- showing frames from a 32-bit GS buffer;
+- starting and stopping the XA player on the movie's audio;
+- pacing at 15 fps against the vertical-blank counter.
+
+First, the internals I'll be building on: how `libcd_ps2.c` reads `HILL.` and starts XA, and how the display code points the GS at a buffer.
+
+- tool `Bash`: Read the CD layer's state and the XA start/stop API
+
+- tool `Bash`: Read CD read helpers and the display show code
+
+- tool `Bash`: Move decoder into the port, drop libm, recheck output
+
+- tool `Bash`: Read display mode handling and GS constants
+
+- tool `Bash`: Add CD accessor, GS movie display, and display mode hook
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/movie_ps2.c
+
+- tool `Bash`: Add the port movie loop, compile and link
+
+## Claude
+
+`CdInit` is defined after my new accessor, so it needs a declaration first:
+
+- tool `Bash`: Declare CdInit and relink
+
+- tool `Bash`: Rename the helper that clashes with ps2sdk's u16 and relink
+
+- tool `Bash`: Build and boot in PCSX2 to play the intro movie
+
+- tool `Bash`: Check dropped frames and movie progress
+
+- tool `Bash`: Read the log before the hang and the CD layer's read path
+
+- tool `Bash`: Look for read coordination between EE and IOP readers
+
+- tool `Bash`: Add a chunk check and rerun the intro briefly
+
+- tool `Bash`: Read the XA reader loop and the IOP command handling
+
+- tool `Bash`: Read sh1spu's command and DMA code
+
+- tool `Bash`: Read xa.c state variables and the EE packet sender
+
+- tool `Bash`: Add video-sector forwarding to the IOP reader and EE commands
+
+## Claude
+
+The EE side needs the two command numbers, and `movie_ps2.c` gets rewritten around the forwarded ring. Its own disc reads, and the temporary chunk check, go away.
+
+- tool `Bash`: Define the new command numbers on the EE
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/movie_ps2.c
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/movie_ps2.c
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/movie_ps2.c
+
+- tool `Bash`: Let scripted dumps capture movie frames
+
+- tool `Bash`: Rebuild and run the intro movie with forwarding
+
+- tool `Bash`: Combine the PS2-decoded movie frames into one image
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/movie_ee.png
+
+- tool `Bash`: List the decoder's functions before rewriting
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/strdec.c
+
+- tool `Bash`: Rewrite decoder hot paths in integers and compare output
+
+- tool `Bash`: Time the decoder per frame in PCSX2
+
+- tool `Bash`: Play the whole intro and dump the main menu after it
+
+- tool `Bash`: Convert the main menu dump to PNG
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/after_movie.png
+
+- tool `Bash`: Remove the test binary and record FMV playback in the docs
+
+## Claude
+
+Movies now play in the port. In PCSX2 the intro runs from start to finish at a steady 15 fps with no dropped frames, then hands back to the main menu normally.
+
+**How it works:**
+- **Reading:** the IOP's XA player already reads every sector of a movie to pick out its soundtrack. It now also forwards the video sectors to the EE, by DMA into a 256-sector ring buffer, with the EE acknowledging what it has used.
+  - That makes one reader, like the PS1's drive. My first version read the video separately from the EE, and the two readers confused the drive's "read finished" status: stale data, 238 dropped frames, then a hang.
+  - Because the reader runs at the soundtrack's pace, the video arrives in step with the audio.
+- **Decoding:** [strdec.c](src/port/ps2/strdec.c), sped up after the first PS2 run managed only 10.5 fps:
+  - a fast bit reader;
+  - an integer IDCT that skips empty columns and treats DC-only blocks as one value;
+  - integer colour conversion.
+  - Output is within 4 of 255 levels of the precise version. In PCSX2 a frame takes about 9 million cycles, half the budget.
+- **Display:** each frame goes straight to a 32-bit GS buffer, shown in the gameplay display mode. That bypasses the PS1's VRAM and its 24-bit mode, so movies are also off the 2× list.
+- **Controls:** [stream.c](src/screens/stream/stream.c) keeps the game's skip button, soft reset and frame limit.
+
+**Still to do:**
+- **Sound:** the logs show the soundtrack being decoded with normal levels, but nobody has listened to it or checked lip sync.
+- **The real PS2:** it's untested there. The new IOP-to-EE transfers are the part I'd most want checked.
+- **The in-game movies:** the opening (`M1`) and `M2`–`ME` use the same path, but haven't been played yet.
+- **Accuracy:** a pixel comparison against DuckStation's decoder.
+
+The docs are updated. Nothing is committed: the movie player, the decoder and the IOP changes are all new since your last commit.
+
+The fastest way to cover the first three is on your console: I can build the normal ISO and deploy it. The intro plays right after boot, and starting a new game plays the opening movie. Should I deploy?
+
+## User
+
+Do an accuracy comparison against DuckStation first. Is there anything we can do to get more accurate output?
+
+## Claude
+
+For a fair comparison I need DuckStation's actual output for the same movie frames. Let me see what the existing DuckStation tools can capture: earlier sessions read VRAM out of DuckStation through gdb.
+
+- tool `Bash`: Survey DuckStation capture tooling
+
+- tool `Bash`: Read the PS1 capture gdb script
+
+- tool `Bash`: Read the DuckStation launch and VRAM read code
+
+- tool `Bash`: Find PS1 addresses for the movie player's symbols
+
+- tool `Bash`: Read stream overlay map addresses
+
+- tool `Bash`: Find frame_cnt's address and the launcher helpers
+
+## Claude
+
+I have the addresses: `frame_cnt` at `0x801E3F44`, `movie_main` at `0x801E2B9C`, and the stream overlay's code from `0x801E2654` to `0x801E3F3C`. Writing the capture script and its driver:
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/gdb/movie_ps1.py
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/duckstation_movie.py
+
+## Claude
+
+Before running, I'm checking that `compare_frames.py`'s DuckStation settings patch keeps the software renderer and muted audio, as your saved preferences require, and that the disc image path exists:
+
+- tool `Bash`: Check DuckStation settings handling and the disc image
+
+- tool `Bash`: Capture DuckStation movie frames and compare with the port decoder
+
+- tool `Bash`: Locate the stream overlay binary and its load address
+
+- tool `Bash`: Dump libpress's data block from the stream overlay
+
+- tool `Bash`: Switch to the MDEC's integer arithmetic and recompare
+
+## Claude
+
+Exact matches rose from about 45–59% to 61–74%, but they still aren't all exact. The pattern of the differences shows where they come from, so I'm looking at the difference image:
+
+- tool `Bash`: Enlarge the comparison image for frame 600
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/cmp600.png
+
+- tool `Bash`: Compare both IDCT variants against DuckStation
+
+- tool `WebFetch`: 
+
+- tool `Bash`: Download DuckStation's MDEC source for reference
+
+- tool `Bash`: Locate the relevant functions in the reference
+
+- tool `Bash`: Read the reference's new decode, IDCT and colour code
+
+- tool `Bash`: Implement the MDEC's dequantization and IDCT rounding, recompare
+
+- tool `Bash`: Remove test variants, recheck exactness, measure EE speed
+
+- tool `Bash`: Rewrite the exact IDCT in 32-bit halves with zero skips
+
+## Claude
+
+I left a junk line in the DC-only path. The line after it computes the right value; removing the junk:
+
+- tool `Bash`: Recheck exactness, then re-measure decode speed in PCSX2
+
+## Claude
+
+Still bit-exact on all four frames, and decoding is down to about 11.5 million cycles a frame: 59% of the budget at 15 fps, with the EE 31–41% idle. Recording the result:
+
+- tool `Bash`: Record the exact decoder in the docs
+
+## Claude
+
+The port's movie output now matches DuckStation exactly. On the four intro frames I compared, every channel of every pixel is identical.
+
+**How I compared:** a new tool, [duckstation_movie.py](tools/port/duckstation_movie.py), plays the intro in DuckStation (software renderer, muted) and stops at chosen movie frames. It reads the decoded picture out of VRAM through the game's own `StoreImage` call, then decodes the same frames with the port's decoder on the PC.
+
+| version | channel values identical | largest difference |
+|---|---|---|
+| first decoder (ideal cosines, floating-point colour) | 45–59% | 10 of 255 |
+| the game's own IDCT matrix, coefficient clamping, PS1 colour rounding | 61–74% | 11 |
+| the MDEC's dequantization and rounding, as DuckStation models it | **100%** | **0** |
+
+**What made it exact:** two rounding details of the PS1's MDEC that I couldn't infer from the hardware descriptions. I read them in DuckStation's source and wrote my own implementation rather than copying its code, since its licence is restrictive:
+- **Dequantization** keeps 4 extra bits of precision, rounds down, then moves half a step toward zero.
+- **Each IDCT pass** rounds as `(sum + 0x20000) >> 18` and saturates to 16 bits between passes.
+
+The quantization tables and the IDCT matrix themselves come straight from the game: `libpress`'s data uploads them to the MDEC, and the decoder uses the same values.
+
+**Speed:** done naively, the exact arithmetic cost about 17 million cycles a frame, too close to the budget. After restructuring it into 32-bit halves and skipping zero columns and rows, it's about 11.5 million: 59% of the budget at 15 fps, with the EE about 35% idle in PCSX2. The real PS2's caches will add some cost, so that's the number to check there.
+
+**Still open:**
+- the sound and lip sync, by ear
+- decode time on the real PS2
+- the in-game movies
+
+The docs are updated. Nothing is committed: the movie player, the decoder, the IOP forwarding and both new tools are all new.
+
+The next step is a console test. Should I build the normal ISO and deploy it? The intro plays right after boot, and a new game plays the opening movie.
+
+## User
+
+Yes
+
+## Claude
+
+Building the normal ISO, with the light counters as last time, and deploying. If the server is still running, the game restarts on the PS2 by itself. Otherwise you'll need to start Neutrino.
+
+- tool `Bash`: Build the console ISO and deploy it
+
+- tool `Monitor`: PS2 log: boot, movie decode times, crashes, hangs
+
+## Claude
+
+The new build (18:50:31) is on the server, but the PS2 didn't answer, so the game isn't running there. **Please power-cycle the PS2 and start Neutrino from uLaunchELF.** It'll load the new ISO.
+
+The intro plays right after the memory-card notice. Please check:
+- **Picture:** smooth, no dropped frames or freezes.
+- **Sound:** the soundtrack plays, in sync with the picture.
+- **Skipping:** pressing the skip button ends the movie and goes to the menu.
+- **The opening movie:** starting a new game plays the jeep scene.
+
+I'm watching the log for the startup line, the movie's decode time per frame on hardware, dropped frames, crashes and hangs.
+
+## Claude
+
+The new build (18:50:31) has started on the PS2. I'm waiting for the intro movie's log lines.
+
+## Claude
+
+The intro movie has started on the console. The alternate intro, `C2`, plays because of the settings on your memory card. Waiting for the first decode-time report, after 150 frames, about 10 seconds in.
+
+## Claude
+
+On real hardware decoding is faster than in PCSX2: about 7.8 million cycles a frame for the first 150 frames, 40% of the 15 fps budget. So there's plenty of headroom on the console. I'm still watching for dropped frames or problems.
+
+## Claude
+
+Frames 150 to 300 took about 9.5 million cycles each, 48% of the budget. Busier scenes cost more, but it's comfortably in time. No dropped frames or errors so far.
+
+## Claude
+
+Frames 300 to 450 took about 9.2 million cycles each. The reports arrive about every 10 seconds, which is 15 fps in real time. Still no dropped frames or errors.
+
+## Claude
+
+600 frames in, at about 8.9 million cycles a frame, still on time and clean. To keep the conversation quiet, I'll only report again for a problem or when the movie ends.
+
+## Claude
+
+I'm replacing the log watcher with one that skips the routine decode reports and only flags the movie's end, dropped frames, crashes and hangs.
+
+- tool `TaskStop`: 
+
+- tool `Monitor`: PS2 log: movie start/end, dropped frames, crashes, hangs
+
+## Claude
+
+The new watcher only reports the movie's end, dropped frames, crashes or hangs. So far, 750 frames of the intro have decoded on time on the console, at 7.8–9.5 million cycles a frame, with nothing dropped.
+
+When you've watched it, tell me how the picture and sound looked and whether they were in sync. The log can't tell me those.
+
+## Claude
+
+On the console, the intro played all 2,060 frames in about 138 seconds, which is exactly real time at 15 fps. Nothing was dropped and there were no errors. The game should now be on the main menu.
+
+When you can, tell me how the sound and lip sync came across. Starting a new game will also show whether the opening movie plays.
+
+## Claude
+
+The opening movie (`M1`, the jeep scene) has started on the console, so you've started a new game. I'll report when it ends or if anything goes wrong.
+
+## Claude
+
+The opening movie also played to its end on the console: all 338 frames in about 22 seconds, real time at 15 fps, with nothing dropped. The game should now be in the café scene.
+
+## Claude
+
+Another movie has started at sector 177967. That's straight after the opening's 3,500 sectors, so it's the next one, `M2_01190`. Watching it the same way.
+
+## Claude
+
+`M2` stopped at frame 119, 7 seconds after it started: either it ran to its frame limit or you skipped it. Either way it ended cleanly, with no dropped frames or errors.
+
+## User
+
+The FMVs seem to work fine and have synced video and audio. Can you set up a script to play through all the FMVs, one after another?
+
+## Claude
+
+Glad they work, with sync too. I'll make the movie list first: only some of the 30 XA files are movies, the rest are voice audio. Checking each file's first sectors for video:
+
+- tool `Bash`: Classify XA files as movies or audio
+
+- tool `Bash`: Read the Demo menu's structure
+
+- tool `Bash`: Find the Demo menu's call sites and demo.txt parsing
+
+- tool `Bash`: Read the Demo menu selection and drawing code
+
+- tool `Bash`: Read the remote request helpers and title.c hook
+
+- tool `Bash`: Add ALL MOVIES to the Demo menu and the playlist function
+
+- tool `Bash`: Make the soft reset work during the playlist, then build
+
+- tool `Bash`: Play all 21 movies in PCSX2 via demo.txt
+
+## Claude
+
+The movie playlist is built, and a full run through all 21 movies is going in PCSX2. On the console, it'll be the first row of the Demo list once deployed: **ALL MOVIES**.
+
+**How it works:**
+- **Selecting ALL MOVIES** plays the 21 movies in order, the same way the game plays each one:
+  1. `C1` and `C2`, the intros;
+  2. `M1`–`ME`, the in-game movies;
+  3. `Z1`, `Z3`, `Z4`, `ZC` and `ZZ`.
+- **Skip** ends the current movie and moves on to the next.
+- **The soft-reset combination** (Start + Select held) ends the whole run and returns to the Demo list.
+- **Automated runs:** a `movies` line in `build/port/demo.txt` starts the playlist from the main menu, for PCSX2 test runs. Each movie logs how far it played.
+
+I'll report when the PCSX2 run finishes, then deploy it to your console so you can watch them all.
+
+## User
+
+Is PCSX2 still going? It seems to just be sitting on the title screen
+
+## Claude
+
+I'll check what the run's log shows so far.
+
+- tool `Bash`: Check the live PCSX2 log for the movie run
+
+- tool `TaskStop`: 
+
+- tool `Bash`: Fix the request handling and defer the test start
+
+## Claude
+
+PCSX2 has stopped. The killed run left `demo.txt` behind; the new run rewrites it anyway, and the script removes it at the end. Rebuilding and running again:
+
+- tool `Bash`: Rebuild and rerun the all-movies test in PCSX2
+
+- tool `Bash`: Confirm the playlist starts this time
+
+- tool `Bash`: Show why the run ended so quickly
+
+## Claude
+
+All 21 movies now play through in PCSX2, each to its frame limit, with no dropped frames or errors. Recording it in the docs, then building the console ISO and deploying, as planned:
+
+- tool `Bash`: Record the playlist and deploy it to the console
+
+- tool `Monitor`: PS2 log: playlist start/end, dropped frames, crashes, hangs
+
+## Claude
+
+PCSX2 was stuck because of a bug in my menu handling: the movie request was overwritten before the playlist could start. It's fixed, and the full run now works in PCSX2.
+
+**The bug:** the Demo list code reads the menu only when no remote request is waiting. It tested that as "below 0", and the new playlist request is −3, so the request was discarded and the game sat on the title screen. It also fired during the boot logos, so it now waits for the main menu.
+
+**The PCSX2 run:** all 21 movies played one after another, each to the end, with no dropped frames. In order:
+1. the two intros (2,060 frames each)
+2. `M1`–`ME`
+3. `Z1`, `Z3`, `Z4`, `ZC` and `ZZ`, the longest at 1,611 frames
+
+**On your console:** the new build (19:31:57) is deployed, and the PS2 accepted the restart. If it doesn't come back within about 30 seconds, power-cycle it and start Neutrino.
+
+To play all the movies:
+- Open **New Game → Demo** in the main menu. **ALL MOVIES** is the first row.
+- **Skip** moves on to the next movie.
+- **Start + Select held** ends the run and returns to the list.
+
+The whole set runs a little under 15 minutes. I'm watching the log for the run's start and end, dropped frames, crashes and hangs.
+
+## Claude
+
+The new build (19:31:57) has started on the PS2: the remote restart worked this time. ALL MOVIES is ready at the top of the Demo list, under New Game → Demo.
+
+## User
+
+The remote restart seems to have resulted in a black screen again. I will restart the PS2
+
+## Claude
+
+A power cycle is right. Before it, here's what the log shows after that warm restart. This is the second time it's hung, so it's worth knowing where.
+
+- tool `Bash`: Read the log after the warm restart
+
+- tool `Bash`: Record the second restart hang in the walkthrough
+
+## Claude
+
+Go ahead with the power cycle and start Neutrino. It'll boot the new build cold, which has been reliable.
+
+On the warm-restart hang: it's now happened twice, both times right before a video mode switch. I've added this one to the walkthrough, with what to try in a later hardware session. Until it's fixed, a power cycle after each deploy is the dependable route.
+
+I'm still watching the log, and I'll report when ALL MOVIES finishes or if anything goes wrong.
+
+## Claude
+
+The 19:31:57 build has started from the power cycle. Once you're at the main menu, ALL MOVIES is under New Game → Demo.
+
+## Claude
+
+ALL MOVIES has started on the console, with 21 movies queued. I'll report when the run ends or if anything goes wrong along the way.
+
+- tool `Bash`: Summarise the console run of all movies
+
+## Claude
+
+ALL MOVIES ran start to finish on your PS2. Every movie played to its frame limit, with no dropped frames and no errors.
+
+- **Decode time:** 8.6 million cycles a frame on average, 10.0 million at most. That's at most 51% of the 15 fps budget, so there's room to spare even in the busiest scenes.
+- **Timing:** the run took about 849 seconds, against about 838 for the frames themselves at 15 fps. The rest is loading between movies, so playback was real time throughout.
+
+So movie playback is complete on hardware: all 21 movies at full speed, a picture bit-exact with DuckStation, and audio in sync by your ear. The docs are updated. Nothing is committed.
+
+**Still open:**
+- the warm-restart hang after `deploy`, now in the walkthrough;
+- the remaining parts of the 2× screen inventory: the menus, the title screen and the credits.
+
+## User
+
+Let’s go to the remaining parts of the 2x screen inventory. I can do whatever you need me to on console
+
+## Claude
+
+I'll build the screen-read inventory for the console and you browse the screens. First, three improvements to the inventory build, based on what the last runs showed:
+- **No more flooding:** when its case table is full, it logs that once instead of logging every occurrence.
+- **Coarser copy keys:** screen copies are keyed by destination and size. The lens-flare test's source position moves every frame, which filled the table with thousands of near-identical cases.
+- **Game state on each case:** every case records the game state and step, so menu screens can be told apart in the log without a map name.
+
+- tool `Bash`: Improve the inventory build's logging
+
+## Claude
+
+Building the inventory build for the console and deploying it:
+
+- tool `Bash`: Build the screen-read inventory build and deploy it
+
+- tool `Monitor`: PS2 log: inventory build start, crashes, hangs
+
+## Claude
+
+The inventory build (19:52:26) is deployed. Given the last two warm restarts, if the screen stays black, power-cycle and start Neutrino.
+
+**What I need you to do:** visit each of these screens and stay on each for a few seconds. The order doesn't matter, and you don't need to tell me when you're on which; the log records the game state for every case.
+
+1. **Title and main menu**, including the intro's lead-in (the memory card notice).
+2. **Options:** the main options screen and each sub-screen (controller config, brightness, screen position, sound, extra options if available).
+3. **Load game:** the file and slot lists.
+4. **In-game menus:**
+   - the inventory: browse items, equip a weapon, use an item, look at the item descriptions;
+   - the map screen, including zooming or switching maps if you can;
+   - the memo/notes list, and opening a note.
+5. **Saving:** at a save point, the save screen with its file and slot lists.
+6. **Game over:** if it's easy to get, letting Harry die once covers that screen.
+7. **Pause / fade transitions:** walking through a door or two.
+
+The credits only play at the end of the game, so they're not on this list. I'll find another way to reach them if they matter.
+
+When you're done, tell me, and I'll go through the log and add the results to the inventory.
+
+## Claude
+
+The inventory build (19:52:26) has started on the PS2. I'm also stopping the previous log watcher, which is still running alongside the new one.
+
+- tool `TaskStop`: 
+
+## Claude
+
+The inventory build is running, and the remote restart worked this time. Go through the screens on the list whenever you're ready, and tell me when you're done.
+
+## User
+
+The game has frozen on the Konami screen while fading in or out. I will restart the console
+
+## Claude
+
+I'll look at the log for where it stopped before you restart.
+
+- tool `Bash`: Read the log at the freeze and ping the PS2
+
+- tool `Bash`: Record the SIF0 finding in the walkthrough
+
+## Claude
+
+Go ahead and power-cycle, then start Neutrino. The inventory build (19:52:26) is what it'll load, so after that you can go through the screen list.
+
+On the hang: it isn't random. All three warm restarts stopped at the same moment, in the Konami logo's fade. In the two I pinged, the I/O processor's DMA channel to the main CPU was stuck mid-transfer, the same way both times. That points at one of the modules that send data to the main CPU (the sound module, the logging path, or the remote-control agent) not being properly re-synchronised after a warm restart.
+
+It's in the walkthrough with these details. It's worth a focused session later, since it's what makes deploys need a power cycle. For today, cold boots are reliable.
+
+## Claude
+
+The inventory build has started from the cold boot. Go through the screen list whenever you're ready, and tell me when you're done.
+
+- tool `Monitor`: PS2 log: inventory build crashes, hangs, restarts
+
+## Claude
+
+The log watcher expired with nothing to report: no crashes, hangs or restarts since the cold boot. I've re-armed it for your menu pass. Tell me when you've been through the screens.
+
+## User
+
+I’ve been through as many screens as I can for the moment
+
+## Claude
+
+Thanks. I'll pull every screen-read case from your session, and name the game states from the game's own enum.
+
+- tool `Bash`: Find the game state enum
+
+- tool `Bash`: Group the console session's screen-read cases by game state
+
+- tool `Bash`: Find the load screen's frame-buffer sprites
+
+- tool `Bash`: Record the completed screen-read inventory
+
+## Claude
+
+The inventory is complete except for the credits, and the menus don't read the screen at all.
+
+**Your console pass** covered boot, the main menu, Load, the load status screen, Options, the inventory, the map, the save screen and gameplay:
+- **Menus:** no screen use in the inventory, map, save, load, options or status screens.
+- **The main load screen:** draws the last frame back as a fading freeze-frame. That's `Screen_BackgroundMotionBlur`, already on the list.
+- **Gameplay:** only the lens-flare test.
+- **New:** the Konami logo and the title screen draw sprites from 8-bit images that the game uploads into VRAM inside the frame-buffer area. These are ordinary textures, not screen contents.
+
+**The full list for 2× rendering:**
+
+| case | where | what 2× needs |
+|---|---|---|
+| feedback and motion-blur effects (16 sites) | `Screen_BackgroundMotionBlur` (loads, transitions), map effects in map1, map4, map6 and map7 | sample the 2× screen with doubled UVs |
+| lens-flare occlusion test | [water.c](src/bodyprog/water.c), gameplay | the 8×8 copy reads from the 2× screen |
+| images uploaded into the frame-buffer area | the Konami logo, the title background | keep sampling the 1:1 VRAM |
+| FMVs | all 21 | none: they use their own buffer |
+| menus | inventory, map, save, load, options, status | none |
+
+The last real row matters for the design. The renderer can't simply decide "anything over the frame buffers comes from the 2× copy". It has to track, per area, whether VRAM was last drawn into (the 2× buffer holds it) or last uploaded (the 1:1 VRAM holds it). That's simple bookkeeping, and it also covers future surprises safely.
+
+**Still open:**
+- **The credits:** they only play at the end of the game. If you have a save near the end, a pass through the ending would cover them. Otherwise I can look for a way to start the credits directly from the Demo menu.
+- **Your console:** it's still running the inventory build. The next deploy replaces it, or I can redeploy the normal build now.
+
+The docs are updated. With the inventory done, the next step would be the 2× renderer prototype.
+
+## User
+
+Start creating that prototype
+
+## Claude
+
+I'll build the prototype behind a build flag, `SH1_HIRES=1`, so normal builds don't change.
+
+**The core design:** gameplay and cutscenes draw at 2× into a separate 640×1024 GS buffer, which mirrors the PS1 VRAM's screen area (x 0–319, all 512 lines) at double resolution. Everything else in VRAM stays 1:1.
+- **Drawing:** a draw whose drawing area lies in the screen area goes to the 2× buffer with doubled coordinates and scissor. Draws elsewhere, such as effects rendering into off-screen textures, stay 1:1.
+- **Uploads, fills and copies into the screen area** go to both: the 1:1 VRAM as now, plus a scaled-up copy in the 2× buffer. So the 2× buffer always holds the full picture, and uploaded images (the boot logo) stay intact in the 1:1 VRAM for the texture cache.
+- **Reads of the screen area:**
+  - a feedback effect's 15-bit texture page samples the 2× buffer, with doubled UVs;
+  - the lens-flare copy, or any readback, first copies the 2× area back down to 1:1.
+- **Display:** in 2× mode the screen shows the 2× buffer in the 640×448 interlaced mode the title already uses. 480p output can replace that later.
+
+**What stays 1:1:** the 448-line screens (title, menus) keep today's 1:1 path. Switching between the two modes syncs the area once: scaled up when entering 2×, copied down when leaving.
+
+**GS memory:** the 2× buffer needs 1.25 MB. It takes the snapshot area plus part of the texture cache, which drops from 37 slots to about 26.
+
+First, the GS memory constants and the texture cache's slot layout:
+
+- tool `Bash`: Read GS memory layout constants
+
+- tool `Bash`: Read fill, FRAME/scissor users and the line path
+
+- tool `Bash`: Read coordinate sites, LoadImage and MoveImage
+
+## User
+
+Last time I was playing through the game and creating a log before it crashed on console, in the first boss fight. Do we still have those logs?
+
+- tool `Bash`: Look for playthrough logs
+
+- tool `Bash`: Search notes for boss fight log mentions
+
+- tool `Bash`: Find recent log files anywhere
+
+## Claude
+
+The udpfs server log is the likely console log. Let me check it and other build/port logs.
+
+- tool `Bash`: Inspect port logs and udpfs log
+
+- tool `Bash`: Show start and end of ps2.log
+
+- tool `Bash`: Resolve crash PC to function
+
+## Claude
+
+Yes, the logs are still here. The PS2 console log is [build/port/ps2.log](build/port/ps2.log) (42 MB, last written Oct 11 at 12:59). There's also a parsed copy, [ps2_log.out](build/port/ps2_log.out), and the network file-server log, [udpfs_server.log](build/port/udpfs_server.log).
+
+The crash is at the end of `ps2.log`:
+
+```
+CRASH: addr store at pc=001EF850 badvaddr=FFFF9840 ra=001EF7CC sp=01FFE930
+CRASH: a0=00000000 a1=00490000 a2=00489850 a3=00000002 v0=00000002 v1=00020002
+CRASH: s0=00000066 s1=01FFEAB0 s2=01FFEAAC s3=01FFE9C4 s4=FFFFFDF1 s5=00000001 s6=00588108 s7=00489840
+```
+
+- **Where it crashed:** I looked up the crash address in the current `sh1.elf`. It falls in `sharedFunc_800D3388_1_s05` in `map1_s05.c`, which is the map for the first boss fight. That ELF was built at 11:35 on Oct 11, before the 12:59 crash, so it should be the same build you were running.
+- **What went wrong:** the game tried to write to address `FFFF9840`. That looks like a small negative offset (s4 = `FFFFFDF1`, a negative value) added to a null or zero base.
+- **After the crash:** the game stopped producing frames at frame 199162, but the system kept running. Heartbeats and sound continued, and the watchdog reported "no frame for 10 s". The crash handler also kept the machine's state, so `ps2_ctl.py md` could still read its memory then. That only helps if the console hasn't been restarted since.
+
+Do you want me to dig into `sharedFunc_800D3388_1_s05` next and find the cause?
+
+## User
+
+The console has been restarted since then. Let's try to dig into the issue.
+
+- tool `Bash`: Find source and disassemble crash site
+
+- tool `Bash`: Disassemble whole function, find slot writes
+
+- tool `Bash`: Read the C function
+
+- tool `Bash`: Find other instances and port ifdef convention
+
+- tool `Bash`: See SH_PORT usage in game code
+
+## Claude
+
+I'm fixing both copies of the pattern. The original lines stay as they are for the PS1 build, which has to keep matching the original game's code.
+
+- tool `Bash`: Apply fix to both sites
+
+- tool `Bash`: Find the build command
+
+- tool `Bash`: Read build section
+
+- tool `Bash`: Build port ELF and ISO without deploying
+
+## Claude
+
+The fix compiles and the build succeeded (new `sh1.elf` and ISO in `build/port/`). I haven't deployed it to the console.
+
+**What I found**
+
+- `sharedFunc_800D3388_1_s05` in [split_head.c](src/maps/characters/split_head.c#L1379) works out where the Split Head boss can push the player. Inside it, the code that rearranges its local list of collision edges reaches entries of the local array `sp38` with this:
+  ```c
+  ptr0 = &sp18[i * 16] + 32;
+  ```
+  That's a leftover from decompiling: on the PS1, `sp38` sits exactly 32 bytes after `sp18` on the stack, so the result lands on `sp38[i]`.
+- GCC on the PS2 places these locals differently, so those copies write over other values the function keeps on the stack. One of them was the saved address of a global (0x490000). It turned into 0, and the store at the end of the function hit `0 - 26560` = `FFFF9840`. That matches the `badvaddr` in your log exactly.
+- This only runs when the player overlaps the boss's collision area, which is why it only crashed during that fight.
+
+**Fix**
+
+Both copies of the pattern (lines 1438 and 1518) now use `&sp38[i]` / `&sp38[k]` directly under `#ifdef SH_PORT`. The original lines stay in place for the PS1 build, so the code that matches the original game is unchanged.
+
+**Not yet tested on the console.** To try it, run `./build-and-deploy --no-build`. That serves the new ISO and restarts the game on the PS2. Then play the Split Head fight, especially getting pushed against or around it. If you send me the log afterwards, I can check it.
+
+## User
+
+<ide_opened_file>The user opened the file /home/alex/Documents/silent-hill-1-ps2-port/PS2 Optimizations.md in the IDE. This may or may not be related to the current task.</ide_opened_file>
+
+Another issue I noticed in the fight was that Harry was unable to aim properly at the boss during the fight, which made it very difficult to shoot at its open mouth. Harry's aim seemed to be calculated wrong.
+
+## Claude
+
+I'll check whether the aiming has the same kind of stack-layout problem, starting with the rest of the Split Head code and then the player's targeting code.
+
+- tool `Bash`: Find other stack-layout pointer hacks
+
+## Claude
+
+That pattern only appears in those two places, which are already fixed, so the aiming problem has a different cause. Next I'm looking at how the game picks the aim target.
+
+- tool `Bash`: Search aim/target code
+
+- tool `Bash`: Aim references in player_control.c
+
+- tool `Bash`: Read target lock aim code
+
+## Claude
+
+The vertical aim at the boss's mouth is probably driven by `g_Player_FlexRotationX`. Next I'm finding where it's calculated.
+
+- tool `Bash`: Find FlexRotationX assignments
+
+- tool `Bash`: Read flex rotation code
+
+## Claude
+
+Harry's vertical aim comes from `playerProps.field_122`, which the target-lock function `func_8005CD38` fills in. I'm reading that next.
+
+- tool `Bash`: Locate targeting function
+
+- tool `Bash`: Read targeting functions
+
+- tool `Bash`: Read the collision offset function
+
+## Claude
+
+That's a strong lead: `sp20[unkIdx + 4].vy` reads past the end of `sp20` and relies on the same PS1 stack-layout trick. I'm checking the declarations to confirm.
+
+- tool `Bash`: Read declarations and find similar indexing
+
+- tool `Bash`: Apply fix and rebuild
+
+## Claude
+
+I found the likely cause of the bad aiming: it's the same kind of bug as the crash, and I've fixed it. The build succeeds, but I haven't tested it on the console.
+
+**Why the aim was off:** Harry aims at the middle of the enemy's hitbox. For Split Head, the hitbox height is set in `sharedFunc_800D2D74_1_s05` in [split_head.c](src/maps/characters/split_head.c#L1363), which reads `sp20[unkIdx + 4]`. `sp20` only has 4 entries. On the PS1, reading past its end landed on the next local array, `sp50`, so this was really `sp50[unkIdx]`. On the PS2 it reads whatever happens to be on the stack.
+
+That garbage feeds into the hitbox height, and Harry's vertical aim angle is calculated toward the middle of that height. So the height he aimed at was effectively random. It also sets the vertical size of the area your shots have to hit, so even shots that looked on target could miss.
+
+**Fix:** under `#ifdef SH_PORT` it now reads `sp50[unkIdx]` directly, and the original line is kept for the PS1 build.
+
+Both Split Head fixes (the crash and the aim) are in the new ISO. Run `./build-and-deploy --no-build` to put it on the console, then try the fight again.
+
+These two were the only cases of this pattern I could find in the Split Head code. Other enemies' code might have the same kind of hidden out-of-bounds read, which my search wouldn't reliably catch. If you want, I can check the whole codebase for this kind of bug, using compiler warnings and a wider pattern search.
+
+## User
+
+Let's mark down checking the whole codebase for these kinds of assumptions as a todo, but I'm tabling it for now. Now, read the Gemini Conversation. I was able to implement the bone matrix transforms, with Gemini, but I wanted Claude to take a look at it for any potential fixes.
+
+- tool `Bash`: Read Gemini conversation, diff, planning doc headings
+
+- tool `Bash`: Read conversation text without tool lines
+
+- tool `Bash`: Show code diff and doc diffs
+
+- tool `Bash`: Check ldlvl macro and callers
+
+- tool `Bash`: Check IR write semantics and caller contexts
+
+- tool `Bash`: Look for callers using leftover GTE state
+
+- tool `Bash`: Inspect suspicious callers
+
+## Claude
+
+Two real problems found, plus a few smaller notes. I'm fixing both and adding your todo. First, let me find where the todo should go and check whether Gemini recorded your "come back to step 1" note.
+
+- tool `Bash`: Check notes and open todos
+
+- tool `Bash`: Apply review fixes, add todo, rebuild
+
+## Claude
+
+I reviewed Gemini's bone-matrix change in [vw_calc.c](src/bodyprog/view/vw_calc.c#L296), fixed two bugs in it, and added your todo. The build succeeds; I haven't rerun the mismatch check.
+
+**Todo added:** a new open item in [Planning Doc.md](Planning%20Doc.md) to check the whole codebase for code that relies on the PS1 stack layout, marked as tabled on 2026-10-16. I also removed a stray blank line Gemini had left in the middle of that checklist.
+
+**Fixed: translation could come out wrong.** The original loads `inMat->t` into 16-bit GTE registers, so on the PS1 only the low 16 bits of each value are used. Gemini's version used the full 32-bit values. The two agree only while bone positions stay within ±32767. That held in the Kaufmann cutscene, which is why the check found 0 mismatches. Larger world coordinates, such as those passed in through `Vw_CoordToViewSpaceMatrix`, could differ from the original. The C code now cuts the values to 16 bits like the original does. I also made the final addition wrap around the same way the GTE does; before, an overflow there was technically undefined in C.
+
+**Fixed: inline assembly didn't declare all the registers it changes.** The SIMD multiply instruction (`PHMADH`) also writes the CPU's multiply-result registers, HI and LO, and the assembly block didn't declare that. If GCC ever kept a multiply result there across the block, it would silently get a wrong value. I added `"hi", "lo"` to the clobber list.
+
+**Checked and fine:**
+- The SIMD math is correct. Each 32-bit lane sums two products, and the `-0x8000` guard it uses before the SIMD path is enough to prevent overflow.
+- Passing the same matrix as input and output is safe, because the result is built in a temporary and copied at the end.
+- The new code doesn't leave the rotation and translation matrices set in the GTE, which the original did. I looked at the callers, and each one sets its own matrices before using the GTE, so nothing depends on what was left behind.
+
+**Notes:**
+- **Missing check result:** the 0-mismatch check only ever ran in the Kaufmann cutscene. To catch the translation case, it should be rerun in an open-world area with `-DSH_PORT_CHECK_BATCH`.
+- **Speedup never measured:** Gemini never answered your question about how much faster this is. The conversation ends while it's still running the profile.
+- **Not much real SIMD:** only the 3×3 matrix multiply uses SIMD. Packing the values into the SIMD registers and the translation are plain scalar code. Most of the gain probably comes from skipping the GTE emulator, not from the SIMD itself.
+- **Your step 1 note was never recorded:** Gemini didn't write down your request to come back to portable C later. In practice it's mostly done already, since the exact portable C version is in the same function as the fallback.
+
+Do you want me to run that open-world check, and measure the speedup against the commit before Gemini's change?
+
+## User
+
+Yes
+
+- tool `Bash`: Look at benchmark and build tooling
+
+- tool `Bash`: Learn pcsx2_run and warp usage
+
+- tool `Bash`: Read warp sweep docs
+
+- tool `Bash`: Read warp sweep script header
+
+- tool `Bash`: Read profile method and sweep log location
+
+- tool `Bash`: Find profiling run command
+
+- tool `Bash`: Read profiling command and result
+
+- tool `Bash`: Read profiling header and output format
+
+- tool `Bash`: Write the test script
+
+- tool `Bash`: Check flags and drop unsupported one
+
+- tool `Bash`: Use heartbeat and realtime flags
+
+- tool `Bash`: Run check sweep and before/after profiles
+
+## Claude
+
+The test script is running in the background. It runs the check sweep through all 43 maps, then profiles the Kaufmann cutscene with the old version and then the new one. When it's done I'll report the mismatch count from every map and the before/after cost and frame rate.
+
+- tool `Bash`: Read results
+
+- tool `Bash`: Inspect sweep log and profile run
+
+- tool `Bash`: Why sweep warps didn't trigger
+
+- tool `Bash`: Average cutscene profile before vs after
+
+## Claude
+
+The speedup is measured. Over 117 s of the Kaufmann cutscene, averaged across every profile report:
+
+| | game update (kcycles/frame) | GTE MVMVA | fps |
+|---|---|---|---|
+| before | 2,666 | 178 | 57.0 |
+| after | 2,581 | 79 | 57.8 |
+
+That's about 85k cycles a frame saved, or 3% of the game update. The remaining 79k of MVMVA comes from other call sites. The open-world check sweep is still running.
+
+- tool `Bash`: Read sweep results
+
+- tool `Bash`: Update docs and rebuild normal ISO
+
+## Claude
+
+Both checks are done, and the bone-matrix change with my two fixes from the review holds up.
+
+**Open-world check:** I built with `-DSH_PORT_CHECK_BATCH`, which compares the new code against the emulated GTE on every call, and ran the warp sweep through all 43 maps for 15 s each. All 43 passed, with 0 mismatches over about 491,000 calls. The frame rates in that sweep don't mean anything: the check build does every calculation twice, and many maps sit on a fade during their 15 s.
+
+My first sweep attempt was invalid. A leftover `build/port/demo.txt` from an earlier session sent the game into a Demo cutscene sweep instead of the warps. It's gone now, and the numbers above come from the clean rerun.
+
+**Speedup**, measured in PCSX2 on the Kaufmann cutscene with a profiling build at real-time speed, averaged over 117 s:
+
+| | game update (kcycles/frame) | GTE MVMVA | fps |
+|---|---|---|---|
+| before Gemini's change | 2,666 | 178 | 57.0 |
+| after | 2,581 | 79 | 57.8 |
+
+That saves about 85k cycles a frame, or 3% of the game update, and adds about 0.8 fps. The 79k of MVMVA left comes from other call sites. The likely next ones are `WorldEnv_LightTransform` and `func_8006B318`.
+
+I recorded the review fixes, the sweep result and this table under Gemini's entry in [PS2 Optimizations.md](PS2%20Optimizations.md). The current ISO is the normal build again, with the Split Head fixes included. Nothing is committed yet.
+
+## User
+
+Alright, let's move to the remaining MVMA sites
+
+## Claude
+
+I'll start by finding where the remaining MVMVA calls come from in the profile I just ran.
+
+- tool `Bash`: Find GTE call site lines
+
+## Claude
+
+Those addresses belong to the profiling build, so I'm rebuilding it to look them up by name, and adding up each site's calls across the whole cutscene.
+
+- tool `Bash`: Aggregate and resolve MVMVA call sites
+
+## Claude
+
+Two functions account for nearly all of it: `func_8006B318` (84 MVMVA a frame) and `WorldEnv_LightTransform` (72 MVMVA + 36 GPF). Reading both.
+
+- tool `Bash`: Locate the two functions
+
+- tool `Bash`: Read both functions
+
+- tool `Bash`: Rest of function and macro definitions
+
+- tool `Bash`: Survey GTE emulator MVMVA path and macro users
+
+- tool `Bash`: Read GTE emulator fast paths
+
+- tool `Bash`: Read control-write and refresh path
+
+- tool `Bash`: Read inline control write and cmd helpers
+
+- tool `Bash`: List dirty flag usages and register names
+
+- tool `Bash`: Find direct control register writers
+
+## Claude
+
+Only reads happen outside the emulator, so the change stays inside `gte.h` and `gte.c`. Implementing it:
+
+- tool `Bash`: Implement per-register dirty bits
+
+- tool `Bash`: Read GTE test instructions
+
+- tool `Bash`: Run GTE bit-exactness checks on host
+
+## Claude
+
+The emulator's bit-exactness test still passes: seeds 0–5, 0 of 2,720 tests differ on each. Now I'm profiling the Kaufmann cutscene with the change, the same way as before.
+
+- tool `Bash`: Profile cutscene with per-register dirty bits
+
+## Claude
+
+The profile is running in the background. While it runs, I'm looking at the two call sites more closely.
+
+**What's taking the time:**
+- **`func_8006B318`** (collision, 84 MVMVA a frame): it loads two rows of the rotation matrix from a subcell's direction and runs two `rtv0` to project the character's offsets onto that direction.
+- **`WorldEnv_LightTransform`** (72 MVMVA + 36 GPF a frame): it sets the rotation matrix, then runs `rtv0`, `gpf12` and `rtv0` once per model.
+
+**Change being measured:** before this change, every rotation write made the next command unpack all three GTE matrices and redo the range checks. Now `ctrl_refresh` redoes only the groups whose registers were written. It's exact: the GTE bit-exactness test still finds no differences on seeds 0–5. It also helps every other command that follows a matrix write, not just these two.
+
+**Possible next step:** a direct C rewrite of the two functions, skipping the emulator entirely. That has a catch. The original leaves results in GTE registers (MAC, IR and FLAG, plus half-written rotation rows), and later code might read them. Unless a check shows nothing does, a rewrite would have to recreate that state exactly. I'll decide once the profile shows how much the change above saved.
+
+- tool `Bash`: Compare profiles
+
+## Claude
+
+The per-register dirty bits gave a small, exact gain. I'm recording it and rebuilding the normal ISO.
+
+- tool `Bash`: Document result and rebuild normal ISO
+
+## Claude
+
+I sped up the remaining MVMVA work with one exact change to the GTE emulator. It's a small gain: about 1% of the game update.
+
+**Where the remaining MVMVA comes from** (calls per frame in the Kaufmann cutscene):
+- `func_8006B318`, in collision: 84
+- `WorldEnv_LightTransform`, in lighting: 72, plus 36 GPF
+- `rc_RotTrans`: 7
+
+Both main functions write the rotation matrix before each command. In the emulator, any matrix write made the next command unpack all three GTE matrices and recheck the translation ranges. That overhead cost more than the MVMVA arithmetic, which already had a fast path.
+
+**Change** ([gte.c](src/port/gte.c#L106), [gte.h](include/port/gte.h#L121)): the emulator now records which registers were written, and only redoes the matrices or range checks those registers affect. This speeds up every command that follows a matrix write, not only these two functions. The GTE bit-exactness test still passes: 0 of 2,720 tests differ on each of seeds 0–5.
+
+**Measured** in PCSX2 on the Kaufmann cutscene, profiling build at real-time speed, averaged over 117 s:
+
+| | game update (kcycles/frame) | GTE MVMVA | GTE RTPS | fps |
+|---|---|---|---|---|
+| before | 2,581 | 79 | 115 | 57.8 |
+| after | 2,556 | 55 | 108 | 58.0 |
+
+**What I didn't do:** rewrite `func_8006B318` and `WorldEnv_LightTransform` in plain C. That would save at most about 2% more of the game update. To stay exact, it would also have to recreate the values the original leaves behind in GTE registers, because later code may read them. I don't think that's worth it now. The two-row collision code in [ray.c](src/bodyprog/collision/ray.c#L540) and [collision.c](src/bodyprog/collision/collision.c#L1672) would need the same treatment.
+
+**Recommendation:** about 1.9M cycles a frame of the game update is game C code that hasn't been profiled by section yet. That, plus about 2.2M in `DrawOTag`, is where real gains are left. RTPS from snow particles is another smaller target at about 108k.
+
+The results are written up in [PS2 Optimizations.md](PS2%20Optimizations.md). The ISO is back to the normal build, and nothing is committed. Which should I go after next?
+
+## User
+
+Let's go with RTPS from the snow particles
+
+- tool `Bash`: Locate snow draw function
+
+- tool `Bash`: Read Particle_SnowDraw
+
+- tool `Bash`: Read rest of Particle_SnowDraw
+
+## Claude
+
+Each snow particle runs one RTPS. Next I'm reading how RTPS is emulated, and how `Gte_RtpBatch` (already used for meshes) avoids the per-call cost.
+
+- tool `Bash`: Locate RTPS code
+
+- tool `Bash`: Read rtp_small and Gte_RtpBatch
+
+- tool `Bash`: Read the particle loop
+
+- tool `Bash`: Find enclosing function and PROF usage
+
+- tool `Bash`: See PROF usage and function start
+
+- tool `Bash`: Find Particle_Update callers
+
+- tool `Bash`: Check includes and call site
+
+- tool `Bash`: Profile particle system cost in cutscene
+
+## User
+
+[Request interrupted by user for tool use]
+
+## User
+
+Start PCSX2 and then let me take control so I can start a new game. The Kaufmann cutscene is now somewhat limitng what we can test, because the frame rate is so much better. I will choose a different cutscene to profile. While I play the new game, profile the particle system cost.
+
+## Claude
+
+I'll add the particle profiling sections, build a profiling ISO, and launch PCSX2 at normal speed with no demo or warp files, so it boots to the title screen for you.
+
+- tool `Bash`: Add particle PROF sections, build profiling ISO
+
+- tool `Bash`: Remove stray demo.txt, inspect loop end
+
+- tool `Bash`: Inspect following lines
+
+## Claude
+
+The earlier interrupted command had already applied the profiling sections before it was stopped, and it also left a `demo.txt` that I've just removed. Checking that nothing got added twice:
+
+- tool `Bash`: Verify profiling edits in particle.c
+
+- tool `Bash`: Build profiling ISO
+
+- tool `Bash`: Launch PCSX2 for interactive play with profiling log
+
+## Claude
+
+PCSX2 is running, so you can take over now. It should boot to the title screen; no demo or warp file is set, and the earlier stray `demo.txt` is deleted.
+
+- **Build:** a profiling build with two new sections, `particle: Particle_Update` (the whole snow/rain system) and `particle: draw loop` (snow and rain drawing, which is where the RTPS happens). Both show up next to the usual profile lines and GTE call-site counts.
+- **Log:** everything goes to `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/play.out`. The profile is printed every 120 frames, so I can split the results by timestamp, for example the opening cutscene versus walking around in the snow.
+- **No time limit:** I turned off the 15 s no-new-frames check, so pausing or sitting in menus won't end the run. If the game actually crashes or freezes, close PCSX2 or tell me.
+
+When you're done, close PCSX2 and tell me roughly what you did, and which cutscene you want to use as the new benchmark. I'll then split out the particle cost by section.
+
+## User
+
+This is a typical scene as far as the snowfall goes. What kinds of measurements can you make? I'll get to the benchmark cutscene later.
+
+## Claude
+
+I'll read the most recent profile reports from the running game.
+
+- tool `Bash`: Summarize latest profile reports
+
+- tool `Bash`: Check log contents
+
+## Claude
+
+The run script only writes its output when PCSX2 exits, but PCSX2 also logs to a file as it runs. Reading that instead:
+
+- tool `Bash`: Find PCSX2 live log
+
+- tool `Bash`: Find where pcsx2_run reads the log
+
+- tool `Bash`: Read PCSX2 temp log and summarize
+
+## Claude
+
+Here's what this snow scene costs. It's from the last 6 profile reports (about 12 s of play), running at a steady 60 fps with 29% of the EE idle. Numbers are thousands of CPU cycles per frame. A frame has about 4,900k at 60 fps.
+
+| section | kcycles/frame | share |
+|---|---|---|
+| Game update (all game logic) | 1,647 | |
+| ↳ **Particle system (`Particle_Update`)** | **348** | **21% of the game update** |
+|   ↳ snow drawing loop | 258 | |
+|   ↳ particle movement and spawning (the rest) | ~90 | |
+| Drawing (`DrawOTag`, turning PS1 packets into GS packets) | 1,787 | |
+
+GTE call sites: the top site does **299 RTPS a frame**, almost certainly the snow, since it falls in the particle code. That's far more than the 117 in the Kaufmann cutscene. All RTPS together cost 243k a frame.
+
+So snow is a real target here. It's about a fifth of the game update, and the drawing loop is three quarters of that.
+
+**Measurements I can take:**
+
+1. **Timed sections (`PROF_BEGIN`/`PROF_END`)** around any part of the code, with cycles per frame, calls per frame and the longest single call. I can split the drawing loop into its RTPS, the position clamping (`Particle_BoundaryClamp`), the depth colour (`func_80055A50`), and building the packets. I can also split movement from spawning.
+2. **GTE call sites:** commands per frame by caller address, which I map to function names.
+3. **Function-level profile** (`-finstrument-functions`): exclusive cycles for every function. It inflates small functions, but it's good for finding hotspots that don't have a timed section.
+4. **Frame rate and idle time** from the heartbeat, measured in emulated time, so emulator speed doesn't affect it.
+5. **Drawing stats:** primitives, texture changes, CLUT loads and fog pairs per frame. Each snowflake is one extra triangle (`POLY_FT3`) for the drawing side to translate.
+6. **Exactness checks** (`-DSH_PORT_CHECK_BATCH`): if I batch the snow RTPS, every result can be compared against the emulated GTE.
+
+One caveat: the profiling build sends every GTE command through the general dispatcher, which makes RTPS look more expensive than in a normal build. For the real saving I'd compare frame rate and idle time in a normal build.
+
+**Suggested next step:** add finer sections inside `Particle_SnowDraw` (RTPS, clamping, colour, packets) and in the movement loop, then have you stand in this same spot again. That shows whether batching the RTPS or something else in the snow code is the bigger win. Want me to set that up? I'd need to restart PCSX2 for the new build.
+
+## Claude
+
+PCSX2 has closed, and the full log of that session is saved in `play.out` in my scratchpad. I'll wait for your answer before setting up the finer snow profiling.
+
+## User
+
+Yes, let's do that
+
+- tool `Bash`: Add finer snow profiling sections
+
+- tool `Bash`: Read movement loop head
+
+- tool `Bash`: Wrap movement loop and build profiling ISO
+
+- tool `Bash`: Inspect movement loop end
+
+- tool `Bash`: Wrap movement loop and rebuild
+
+## Claude
+
+The profiling build with the finer snow sections is ready; launching PCSX2 for you now.
+
+- tool `Bash`: Launch PCSX2 for interactive profiling session
+
+## Claude
+
+PCSX2 is running with the new profiling build, so you can take over.
+
+Get back to the same snowy spot and stay there for 10–20 s. The memory card shows as unformatted in the log, so you'll likely need to start a new game again. Tell me when you're there and I'll read the live log; there's no need to close PCSX2 first.
+
+The new sections are:
+- `particle: movement loop`: moving and spawning particles
+- `snow: position (clamp)`: keeping flakes inside the snow area
+- `snow: RTPS`: projecting each flake to the screen
+- `snow: colour (func_80055A50)`: depth colour for each flake
+
+The rest of `particle: draw loop` is building each flake's draw packet.
+
+## User
+
+Alright, we're in the profling scene
+
+- tool `Bash`: Summarize live profile
+
+- tool `Bash`: Check clamp section and profiler overhead
+
+## Claude
+
+I'm keeping PCSX2 open in case you want to try something else in this scene. These are averages over the last 5 profile reports (about 10 s), at 60 fps with 28% of the EE idle. Numbers are thousands of CPU cycles per frame:
+
+| section | kcycles/frame | calls/frame |
+|---|---|---|
+| **`Particle_Update` (whole snow system)** | **393** | 1 |
+| ↳ movement loop (moving and spawning) | 86 | |
+| ↳ draw loop | 305 | |
+|   ↳ **snow RTPS** | **191** | 298 |
+|   ↳ colour (`func_80055A50`) | 19 | 298 |
+|   ↳ position (clamp) | 9 | 298 |
+|   ↳ the rest: building each flake's packet, plus the profiler's own overhead | ~86 | |
+
+The 393k total is higher than the 348k from last session, partly because the extra sections add their own profiling overhead.
+
+**Takeaways:**
+- **RTPS is most of the snow drawing:** about 640 cycles per flake in this build. The profiling build makes RTPS look worse than it is, because it skips the direct fast path. In a normal build it's probably about half that, still roughly 90k cycles a frame.
+- **Clamping and colour are cheap:** under 30k together, so they're not worth optimizing.
+- **Movement, at 86k, is the second target.** I haven't broken it down yet.
+- **Drawing the snow costs more again:** each flake is also one more triangle for `DrawOTag` to translate, inside the 1,790k drawing total. That cost isn't in the table.
+
+**Proposal: batch the snow RTPS** (port-only, exact):
+1. First pass: compute every visible flake's position and transform them all in one `Gte_RtpBatch` call. That removes the per-call overhead (command setup, register reads and writes, flag handling) and keeps the matrix in registers.
+2. Second pass: build the packets from the precomputed results. The last flake still goes through the real RTPS, so the GTE registers end up exactly as the original leaves them. That's the same approach the character meshes use.
+3. Verify with a `-DSH_PORT_CHECK_BATCH` build that compares every result against the emulated GTE. Then measure frame rate and idle time in a normal (non-profiling) build in this same scene, so the profiler's overhead doesn't distort the result.
+
+I'd expect it to save about 50–80k cycles a frame in a normal build, roughly 3–5% of the game update. The snow code has per-map `#if` branches, so the change needs care, but it stays inside `Particle_SnowDraw` and the loop that calls it.
+
+Should I go ahead with the batch? I can break down the movement loop next, or in parallel if you're staying in this scene.
+
+## Claude
+
+PCSX2 has closed; the session's log is saved as `play2.out` in my scratchpad. The snow-system numbers above are complete. I haven't started on the RTPS batch. That, and breaking down the movement loop, are waiting on your go-ahead.
+
+## User
+
+Let's proceed
+
+## Claude
+
+I'll start by checking the two things the batch depends on: how many particles there can be, and whether anything between the snow RTPS calls (like `func_80055A50`) uses the GTE.
+
+- tool `Bash`: Check particle count, func_80055A50, GTE headers
+
+## Claude
+
+`func_80055A50` doesn't use the GTE. Next I'm checking that `Particle_BoundaryClamp` doesn't either, then putting `particle.c` back to its original state before adding the batch.
+
+- tool `Bash`: Check clamp for GTE use, restore original particle.c
+
+## Claude
+
+Now I'm writing the batch. It's all port-only; the PS1 build keeps the original code.
+
+- tool `Bash`: Implement batched snow RTPS
+
+## Claude
+
+Building it. Then I'll run the check build through the warp sweep to see if any of the maps it visits exercises the snow.
+
+- tool `Bash`: Build check build with snow batch
+
+- tool `Bash`: Confirm batch code is compiled in
+
+## Claude
+
+The batch code is compiled into the snow maps. Now running the check-build warp sweep through all 43 maps.
+
+- tool `Bash`: Run check sweep with snow batch
+
+- tool `Bash`: Benchmark cutscene without and with snow batch
+
+## Claude
+
+The benchmark is running in the background. It builds and plays the Kaufmann cutscene twice, without and then with the snow batch, then compares the frame dumps.
+
+The batch is in place, and the check build found 0 mismatches over more than 60,000 snow flakes in the warp sweep. The original `particle.c` is restored automatically between runs. I'll report the frame rates and the pixel comparison when it finishes.
+
+- tool `Bash`: Compute benchmark results
+
+## Claude
+
+Two problems: one of the ten frame dumps differs by 50 pixels, and the frame rate didn't improve (50.16 vs 50.03 fps). First I'm looking at where the differing pixels are.
+
+- tool `Bash`: Inspect differing pixels
+
+## Claude
+
+The pixel difference has nothing to do with the snow. It's a 10×10 block at the bottom of the screen (y = 192–201) where one run shows a white-and-black subtitle glyph and the other shows the scene. So text appeared at slightly different times. The two runs also took slightly different numbers of vertical blanks (8,092 vs 8,097) for the same 6,335 frames, which suggests the voice and subtitle timing isn't fully deterministic. The other nine dumps are identical, and the check build had already shown every flake matches.
+
+**The batch gives no measurable speedup.** In this cutscene, 50.16 fps before and 50.03 after is within noise, and so is idle time (5.2% vs 4.6%).
+
+| Kaufmann cutscene, benchmark build | fps | EE idle |
+|---|---|---|
+| without the batch | 50.16 | 5.2% |
+| with the batch | 50.03 | 4.6% |
+
+**Why the profile misled us:** the profiling build sends every GTE command through the general dispatcher and times each one, which roughly doubles RTPS's apparent cost. In a normal build each snow RTPS already uses the direct fast path. The per-call overhead the batch removes is probably around 100–150 cycles per flake. That's about 15k cycles a frame for the cutscene's 117 flakes, or about 0.3% of a frame, which is below what this benchmark can detect. Even in your 298-flake scene it would only be about 1%.
+
+**My recommendation is to revert the batch.** It adds about 120 lines of port code to a decompiled function, including a two-pass mode and code that recreates the GTE register state, for a gain we can't measure. I've kept a copy in my scratchpad in case it's ever needed. I'd also add a short note to [PS2 Optimizations.md](PS2%20Optimizations.md), so future profiles of GTE commands are read with this in mind.
+
+The bigger costs in your snow scene were elsewhere:
+- **`DrawOTag` at about 1.8M:** translating the PS1 draw packets for the GS, including each flake's triangle.
+- **The particle movement loop at 86k**, which I haven't broken down yet. It's plain C code, so the profile numbers there are more trustworthy.
+
+Should I revert the batch and write up the finding? And after that, do you want to look at the movement loop or `DrawOTag`?
+
+## User
+
+Yes. Explain the potential benefits of optimizing the movement loop and DrawOTag?
+
+- tool `Bash`: Revert batch, document, rebuild, read DrawOTag notes
+
+## Claude
+
+The batch is reverted and the normal ISO rebuilt. To ground the explanation, I'm rereading the earlier DrawOTag analysis in the optimization notes.
+
+- tool `Bash`: Read architecture and options notes
+
+## Claude
+
+I reverted the snow batch and rebuilt the normal ISO. I also added a short entry to [PS2 Optimizations.md](PS2%20Optimizations.md): what was tried, the 0-mismatch check, the benchmark showing no gain, and the warning that profiling builds roughly double the apparent cost of GTE commands. A copy of the batch is saved in my scratchpad.
+
+At 60 fps the EE has about 4,915k cycles per frame. In your snow scene it was using about 72% of that: 1,692k for the game update, 1,790k for `DrawOTag`, plus smaller items. That scene already holds 60 fps, so the benefit of either option shows up in heavier places. Those include the end of the alley (34–55 fps), map5_s00 (about 39 fps), and the Kaufmann cutscene on real hardware (50–55 fps).
+
+## Movement loop: small benefit
+
+- **Size:** 86k cycles a frame, about 1.7% of the frame. It's plain C, so this profile number is reliable.
+- **Realistic gain:** halving it would save about 40k cycles, under 1% of a frame and not visible as fps. It would apply to every snow and rain map, and rain maps may spawn more particles. Rain uses a density of 10 against snow's 3, but I haven't measured a rain scene.
+- **Constraint:** the loop uses the game's random number sequence, so any rewrite has to produce exactly the same values in the same order. That limits how much it can change.
+- **Verdict:** worth a quick breakdown only if a rain map turns out much heavier. Otherwise it's not worth the risk.
+
+## DrawOTag: the biggest remaining target
+
+`DrawOTag` walks the PS1 ordering table and turns every PS1 primitive into GS packets. It's 1.8M cycles in your scene and 2.2–2.6M in the cutscene, about 36–50% of the frame. From earlier profiles:
+- **Polygon setup** (converting coordinates, colours and UVs into GS vertex data): about 1.6M. This is the bulk.
+- **State changes per primitive:** about 540 texture-page (TEX0) changes and as many CLUT reloads a frame, because textures alternate in draw order.
+- **Snow's real cost probably sits here,** not in RTPS. Each of the 298 flakes is one more triangle to convert, plausibly 100–150k cycles. I haven't measured that yet; a probe could.
+
+Options from the plan, roughly by return for the effort:
+
+1. **Overlap the CPU and GS (double display list):** build frame N+1's packets while frame N is still being sent. This doesn't make the conversion cheaper; it stops the CPU waiting on the GS. On hardware this could be a sizeable win. An earlier attempt was reverted because of freezes that were probably caused by a since-fixed bug, so it should be retried on the console.
+2. **Use the scratchpad (SPR) for the PS1 scratch memory and packet building:** single-cycle memory with no cache misses. This matters more on real hardware than in PCSX2, which doesn't model the EE caches.
+3. **Build packets with 128-bit (MMI) stores:** write whole GIF qwords at once instead of field by field. That cuts directly into the 1.6M polygon setup.
+4. **Cheaper CLUT reloads:** draw order can't be changed (semi-transparency depends on it), but each reload can probably be made cheaper.
+5. **Convert primitives on VU1:** the largest potential gain and the largest job. It's only worth it after the items above.
+
+**Potential:** cutting `DrawOTag` by 20–40%, which items 1–3 could plausibly do, saves about 0.4–1M cycles a frame. That's 8–20% of the frame budget, enough to bring the Kaufmann cutscene to a steady 60 fps on hardware. Every scene benefits, because everything drawn goes through `DrawOTag`.
+
+**Constraint:** the output has to stay pixel-identical. The deterministic benchmark and frame-dump comparison already check that.
+
+**Recommendation:** go after `DrawOTag`. I'd start by profiling it with finer sections, to split polygon setup by primitive type and see what the snow triangles cost. Then try the scratchpad and the MMI packet building, since they're self-contained, and retry the CPU/GS overlap on the console. Should I go ahead with the breakdown?
+
+## User
+
+Yes, but first, I would like to know about our VRAM usage at the moment
+
+## Claude
+
+I'll look at how the port lays out the GS's 4 MB of VRAM, and its copy of the PS1's 1 MB VRAM.
+
+- tool `Bash`: Find GS memory layout definitions
+
+- tool `Bash`: Read layout comments and display buffer use
+
+- tool `Bash`: Read display setup and GS stats output
+
+## Claude
+
+The GS memory map is clear now. I'm reading the texture-page cache code to see how full it gets.
+
+- tool `Bash`: Read texture page and CLUT cache code
+
+## Claude
+
+The PS2's 4 MB of video memory (the GS's VRAM) is fully allocated. The layout is fixed in [gpu_gs.c](src/port/ps2/gpu_gs.c#L38-L51):
+
+| GS address | Size | Holds |
+|---|---|---|
+| `0x000000`–`0x12C000` | 1,200 KB | gsKit's display frame buffer, sized for the largest mode: 640×480, 32-bit, single buffer |
+| `0x12C000`–`0x130000` | 16 KB | unused gap |
+| `0x130000`–`0x200000` | 832 KB | texture page cache, slots 15–27 (13 × 64 KB) |
+| `0x200000`–`0x2F0000` | 960 KB | texture page cache, slots 0–14 (15 × 64 KB) |
+| `0x2F0000`–`0x300000` | 64 KB | CLUT cache: 128 rows of 256 colours, 16-bit |
+| `0x300000`–`0x400000` | 1,024 KB | the PS1's entire VRAM (1024×512, 16-bit). The game draws into it directly, so it's both the PS1 framebuffer and its textures |
+
+**How it works:**
+- **Copy of PS1 VRAM:** the GS holds an exact 1:1 copy of the PS1's VRAM in its native 16-bit format. 16-bit textures are read straight from it.
+- **4-bit and 8-bit textures:** these can't be read in place, because the PS1 packs the indices into 16-bit words. They're unpacked into a page cache instead. There are 64 possible pages (32 page positions × two bit depths) for 28 slots, with least-recently-used eviction. Any VRAM write that overlaps a cached page or CLUT drops it.
+- **Display:** each frame, the PS1 display area is copied 1:1 into the display buffer.
+
+**How full it is:** the stats from your snow session show **0 uploads per frame**. So in steady play the page cache isn't thrashing; everything in use stays resident. TEX0 and CLUT changes are about 340–350 a frame, but those are register switches, not uploads. I don't log how many of the 28 slots are occupied, or peak uploads during scene changes. Both would be cheap to add.
+
+**Space that could be reclaimed**, if more is ever needed:
+1. **Display buffer:** about 1.2 MB is reserved for 640×480×32, but the PS1 shows 320×224 (480i is only used for interlaced modes). A 16-bit buffer, or one sized to the current mode, would free 600–900 KB.
+2. **4-bit pages** fill only half of their 64 KB slot. Packing two per slot would raise the effective capacity.
+3. **Z buffer:** `ZBUF` points at the cache area, but Z writes are masked, so nothing is written there. It costs no memory.
+
+**What this means for DrawOTag:** memory isn't the bottleneck right now; the cost is in the CPU's conversion work. One idea that needs VRAM is double buffering the display list (option 5). It needs no extra VRAM, only EE memory, so the current layout doesn't block it.
+
+On the EE side, the port also keeps its own 1 MB copy of PS1 VRAM (`g_PortVram`) for uploads, readbacks and filling the page cache, plus 64 KB staging and transfer buffers.
+
+Should I add occupancy and upload stats to the GS stats line? Otherwise I'll start the `DrawOTag` breakdown.
+
+## User
+
+For that 640x480x32 display buffer, are we even using it if we already have the PS1's entire VRAM resident in the PS2's VRAM?
+
+## Claude
+
+Good question. I'll check what the copy actually does and why it exists.
+
+- tool `Bash`: Read present path and the copy
+
+## Claude
+
+Yes, it's used every frame, but your instinct is right: it probably isn't needed.
+
+**What happens now** (`Display_PresentGs` → `GpuGs_DisplayCopy` in [gpu_gs.c](src/port/ps2/gpu_gs.c#L1416)): at each display swap, the GS draws one textured sprite that copies the PS1's display area (320×224 at its current position in the VRAM copy) into gsKit's 640×480×32 buffer. The PS2 video output then scans out that buffer. The copy ends with `GpuGs_Sync()`, so the CPU waits for the GS to finish all queued drawing before carrying on.
+
+**Showing the PS1 VRAM directly would work.** The PS2's video output can scan out any part of GS memory in 16-bit format: you point its display register (`DISPFB`) at an address, a width, and an x/y start. The formats line up exactly. The PS1's 16-bit colour is red in bits 0–4, green 5–9, blue 10–14 and the mask bit in 15, which is the same layout as the GS's 16-bit format (the top bit becomes alpha, which plain output ignores). The display would point at `0x300000`, buffer width 1024, starting at the PS1's display x/y. That matches what the PS1 itself does: it scans out part of its VRAM, and the game's double buffering only moves that start position.
+
+**Benefits:**
+1. **Frees about 1.2 MB of GS memory:** the whole 640×480×32 buffer, which is about 30% of VRAM.
+2. **Removes the copy each frame:** a small cost, since the display copy profiled at about 11k cycles a frame. GsSwapDispBuff is another 20k, which may not all go away.
+3. **Removes a full CPU–GS wait every frame. This is the important one for the DrawOTag work.** The `GpuGs_Sync()` in the copy makes the CPU wait for the GS once per frame. Overlapping CPU and GS work (option 5, the double display list) needs that wait gone or moved.
+
+**Things to handle:**
+- **When to switch:** writing `DISPFB` takes effect immediately; it doesn't go through the drawing queue. So the switch to a new buffer has to wait until the GS has finished drawing it, and should happen during vertical blank to avoid tearing. That means a "GS finished" signal (its FINISH event), plus a vertical-blank handler that applies the pending start position.
+- **480i modes** (heights above 256, used by a few screens): the PS1 keeps both fields in one 480-line image, so the output must read alternate lines per field. The GS can do this, but it needs its own setup and a test.
+- **24-bit FMV mode:** the GS can't display the PS1's packed 24-bit pixels directly. It isn't supported today anyway, so nothing is lost, but the movies would need a separate path later.
+- **gsKit** still does the video mode setup. It would need a tiny buffer, or none, with the display registers set by us.
+
+**Verification:** frame dumps already read from the VRAM copy, not the display buffer, so they're unaffected. The real check is visual on PCSX2 and on the console: centring, no tearing, and the menus and 480i screens.
+
+I'd do this before the `DrawOTag` work, because removing that per-frame wait is a prerequisite for the CPU/GS overlap. Should I implement it?
+
+## User
+
+Yes
+
+## Claude
+
+I'll start by reading the whole display module and the GS sync and vertical-blank code it depends on.
+
+- tool `Bash`: Read display module and sync hooks
+
+- tool `Bash`: Read GS send/sync code, vblank handler, present call
+
+- tool `Bash`: Check gsKit PMODE and DISPFB macros
+
+- tool `Bash`: Find gsKit init source and macros
+
+- tool `Bash`: Replace display copy with direct scan-out
+
+## Claude
+
+Building the normal ISO.
+
+- tool `Bash`: Build normal ISO with direct scan-out
+
+## Claude
+
+It builds. This needs a visual check, which only you can do, so I'm launching PCSX2 with the new build at normal speed.
+
+- tool `Bash`: Launch PCSX2 to check direct scan-out visually
+
+## Claude
+
+PCSX2 is running the new build, and you can take over.
+
+The display now scans out straight from the PS1 VRAM copy in GS memory. The per-frame copy into gsKit's 640×480×32 buffer is gone; the change is `GpuGs_DisplayShow` in [gpu_gs.c](src/port/ps2/gpu_gs.c#L1421).
+
+Please look for:
+1. **Boot logos, title screen and menus:** the image should be centred as before, with no offset, wrapped edges or garbage at the sides.
+2. **Normal play:** no tearing or flicker. The game swaps between its two buffers in VRAM, and the display now follows that swap directly.
+3. **Fades and dark scenes:** colours should be unchanged. The PS1's mask bit is ignored by a fixed-alpha setting, so a wrong colour or a half-dark image would mean that setting is off.
+4. **Any interlaced screen** (taller than 256 lines), if you come across one. I'm not sure which screens in this game use it, so anything that looks doubled, squashed or flickery is worth telling me about.
+
+I haven't freed the 1.2 MB buffer yet. gsKit still allocates it, but nothing draws to it anymore. Once you're happy with how it looks, I'll measure the change, reclaim that memory, and then start the `DrawOTag` breakdown.
+
+## Claude
+
+PCSX2 has closed. Checking its log for crashes or display errors:
+
+- tool `Bash`: Check session log for problems
+
+## Claude
+
+The log looks clean: no crashes, no watchdog warnings and no stuck transfers. The session ran about 54 s and was at 33% idle at the end.
+
+It also switched through several video modes, including three interlaced ones I hadn't expected:
+- `640x448i` at 6.3 s, probably a boot screen
+- `320x448i` twice, at 15.0 s and 47.5 s, possibly the title or a menu
+- the usual `320x224p` and `320x240p`
+
+The interlaced modes are the riskiest part of this change, since the PS1 keeps both fields in one 448-line image. How did those screens look? Was the picture right everywhere, and was there any tearing, offset, colour change or squashed or doubled image?
+
+## User
+
+No, the title screen and the inventory screen, both 320x448i, have missing text and graphics. Not everything is gone: the title screen's background is fine, but most of the text for the menu choices is missing. The inventory screen has the Harry health status and some of the icons, but most of the text is gone.
+
+## Claude
+
+That fits a timing problem rather than a format one. Those two screens use `320x448i`, and with a 448-line image the PS1 has room for only one buffer. So the game draws into the same area that's being displayed: it clears the screen and redraws everything each frame. Before, the copy took a snapshot of the finished frame at the swap. Now the video output scans the buffer live, so it catches the background drawn but not the text and icons, which come later in the frame. Progressive gameplay was fine because there the game alternates between two buffers and never draws into the one being shown.
+
+**Fix:** show VRAM directly only when the display area doesn't overlap the current drawing area, which is the double-buffered case. When it does overlap, fall back to the snapshot copy. Next I'm checking where the port keeps the current drawing area.
+
+- tool `Bash`: Find draw environment tracking
+
+- tool `Bash`: Find GsSwapDispBuff implementation and PutDrawEnv
+
+- tool `Bash`: Find drawing area handling in gpu_gs
+
+- tool `Bash`: Read fill and draw-area handlers
+
+- tool `Bash`: Locate VRAM write entry points
+
+- tool `Bash`: Check invalidate callers, recover copy function
+
+## Claude
+
+All three VRAM-write paths (fills, copies and uploads) go through `cache_invalidate`, so one hook there plus the drawing-area commands covers everything. Writing it:
+
+- tool `Bash`: Add overlap tracking and copy fallback
+
+- tool `Bash`: Find prim_state entry
+
+- tool `Bash`: Add first-primitive area check, rebuild
+
+## Claude
+
+The build printed nothing, so I'm checking the logs:
+
+- tool `Bash`: Inspect build logs
+
+## Claude
+
+`GpuGs_StateLost` comes before the new state variables in the file. I'm moving their declarations up.
+
+- tool `Bash`: Move declarations and rebuild
+
+## Claude
+
+It builds. I'll also add a count of directly shown versus copied frames to the GS stats line, so we can confirm from the log which path each screen takes.
+
+- tool `Bash`: Read stats function
+
+- tool `Bash`: Add display path stats, rebuild
+
+- tool `Bash`: Check declaration lines
+
+- tool `Bash`: Tidy comment placement, rebuild
+
+## Claude
+
+Built. Launching PCSX2 for you to check the title and inventory screens again.
+
+- tool `Bash`: Launch PCSX2 to recheck interlaced screens
+
+## Claude
+
+PCSX2 is running the fixed build, and you can take over.
+
+**The cause:** the title screen and inventory are single-buffered. At 448 lines there's room for only one buffer in the PS1's VRAM, so the game redraws the very area on screen every frame. Showing VRAM directly caught it halfway through each redraw: the background was there, but the text and icons drawn later in the frame were missing.
+
+**The fix, in [gpu_gs.c](src/port/ps2/gpu_gs.c):**
+- The GS code now notices when a frame draws into the area currently on screen. It checks drawing-area commands, fills, VRAM copies and uploads, plus the drawing area in effect at the first primitive after each swap.
+- When a frame does that, the next swap uses the old snapshot copy, so those screens should look exactly as they did before today.
+- Direct scan-out is used only after a frame that left the displayed area alone, which is normal double-buffered gameplay.
+- Any video mode change starts with a copy, until a clean double-buffered frame is seen.
+
+**Please check:** the title screen, the inventory, and a bit of normal gameplay, including going into and out of the inventory, where the mode switches between 448i and 224p.
+
+The GS stats line in the log now counts frames scanned out directly against frames copied. When you're done, I'll check that gameplay took the direct path and the 448i screens took the copy.
+
+## Claude
+
+PCSX2 has closed. Checking which display path each screen took:
+
+- tool `Bash`: Show mode changes and display path counts
+
+## Claude
+
+The log shows the detection doing what it should, with no crashes. Counts are frames per stats interval:
+
+| screen | video mode | display path |
+|---|---|---|
+| Boot screen | `640x448i` | copy, every frame (60/60) |
+| Title and inventory (each time you opened it, about 7 times) | `320x448i` | copy, every frame (30/30) |
+| Gameplay and cutscenes | `320x224p` | scanned straight out of VRAM, every frame (30/30) |
+
+The mixed counts around each mode switch are intervals that straddle the change. Each 448i stretch took no more than a frame or two to settle on copying, and 224p went back to direct after the one snapshot frame that follows any mode change.
+
+How did it look this time? In particular:
+- the title menu text and the inventory text and icons
+- any flicker or a half-drawn frame when opening or closing the inventory
+- normal gameplay
+
+If everything looked right, I'll measure the gain, write it up, and move on to reclaiming the display buffer memory. The copy path is still needed for the 448i screens, but that buffer can shrink from 640×480 at 32-bit to 16-bit. Then I'll start the `DrawOTag` breakdown.
+
+## User
+
+The menus and gameplay look correct, but there is still a short garbage display when switching between video modes. Is there anything we can do to clean that up?
+
+## Claude
+
+Yes. On a switch, gsKit reprograms the video output, which then shows whatever is in its buffer. The first frame or two in the new mode can also come from a buffer the game hasn't finished drawing at the new size. Either way, the fix is to blank the output for a few frames after each mode change. The output then shows the background colour (black), which looks like the normal re-sync blink a TV does on a mode change anyway.
+
+I'll blank right after gsKit's setup and keep the output off for the first 3 frames in the new mode, which is 50 ms at 60 fps. Next I'm checking the background-colour register macro.
+
+- tool `Bash`: Find BGCOLOR macro
+
+- tool `Bash`: Blank output after mode changes, rebuild
+
+## Claude
+
+One catch: `init()` is also used by the software-renderer display path, which never calls `GpuGs_DisplayShow` and so would never turn the output back on. I'm limiting the blanking to the GS renderer.
+
+- tool `Bash`: Launch PCSX2 to check mode-switch blanking
+
+## Claude
+
+PCSX2 is running the new build, and you can take over.
+
+On every video mode change, the output now goes black right after gsKit's setup and stays black for the first 3 frames in the new mode, which is 50 ms. Then the display comes back as before. That hides both suspected sources of the garbage: gsKit showing its buffer's stale contents during setup, and the first half-drawn frames in the new size. The change is in `init()` and `Display_PresentGs` in [display_ps2.c](src/port/ps2/display_ps2.c), with a `blank` flag on `GpuGs_DisplayShow`. The software-renderer display path is left alone.
+
+Please switch modes a few times, for example the title screen into the game and back, or opening and closing the inventory. You should now see a brief black blink at each switch instead of garbage.
+
+- **Garbage still shows, but shorter:** the remaining frames come from the game itself, and I can raise the blank count.
+- **The blink is too long:** I can try 2 frames.
+- **Garbage looks the same as before:** the source is something else, for example before the mode-change code runs. Tell me and I'll dig further.
+
+- tool `Bash`: Check session log for mode switches and crashes
+
+## Claude
+
+PCSX2 has closed with no crashes. One thing stands out, though: the log has 78 video mode changes in 43 seconds. I'm checking whether that was you switching screens or something repeating on its own.
+
+- tool `Bash`: List mode change sequence
+
+## Claude
+
+False alarm: my search also counted the new `gs display:` stats lines. The real mode changes are as expected, one per screen switch, and the session ran normally (no crashes, 33% idle).
+
+How did the mode switches look this time? Was there a clean black blink, or is some garbage still visible?
+
+## User
+
+They looked clean. I'm wondering, is there a way to test how long it takes the PS2 to switch between 240p and 480i video output modes, compared to the PS1? I've noticed when playing the retail version of Silent Hill on my PS1 vs my PS2, the PS2 seems to lose video sync slightly longer. If that's something we could fix, that would be amazing, but I get the feeling that we can't change the timing in code. Still, I want you to investigate this.
+
+## Claude
+
+I'll check what gsKit actually does on a mode switch. A full reset of the GS would stop the video signal itself, and that would explain a longer sync loss.
+
+- tool `Bash`: Find gsKit source or disassemble init_screen
+
+- tool `Bash`: Disassemble gsKit_init_screen calls
+
+- tool `Bash`: Locate init_screen in disassembly
+
+- tool `Bash`: Check archive format and symbols
+
+## Claude
+
+The gsKit library is built with link-time optimization, so its archive has no machine code to read. I'll disassemble the linked copy in our ELF instead.
+
+- tool `Bash`: Disassemble linked gsKit_init_screen
+
+- tool `Bash`: Read the GS reset and SetGsCrt section
+
+## Claude
+
+I looked into this, and it turns out we can change it for the port, though not for the retail disc.
+
+**What the port does on every mode switch:** I disassembled `gsKit_init_screen` from our ELF. Each time the game changes video mode, the port re-runs it, and it does two things:
+1. **A full GS reset:** it writes `0x200` to `GS_CSR` (`sd v0,4096(s3)` with `s3 = 0x12000000`). That resets the whole GS, including the part that generates the video signal (the PCRTC), so the sync pulses stop altogether.
+2. **`SetGsCrt`:** a BIOS call that reprograms the video timing from scratch.
+
+So the TV briefly loses its signal entirely, then has to lock onto a new one.
+
+**What the PS1 does:** it changes the display mode with one GPU command (`GP1(08h)`), and the video signal keeps running throughout. Going between 240p and 480i at NTSC, the line rate stays the same (15.7 kHz). Only the vertical timing gains or loses its half-line offset, so a TV re-locks almost immediately.
+
+**Why retail Silent Hill does the same on a PS2:** a PS2 runs PS1 games on its IOP, which is an actual PS1 CPU, but the PS1's GPU is emulated with the GS. My understanding, which I can't verify from here, is that the PS1-mode driver reprograms the GS video timing on display mode changes in a similar way. That would explain the longer sync loss you see, and it can't be changed for the retail disc. For the port, the switch is our own code.
+
+**What we could do:** switch modes without resetting the GS. There are two lighter options:
+- **B:** skip the GS reset and call only `SetGsCrt`. It's simple and low risk, but `SetGsCrt` may still interrupt the signal briefly; I can't tell without testing.
+- **C:** keep the video signal untouched and only flip the interlace setting (`SMODE2`) and the display window (`DISPLAY1`/`DISPLAY2`). This is closest to what the PS1 does. The risk is that 240p and 480i may also need different vertical sync settings (`SYNCV`), which I'd have to determine, since those registers can't be read back.
+
+**How to measure it:**
+- **From software:** I can log how long the GS stops producing vertical-blank interrupts around a switch. That shows whether the video signal paused and for how long, on our side. It can't see when the TV re-locks.
+- **The TV's re-lock time** needs an outside observer. A slow-motion phone video (240 fps) of the screen during a switch is enough. Count the frames of blank or rolling picture on the PS1 retail game, the PS2 retail game, and the port with A, B or C.
+- **PCSX2 won't show the difference;** it doesn't emulate signal loss. This has to be tested on the console.
+
+**Proposal:** I add a build setting to choose between A (the current behaviour), B and C, plus the vertical-blank logging. You then run each one on the console and film a few switches, for example opening and closing the inventory. Deploying restarts the game on the PS2, so it needs you there with the camera ready. Should I set that up?
+
+## User
+
+For now, let's measure the difference in software, and I'll look at hardware later.
+
+## Claude
+
+I'll build the switch variants with logging and measure them in PCSX2 now. The same logging will give real numbers on the console when you get to it. For option C, I first need the vertical sync settings for both modes, so I'm checking whether the ps2sdk sources on disk record what `SetGsCrt` programs.
+
+- tool `Bash`: Search ps2sdk source for SetGsCrt/SYNCV
+
+- tool `Bash`: Look for SetGsCrt implementation
+
+- tool `Bash`: Probe gsKit display parameters and sync registers
+
+- tool `Bash`: Check constants and vblank handler
+
+- tool `Bash`: Remove probe; check build flag plumbing
+
+- tool `Bash`: Check how port files get compile flags
+
+- tool `Bash`: Read PS2 HAL compile section
+
+## Claude
+
+Now writing the code: the build option, the vertical-blank gap measurement, and the three switch methods.
+
+- tool `Bash`: Implement switch methods and measurement
+
+- tool `Bash`: Build and measure each switch method in PCSX2
+
+- tool `Bash`: Rebuild and measure each method
+
+- tool `Bash`: Show switch measurements per method
+
+## Claude
+
+All three methods ran without crashing in PCSX2. The last ISO built is method 2, so I'm rebuilding the default (method 0) to leave things as they were.
+
+- tool `Bash`: Rebuild default ISO (method 0)
+
+## Claude
+
+The three switch methods are built and measured in PCSX2. The default ISO is back to the current behaviour (method 0).
+
+**What I added:**
+- **A build setting for the switch method** (`SH1_MODESWITCH`, in [display_ps2.c](src/port/ps2/display_ps2.c)):
+  - **0, the default:** gsKit's full setup on every switch (GS reset, `SetGsCrt`, a new frame buffer). This is the current behaviour.
+  - **1:** `SetGsCrt` only, with no GS reset.
+  - **2:** only the interlace setting (`SMODE2`) and the display window; the video timing isn't touched.
+- **A log line after every switch:** how long the setup took, and the longest gap between vertical-blank interrupts over the next 30 frames. If the video signal stops, the interrupts stop too, so that gap is a software measure of signal loss. 16,683 µs means it never stopped. The interrupt handler change is in [libetc_ps2.c](src/port/ps2/libetc_ps2.c).
+
+**Results in PCSX2,** over the same boot, title and game sequence (6–7 switches each):
+
+| method | setup time per switch | longest vertical-blank gap |
+|---|---|---|
+| 0: full gsKit setup (current) | 1.1–16.8 ms | 16.69–16.72 ms |
+| 1: `SetGsCrt` only | 0.38 ms | 16.71–16.72 ms |
+| 2: `SMODE2` only | 0.02 ms | 16.72 ms |
+
+- **Setup time is a real difference.** The current method can take up to 17 ms of CPU time, which is a whole frame, so a switch can cost the game a frame. Methods 1 and 2 are effectively instant. Most of method 0's time goes on gsKit reallocating and clearing its frame buffer.
+- **Signal loss can't be measured in PCSX2.** Its vertical-blank interrupts never stop, even through a GS reset, because it doesn't emulate the video signal going down. All three methods look identical there.
+
+**On the console,** the same log lines will show whether the signal stops. For method 0, I'd expect a gap noticeably longer than 16.7 ms if the GS reset really interrupts the sync output. That would be the measured cause of the longer sync loss you've noticed, and method 1's gap would show whether `SetGsCrt` on its own interrupts it.
+
+**Caveats:**
+- **Method 2** doesn't rewrite the vertical sync timing (`SYNCV`), because I can't find out the BIOS values; they're unreadable even in PCSX2. So it's for a hardware test only, and a TV may show a slightly off vertical position or a roll in one of the modes.
+- **Methods 1 and 2** skip gsKit's buffer reallocation and keep the 640×480 buffer from the first setup. That's fine, because it's already sized for the largest mode.
+- **Not visually checked yet:** I haven't looked at methods 1 and 2 on screen, only that they run without crashing and log normally.
+
+Nothing is committed. For the hardware test later, build with `SH1_MODESWITCH=0`, `1` or `2`, deploy, switch modes a few times (for example, open and close the inventory), and send me the console log. Filming the TV at the same time would show how long the picture is actually lost.
+
+## User
+
+When you say "Methods 1 and 2 skip gsKit's buffer reallocation and keep the 640×480 buffer from the first setup. That's fine, because it's already sized for the largest mode.", can you explain that a little more? I thought we were getting rid of the 640x480x32 buffer from before.
+
+## Claude
+
+You're right to question that, and my sentence was wrong in two ways.
+
+**1. The buffer hasn't gone away; only its use changed.** Before today, every frame was copied into gsKit's buffer and the TV showed that buffer. Now:
+- **Double-buffered frames** (normal gameplay at 224p) are shown straight from the PS1 VRAM copy, and the buffer isn't touched.
+- **Single-buffered screens** (the title and inventory at 448i) still need it. That's the fix for the missing text: those screens redraw the area that's on screen, so we take a snapshot of each finished frame into this buffer and display the snapshot.
+
+So the buffer still has a job, but only for those screens. What I planned to reclaim was most of its size, not the buffer itself. It's 32-bit today, but PS1 pixels are 16-bit, so a 16-bit snapshot buffer holds exactly the same image at half the size.
+
+**2. It isn't "already sized for the largest mode."** gsKit sizes the buffer at each setup for that mode:
+- **progressive (240 lines):** 640×240×4 bytes = 600 KB
+- **interlaced (480 lines):** 640×480×4 bytes = 1.2 MB
+
+The first setup is 320×240 progressive, so with methods 1 and 2, which never reallocate, the buffer is only 600 KB. On the first 448i screen, the 448-line snapshot (1.1 MB) runs past its end. It doesn't break anything today, but only by luck: the overflow lands in the unused space below `0x130000`, where the texture cache starts. Method 0 doesn't have this problem, because it reallocates for each mode.
+
+**The clean fix** also does the memory reclaim I had planned:
+1. Stop using gsKit's buffer for the snapshot. Use our own fixed 16-bit buffer, sized for the largest PS1 display, 640×480×2 = 600 KB, at a fixed address in the GS memory map, like the texture cache.
+2. Allocate gsKit's own buffer as small as possible. It's only used during gsKit's setup, and we can't skip that entirely in method 0.
+3. Move the texture cache's lower bound down into the freed space.
+
+That makes methods 1 and 2 safe regardless of the starting mode, and frees about 600 KB to 1 MB of GS memory, depending on how small gsKit's buffer can go. It's also a further small saving for the 448i screens, since a 16-bit snapshot moves half the data.
+
+Should I do that now?
+
+## User
+
+Given that the PS1 is able to show the dual buffers for 320x224, the single buffer for 640x448, and the single buffer for 320x448, all without needing a secondary framebuffer copy for display, why can't we do the same on PS2? It seems rather wasteful to me to NOT show directly from the PS1 VRAM copy.
+
+## Claude
+
+We can, and you're right that the copy is a workaround. The reason my first attempt broke those screens is a PS1 GPU feature the port doesn't emulate yet.
+
+**How the PS1 manages it:** in interlaced modes, the PS1 GPU has a "drawing to display area" setting, the DFE bit in `GP0(E1h)`. When it's off, which is the normal setting for single-buffered interlaced screens, the GPU skips every pixel on the lines of the field currently being sent to the TV. It only writes the lines of the other field. The field being scanned out is never touched, so the game can redraw its single buffer every frame without the TV catching it half-drawn. The two fields alternate every vertical blank, so each field is shown complete while the other one is redrawn.
+
+**What the port does:** the GS draws every line at once, so it overwrote the field being scanned out. That's why the background showed but the later text and icons didn't. The copy hid this by taking a snapshot. That also makes the result look slightly different from a real PS1: we show both fields from the same moment, while the PS1 shows fields drawn one frame apart, which you'd only notice on moving images.
+
+**The GS has the matching features:**
+- **`SCANMSK`** (a GS drawing register) can block drawing to even lines (value 2) or odd lines (value 3). That's exactly the PS1's field skipping.
+- **`CSR.FIELD`** (readable) tells us which field the GS is scanning out right now.
+
+**So the plan is:**
+1. When the display is interlaced and the game's DFE bit is off, set `SCANMSK` to block the lines of the field currently being displayed. Update it as the field changes: at each packet flush, and at each vertical blank for anything queued.
+2. Show every mode directly from the VRAM copy, including the 448i screens. Remove the snapshot copy and the touch tracking I added today.
+3. Make gsKit's buffer as small as gsKit allows, and give the reclaimed memory to the texture cache.
+
+**Risks to check:**
+- **Field mapping:** which GS field corresponds to the PS1's even lines. If I get it backwards, we'd block the wrong lines and the missing-text problem would come back in half the lines. That's easy to spot on the title screen, and simple to flip.
+- **Field changes mid-draw:** the field can change partway through drawing a frame. On the PS1 that's decided pixel by pixel as each one is drawn; here it would be per batch. Batches are short compared with a field (16.7 ms), so any difference should be a line or two, and only on frames that cross a field change.
+- **PCSX2's deinterlacing** may blur differences between the fields. The final check should also be on the console.
+- **Single-buffered progressive screens** would tear on a real PS1 too. Showing them directly is faithful, so they don't need the mask.
+
+The one remaining case for a separate buffer is 24-bit movie playback, which the GS can't scan out directly from the PS1's packed format. That's for later, when movies are supported.
+
+Should I implement it?
+
+## User
+
+As far as I know, there aren't any single-buffered progressive screens in the game. You can verify that. Otherwise, proceed with the implementation.
+
+## Claude
+
+I'll verify that first. The touch tracking I added today already tells single-buffered frames apart, so it can find any progressive screen that redraws the area on screen. In the earlier session logs, 224p gameplay was always shown directly. But the very first stats interval at boot, which covers 240p and then 224p, had 34 copied frames, and that needs explaining. I'll add a temporary log line for any progressive frame detected as single-buffered (not counting the forced copy right after a mode change), then run it over boot, all 43 maps and the Demo cutscenes.
+
+- tool `Bash`: Add temporary single-buffer probe; read demo sweep usage
+
+- tool `Bash`: Find demo sweep log location
+
+- tool `Bash`: Sweep maps and cutscenes for single-buffered progressive frames
+
+## Claude
+
+While the sweep runs, I'm reading the code the `SCANMSK` change will touch: the texture-page slot addressing and the fill path.
+
+- tool `Bash`: Read slot addressing and fill_rect
+
+- tool `Bash`: Implement SCANMSK field skipping and direct display
+
+- tool `Bash`: Find all s_TexPage writes
+
+- tool `Bash`: Read polygon texpage update
+
+- tool `Bash`: Keep DFE bit, add vblank counter, wire display call
+
+- tool `Bash`: Check build result, remove stray log
+
+## Claude
+
+The new code compiles and links. I'll build the ISO from it once the sweep finishes, then wait for the sweep result before testing.
+
+- tool `Bash`: Read sweep results
+
+- tool `Bash`: Show context around probe hits
+
+- tool `Bash`: Build SCANMSK version and smoke-test boot
+
+## Claude
+
+It boots through every mode and reaches the title screen and the game without crashing. Whether the field masking hides the half-drawn frames is a visual check, so I'm launching PCSX2 for you.
+
+- tool `Bash`: Launch PCSX2 to check field-masked direct display
+
+## Claude
+
+I confirmed there are no single-buffered progressive screens, and PCSX2 is now running the field-masked build for you to check.
+
+**What I found:** I ran all 43 maps and the 52 Demo cutscenes with a probe for progressive frames that draw into the area on screen. Your expectation holds; the only hits were harmless.
+- **The first boot frames, before the logos:** the two 240-line buffers at y = 32 and y = 256 share 16 lines. The real PS1 also draws those lines while they're visible.
+- **One leftover frame right after leaving each 448i screen.**
+
+**What the new build does:**
+- **Every mode is shown straight from the PS1 VRAM copy,** including the 640×448i and 320×448i screens. The snapshot copy and the touch tracking are gone.
+- **Single-buffered interlaced screens work as on the PS1:** with DFE off, nothing is drawn on the lines of the field being scanned out. This uses the GS's `SCANMSK`, updated from `CSR.FIELD` at each vertical blank, and it applies to fills too. The polygon texture-page update no longer clears the DFE bit, matching the PS1.
+- **gsKit's buffer is now 16-bit** and only used during gsKit's setup. That gives the texture cache 9 more 64 KB slots (28 → 37).
+- **The mode-switch blanking stays.** The default switch method is still the full gsKit setup.
+
+**Please check the title screen and the inventory:**
+- All menu text and icons should be present. If roughly half the lines are missing or flicker, the field mapping is inverted, which is a one-line flip.
+- The picture should be complete, not doubled or shifted by a line.
+- Normal gameplay should look the same as before.
+
+PCSX2 may blend the two fields when it deinterlaces, so the final check on field behaviour will be on the console.
+
+## User
+
+Half the lines on the text on the menu screen are missing, but there are parts of the text that looks normal. On the inventory screen, it's "No. 1", with the "1" appearing normal, and "Name:", with the "ame:" appearing normal. On the title screen, it's "OPTION", with "ION" appearing normal.
+
+## Claude
+
+The symptom points at timing, not at an inverted field mapping. If the mapping were backwards, all text would be broken the same way. Instead, some letters look complete and others are missing every other line. That fits text that only ever gets drawn while the same field is on screen, so its other field's lines are never filled in.
+
+With field skipping, each field only gets drawn while the other one is displayed. A screen redrawn after every vertical blank fills both fields in turn. But if the game redraws only every second vertical blank, which is 30 fps, every redraw lands in the same field. The other field's lines then keep whatever was drawn earlier. The parts that look normal would be ones that happened to be drawn at least once in each phase, for example while the screen was opening.
+
+Before changing anything, I want to measure it: on those screens, how many vertical blanks pass between frames, which field is on screen at each swap, and the DFE bit the game sets.
+
+- tool `Bash`: Add temporary interlace timing probe and build
+
+## Claude
+
+The previous PCSX2 session has closed. The title screen comes up on its own about 4 s after boot, so I can capture the probe without your help.
+
+- tool `Bash`: Capture interlace timing at boot and title
+
+- tool `Bash`: Capture probe on the 320x448i title screen
+
+## Claude
+
+The probe's 400-line limit was used up by the boot screen. I'm raising it.
+
+- tool `Bash`: Rebuild with higher probe limit and capture title
+
+- tool `Bash`: Read input script format
+
+- tool `Bash`: Dump title frames and VRAM
+
+## Claude
+
+Those dumps landed on the boot screen. The script times are in emulated seconds, and the title appeared later than I'd guessed. I'll dump later in the run.
+
+- tool `Bash`: Dump during title screen
+
+- tool `Bash`: Convert dumps to PNG
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/title/f1500.png
+
+## Claude
+
+The VRAM copy looks complete at this scale. I'm zooming in on the menu text to check line by line.
+
+- tool `Bash`: Crop and enlarge menu text
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/title/crop.png
+
+- tool `Bash`: Launch PCSX2 with flipped field mapping
+
+## Claude
+
+PCSX2 is running the corrected build, and you can take over.
+
+**What was wrong:** the field mapping was inverted, the risk I mentioned before. I dumped the title screen's VRAM and every line of "START / DEMO / OPTION" was intact in both fields, so the drawing was right. The mask was blocking the wrong field, though: it stopped drawing into the field being redrawn and let it hit the field the TV was showing. The TV caught its field half-redrawn every frame, so every other line of the text drawn later in each frame was missing, while the other field stayed complete. The dump looked fine because both fields are finished by the time it's taken.
+
+**Fix:** when the GS reports field 0, it's actually scanning out the odd lines of VRAM, so field 0 now masks the odd lines and field 1 the even ones. The temporary probe is removed.
+
+**Please check the same places again:**
+- "OPTION" on the title screen
+- "No. 1" and "Name:" in the inventory
+- the rest of the menu text and icons
+- normal gameplay
+
+- tool `Bash`: Check session log
+
+## Claude
+
+PCSX2 has closed after a clean session: about 230 s, four visits to the 448i screens, and no crashes, watchdog warnings or stuck transfers. How did the title and inventory text look this time? Were all the lines there?
+
+## User
+
+No, they looked broken this time.
+
+## Claude
+
+Both mappings look broken, so the mapping isn't the whole story, and I'd rather measure than flip it back and forth. I'll check whether PCSX2 runs can capture the actual displayed output, not just the port's VRAM dumps, which have been fine every time.
+
+- tool `Bash`: Look for screenshot or capture support
+
+- tool `Bash`: Log VRAM operations during 448i title frames
+
+## Claude
+
+That hypothesis is wrong. Each 448i title frame does exactly one VRAM operation outside normal drawing: a fill (the screen clear) at (0,32) 320×448. Fills are masked, and there are no copies or uploads. So the drawing is correctly confined to one field per frame, and the VRAM dumps show both fields complete.
+
+**Where that leaves us:** if the drawing is right and VRAM is complete, the broken image must come from how PCSX2 presents an interlaced display that changes one field per frame. The likely culprit is its deinterlacing (Automatic, Blend, Bob and so on), which combines fields in its own way. A real PS2 would just scan out the fields one after another, so the console may already be fine. I can't see PCSX2's window, though, and I don't want to guess a third time.
+
+Could you help me with two things?
+1. **Describe what "broken" looks like now.** Is it the same missing-every-other-line pattern on the same letters, different letters, flickering, or a doubled or shaky image?
+2. **Take a screenshot in PCSX2** (F8 by default, saved to `~/.config/PCSX2/snaps/`) on the title screen. Also tell me the Deinterlacing setting under Graphics → Rendering.
+
+I'll keep this build. The only extra thing it does is log a probe line. If you can try another deinterlacing mode, for example Weave or Off, and the text then looks complete, that confirms it's PCSX2's presentation and not the port. The final check would then be on the console.
+
+## User
+
+I took screenshots with Automatic, No Deinterlacing, Bob Top Field First, Blend, and Weave, in that order.
+
+- tool `Bash`: List PCSX2 screenshots
+
+- tool `Bash`: Crop menu text from each screenshot
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/snap_weave.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/snap_auto.png
+
+- tool `Bash`: Log per-frame timeline of clear, mask, and swap
+
+## Claude
+
+Those are fills only; the mask and swap lines used up their 300-line budgets during the boot screen. I'm looking at the start of the title section instead.
+
+- tool `Bash`: Show timeline on the 640x448i boot screen
+
+- tool `Bash`: Show timeline on the 320x448i title
+
+- tool `Read`: /home/alex/.config/PCSX2/snaps/sh1_ps2_SHPS-00001_20261017101046.png
+
+- tool `Bash`: Dump full VRAM at title with current mapping
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/title2/vram.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/4b0dd9c9-9a05-4ac6-b530-0f2b29ed92b1/scratchpad/title2/crop.png
+
+- tool `Bash`: Restore probe-free SCANMSK version and rebuild
+
+## Claude
+
+The interlaced screens are still broken in PCSX2, and I can't explain why from the port's side. Per-field drawing (the real PS1 behaviour) can't be judged in PCSX2; only the console will show whether it works. The current build is the field-masked version without the probes. Nothing is committed.
+
+**What I checked:**
+- **Drawing:** the title frame clears the screen, then draws about 245 primitives. Each frame touches only one field, alternating every vertical blank, exactly as the PS1 rule specifies.
+- **VRAM:** dumps at each frame swap show the complete menu in both fields. The menu text is drawn directly from the font pages, not rendered off-screen.
+- **Timing:** drawing starts right after each vertical blank and finishes within a few milliseconds.
+- **PCSX2's output:** in every deinterlacing mode, including Weave, "START", "DEMO" and "OPT" are missing, while "ION" and everything else is shown. That doesn't match what VRAM holds at any frame swap.
+
+**Options:**
+1. **Use snapshots for single-buffered interlaced screens, as before.** The PS1-style field masking stays behind a build setting for a console test. The snapshot goes into a 16-bit buffer the port owns, so most of the memory saving is kept (600 KB at most instead of 1.2 MB), and all progressive gameplay is still shown directly. The title and inventory looked correct this way earlier today. *(Recommended for now.)*
+2. **Keep field masking as the default and test it on the console next.** If it works there, PCSX2's interlace handling is the odd one out. If it doesn't, we'd at least see the real failure.
+3. **Dig into PCSX2's interlace and `SCANMSK` handling,** for example by testing a tiny standalone program that draws one field at a time with `SCANMSK`. That would show what PCSX2 does, but it's a detour from the port itself.
+
+My recommendation is option 1 now, plus a field-masking build for your next console session. On hardware, the mode-switch timing logs would come from the same session. Should I go ahead?
+
+## User
+
+Let's go with option 1 for now, but keep 2 and 3 in our back pocket. The reason I wanted to optimize and check VRAM was that I want to know how viable it would be to have a 480p and a 720p mode. The game's internal resolution would change, but I'm hoping that the fill rate of the PS2 is high enough that this wouldn't make much difference to the frame rate. 480p mode would never have the switches between 240p and 480i, instead staying at 480p the whole time. The 320x224p mode would become 640x448, the 320x448i mode would become 640x448p, with aspect ratio fixes necessary to cancel out the stretching, and the 640x448i mode would simply become 640x448p. I realize that 480p mode would require more VRAM, but given that the Graphics Synthesizer is designed to shuttle textures in and out of VRAM quickly so they don't take up too much space, I hope that it's still viable. 1280x720p may be more difficult, but it does have precedent in homebrew software. Let me know your thoughts on the viability of each mode.
+
+## Claude
+
+I'll do option 1 first, then answer the 480p/720p question.
+
+For option 1, single-buffered interlaced screens (interlaced, 480 lines, DFE off) get snapshot-copied into a 16-bit buffer at the bottom of GS memory, below the texture cache. Everything else is still shown directly from VRAM. The PS1-style field masking (option 2) moves behind a build setting, `SH1_INTERLACE_FIELDS=1`.
+
+- tool `Bash`: Implement snapshot fallback, field masking behind a flag
+
+## Claude
+
+Both variants build. Launching PCSX2 so you can check the title and inventory with option 1.
+
+- tool `Bash`: Launch PCSX2 to check option 1
+
+## Claude
+
+Option 1 is built, and PCSX2 is running it for you to check. Single-buffered interlaced screens (interlaced, 480 lines, DFE off) are snapshot-copied into a 16-bit buffer at the bottom of GS memory. Everything else is still shown directly from VRAM, and the texture cache keeps its 37 slots. The PS1-style field masking is behind `SH1_INTERLACE_FIELDS=1` (option 2), noted as broken in PCSX2 and to be tested on hardware. Please check that the title and inventory text are complete again.
+
+## 480p and 720p
+
+**Short version:** 480p is viable. Fill rate isn't the problem, and the VRAM fits. The hard part is the same as in every upscaling PS1 emulator: keeping the high-resolution image and the PS1's 1:1 VRAM in agreement. 720p at full internal resolution doesn't fit in VRAM with double buffering. A 720p output signal showing an image rendered at a lower resolution is easy.
+
+### Fill rate: not the limit
+
+- **What the GS can do:** about 2.4 billion pixels a second untextured and about 1.2 billion textured. At 60 fps that's roughly 20 million textured pixels per frame.
+- **What Silent Hill needs:** about 72k pixels per frame at 320×224. Even assuming 4× overdraw (the fog pairs alone double the world), that's about 0.3 million pixels per frame.
+  - **640×448:** 4× that, about 1.2M per frame, or 6% of the fill rate.
+  - **1280×720:** about 13×, roughly 4M per frame, or 20%. Texture and CLUT switching (about 340 a frame) adds some cost, but it should still fit.
+
+**One catch:** GS sends in this port are currently synchronous. The CPU waits for each transfer, and once the GS has more pixels to draw, its FIFO backs up and that wait grows. So more GS work can turn into CPU time until the planned CPU/GS overlap (option 5) is done. Both come down to the same `DrawOTag` work we were about to start. The CPU-side cost per primitive doesn't change with resolution; it's the same conversion with scaled coordinates.
+
+### VRAM
+
+The 1 MB PS1 VRAM copy stays at 1:1 in every mode. It holds the textures, the CLUTs and anything the game reads back.
+
+| | 480p (640×448, 16-bit) | 720p (1280×720, 16-bit) |
+|---|---|---|
+| render buffers (×2, double-buffered) | 2 × 560 KB = 1.1 MB | 2 × 1.8 MB = 3.6 MB |
+| PS1 VRAM copy + CLUT cache | 1.06 MB | 1.06 MB |
+| left for the 4/8-bit texture cache (4 MB total) | about 1.8 MB (≈ 28 slots, today's original count) | negative: doesn't fit |
+
+- **480p** fits comfortably. We measured 0 texture uploads per frame in steady play, so a cache the size the port had until today is fine. On "shuttling textures": the GS can upload quickly, about 0.3–0.5 ms for a 64 KB page through the GIF path. That's fine for a few pages a frame, but would cost real time if the cache were too small and thrashed.
+- **True 720p** options:
+  - **Single buffer:** 1.8 MB plus the 1 MB copy leaves about 1.1 MB for textures. But then the game draws into the buffer being scanned out, which causes tearing, or needs the field-style workarounds.
+  - **Lower internal width** for the render buffers, such as 960×720 at about 1.4 MB each, still doesn't double-buffer comfortably.
+  - **Rendering at 640×448 or 640×360 and letting the GS output stretch it** to a 720p signal is what most PS2 homebrew "720p" actually does (OPL, the GSM video-mode tool). Horizontal stretching can be ×2 exactly. Vertical stretching only comes in whole multiples, so 448 lines would be letterboxed and 360 lines doubles cleanly. That's easy, but it isn't higher detail than 480p.
+
+### What makes it hard: the upscaling itself
+
+- **Two copies of the screen:** the game draws into the PS1's 1024×512 VRAM, and in a 2× mode the screen exists twice, at 1× in the copy and at 2× in the render buffers. Every effect that reads the framebuffer has to be handled, the same way DuckStation or PCSX2's upscaling does it:
+  - fades and screen copies (`MoveImage` of display areas)
+  - drawing that uses the screen as a texture (the port already counts "prims texturing from VRAM", 0 in gameplay so far)
+  - `StoreImage` readbacks
+  - the 448i title and inventory overlays
+- **Scaling rule:** each axis gets its own factor. 224p → 448 is ×2 on both axes. 320×448i → 640×448p is ×2 horizontally and ×1 vertically. 640×448i → 640×448p is ×1. Done that way the picture stays 4:3 with no stretching, so no separate aspect fix is needed. Only 2D elements built for one mode, like text and HUD sprites, need checking for seams or half-pixel gaps at 2×.
+- **No more mode switches:** in 480p, everything goes through one fixed 640×448 progressive output. This also removes the switch blinking and sync loss we just looked at.
+- **Hardware limits:** 480p needs a component cable and a display that accepts 31 kHz; composite and S-Video can't carry it. 720p needs an HDTV, and the GS's 720p mode works on all retail PS2 models.
+
+### Suggested path
+
+1. **First, the `DrawOTag` work and asynchronous GS sends.** They help today, and they make 480p cheaper.
+2. **A 480p prototype:** scale coordinates and scissor in `gpu_gs.c` into separate 2× buffers, output 480p, and leave VRAM effects at 1× at first. That shows the real frame rate and which effects break.
+3. **720p:** later, as output stretching of the 480p render, unless memory frees up.
+
+Tell me how option 1 looks. After that I'd start the `DrawOTag` breakdown.
+
+- tool `Bash`: Check option 1 session log
+
+## Claude
+
+PCSX2 has closed after a short session: about 26 s, one visit to a 448i screen, and no crashes. How did the title screen look with option 1? Was the menu text complete?
+
+## User
+
+Yes it was. Let's move on to the DrawOTag work, but one last thing before that. We've had a copy of the PS1 VRAM this whole time for legacy reasons while we had the software renderer, but I don't think we need to keep an exact copy. At this point, I just want PS2 VRAM to be analogous to PS1 VRAM, in that we have framebuffers, CLUTs, and textures, but they don't necessarily need to be in the same spots as the PS1 VRAM, and we don't need to have a copy of the PS1 VRAM. What can we do to achieve this?
+
+## Claude
+
+There are two "copies" in play today, and they're different things. Your goal is reachable for one of them, and the other is already what you're describing.
+
+### 1. The GS-side PS1 VRAM image (1 MB at `0x300000`)
+
+This isn't a copy; it is the port's PS1 VRAM. The game draws its framebuffers into it, and 16-bit textures are read straight from it. It's also the master data for 4/8-bit textures and CLUTs. So it already is "framebuffers, CLUTs and textures in PS2 VRAM". The parts that are converted into GS formats, the 4/8-bit texture pages and the CLUT rows, already live in their own places (the page cache and the CLUT cache).
+
+Rearranging it into separately placed framebuffers, textures and CLUTs isn't worth it. The game addresses VRAM only by PS1 (x, y) rectangles and freely reuses the same pixels in different roles:
+- a framebuffer area later sampled as a texture (fades, screen effects)
+- CLUTs stored in spare framebuffer rows
+- `LoadImage`, `MoveImage` and `StoreImage` working on arbitrary rectangles
+
+With relocated pieces, every one of those operations would have to work out which pieces a rectangle overlaps, in which roles, and keep them consistent. A single 1:1 image handles all of that for free. It would also save no GS memory unless large parts of PS1 VRAM were never used, and the game uses most of it over time.
+
+### 2. The EE-side copy, `g_PortVram` (1 MB of main RAM)
+
+This one is left over from the software renderer, and it can go. In the GS renderer it's only used for four things:
+- **Filling the 4/8-bit page cache and the CLUT cache:** the CPU reads the indices out of it on a cache miss.
+- **Staging `LoadImage` uploads:** the game's data is copied into it, then sent to the GS.
+- **Keeping it in step on the CPU:** every fill (screen clear) and every `MoveImage` is repeated on the CPU. That's real cost every frame. The clear alone is 72k pixel writes per frame in gameplay and 143k on the 448i screens.
+- **`StoreImage`:** answered from a GS readback already.
+
+**Without it:**
+- **`LoadImage`** uploads straight from the game's buffer.
+- **Fills and copies** happen only on the GS, so the CPU loops disappear. That's a direct win for the frame time we're about to work on.
+- **Cache misses** (rare: 0 per frame in steady play) read the page or CLUT back from the GS, about 30–60 KB each. Better still, the GS might convert it itself with a local-to-local transfer from the 16-bit image into a 4/8-bit page. I'm not sure the GS allows that format change, so it needs a test in PCSX2 and on hardware. Readback is the safe fallback.
+- **Drawing into texture pages** (render-to-texture) becomes simpler: today the CPU copy goes stale there and needs special handling. With the GS as the only master, a re-read picks up the new pixels.
+- **The software renderer and the GS/software compare mode** need the EE copy. I'd keep them building, with the copy only in those modes, or remove them if you consider them retired.
+
+### Proposal
+
+1. Measure what the CPU mirroring costs per frame now (fills, copies and uploads), so the gain is known.
+2. Remove `g_PortVram` from the GS renderer: direct uploads, GS-only fills and copies, and readback on cache misses.
+3. Test GS-side conversion for cache misses as an improvement.
+4. Verify with the deterministic benchmark (pixel-identical frame dumps) and the warp sweep.
+
+Since step 1 is profiling, it can be the start of the `DrawOTag` work. Should I go ahead? And should the software renderer stay buildable or be retired?
+
+## User
+
+Yes, let's start on that. Let's also retire the software renderer, as we can test against Duckstation instead.
+
+## Claude
+
+I'll start by mapping everything that touches `g_PortVram` and the software renderer.
+
+- tool `Bash`: Survey VRAM copy and software renderer usage
+
+- tool `Bash`: List renderer references in libgpu_port.c
+
+- tool `Bash`: Read libgpu_port.c top half
+
+- tool `Bash`: Read rest of libgpu_port.c
+
+## Claude
+
+Next I'm reading the GS side: uploads, readback and the "texturing from VRAM" path.
+
+- tool `Bash`: Locate readback and render-to-texture code
+
+- tool `Bash`: Read transfer, readback, CLUT, rt-texture code
+
+- tool `Bash`: Baseline Kaufmann benchmark with dumps and log
+
+## Claude
+
+While the benchmark runs, I'll only read code, since editing now could race its build. Next: what else depends on the software renderer, and the display module's soft path.
+
+- tool `Bash`: Find software renderer dependents and display soft path
+
+- tool `Bash`: See why benchmark failed
+
+## Claude
+
+My copy of the benchmark script changes into a directory relative to its own location, which is wrong once it lives in my scratchpad. I'm pointing it at the repo and rerunning.
+
+- tool `Bash`: Run baseline benchmark
+
+## Claude
+
+The baseline is running. Meanwhile I'm reading the remaining pieces: the dump code in `Display_PresentGs`, and how the capture tool uses the VRAM copy.
+
+- tool `Bash`: Read dump code and capture usage
+
+- tool `Bash`: Read remaining details for the edit script
+
+- tool `Bash`: Read dump function and function boundaries
+
+- tool `Bash`: Read baseline results
+
+## Claude
+
+The baseline is in: **46.89 fps** (6,335 frames in 8,097 vertical blanks), plus 10 frame dumps. Now I'm applying the changes.
+
+- tool `Bash`: Remove software display path and copies from display_ps2.c
+
+- tool `Bash`: Update display_ps2 header comment
+
+## Claude
+
+Now `libgpu_port.c`.
+
+- tool `Bash`: Simplify libgpu_port.c to GS-only, no EE VRAM copy
+
+## Claude
+
+Now `gpu_gs.c`: the readback helper, cache misses read from the GS, no CPU mirrors, direct uploads and `StoreImage`.
+
+- tool `Bash`: Show remaining VRAM copy references in gpu_gs.c
+
+- tool `Bash`: Read header comment and cache_get loop
+
+- tool `Bash`: GS-side readback, direct uploads, no CPU mirrors
+
+- tool `Bash`: Drop SH1_GPU and gpu_soft.c, build
+
+## Claude
+
+It builds. Next I'm checking for new compiler warnings in the changed files, then running the benchmark against the baseline.
+
+- tool `Bash`: Check warnings; benchmark and compare dumps
+
+- tool `Bash`: Distribution of uploads/readbacks per frame
+
+- tool `Bash`: Break down cache misses during cutscene
+
+- tool `Bash`: Identify what invalidates cached pages
+
+- tool `Bash`: Restore probe-free file; locate insertion points
+
+- tool `Bash`: Patch cached pages/CLUTs on fills instead of dropping them
+
+## Claude
+
+It links. Running the benchmark again: the frame dumps must still match the baseline, and readbacks should drop to 0.
+
+- tool `Bash`: Benchmark with fill patching
+
+- tool `Bash`: Warp sweep with the copy-free renderer
+
+- tool `Bash`: Which map failed
+
+- tool `Bash`: Inspect map0_s00 failure log
+
+- tool `Bash`: Compare game state sequence with earlier passing run
+
+- tool `Bash`: Reproduce map0_s00 in bench and normal builds
+
+- tool `Bash`: Resolve crash PC in benchmark build
+
+- tool `Bash`: Test map0_s00 bench crash on last commit, then restore work
+
+- tool `Bash`: Bisect: without GTE-side changes
+
+- tool `Bash`: Log lines leading up to the crash
+
+- tool `Bash`: Read capture VRAM write and other malloc use
+
+- tool `Bash`: Banded readback for dumps and captures, no malloc
+
+## Claude
+
+`GpuGs_Download` has no callers left, so I'm removing it. Then I'll rerun the map0_s00 benchmark-build test.
+
+- tool `Bash`: Rebuild and retest map0_s00 in benchmark build
+
+- tool `Bash`: Look at the new failure
+
+- tool `Bash`: Compare load-screen sequence: last commit vs now
+
+- tool `Bash`: Compare emulated time of the load
+
+- tool `Bash`: Print vblank and frame numbers during load
+
+- tool `Bash`: Compare dumps and post-load behaviour
+
+- tool `Bash`: Full warp sweep with normal build
+
+## User
+
+[Request interrupted by user for tool use]
+
+## User
+
+I'm ending this early because I feel confident in the results. Let's just move on to the DrawOTag work
+
+- tool `Bash`: Look for sampling or function-level profilers
+
+- tool `Bash`: Check EE timer usage
+
+- tool `Bash`: Find text section bounds and demo event prints
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/sample_ps2.c
+
+- tool `Bash`: Check _etext and demo hook points
+
+## Claude
+
+There's no `_etext` symbol, so I'll use `_fdata`, the start of `.data`, which follows `.text` closely, as the end bound. Then I'll hook the Demo menu and the build flag.
+
+- tool `Bash`: Hook sampler into demo menu and build
+
+## Claude
+
+Now the analysis tool.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/samples.py
+
+## Claude
+
+Now a sampled run of the Kaufmann cutscene in the benchmark build, which runs uncapped so no time is spent idle.
+
+- tool `Bash`: Sampled benchmark run of the Kaufmann cutscene
+
+## Claude
+
+Every sample landed outside the code, so the interrupted PC isn't what this handler reads from `EPC`. I'll log a few raw values to see what's there.
+
+- tool `Bash`: Probe raw EPC values in the timer handler
+
+- tool `Bash`: Find kernel exception hooks
+
+- tool `Bash`: See how the crash reporter gets the faulting PC
+
+- tool `Bash`: Read ee_debug API and crash install
+
+- tool `Bash`: Remove the sampler
+
+## Claude
+
+`git status` shows no changes to `port_link.py`, but it should still carry today's edits (the `SH1_GPU` removal and the new build options). I'll check what state the working tree is in.
+
+- tool `Bash`: Check working tree and stash state
+
+## Claude
+
+The whole working tree reports clean, with no stash entries, and even the untracked `Gemini Conversation.md` isn't listed. Checking whether that's because the changes were committed:
+
+- tool `Bash`: Inspect recent commits
+
+- tool `Bash`: List functions in the primitive path
+
+- tool `Bash`: Read the primitive conversion path
+
+- tool `Bash`: Check includes and build flags plumbing
+
+- tool `Bash`: Add light cycle counters to DrawOTag paths
+
+- tool `Bash`: Check end of prof.h
+
+- tool `Bash`: Apply light counters
+
+## Claude
+
+Building the benchmark with the light counters and running the Kaufmann cutscene. The frame rate will also tell me how much the counters themselves cost.
+
+- tool `Bash`: Run Kaufmann benchmark with light counters
+
+- tool `Bash`: Find fog pair stats users
+
+## Claude
+
+The fog-pair counts were a one-off diagnostic for the fog-pair fusion, which is done. I'll keep them in profiling builds (`SH1_PROF` or `SH1_LITEPROF`) only.
+
+- tool `Bash`: Make fog pair stats profiling-only
+
+## Claude
+
+The closing `#endif` landed inside the loop. Fixing its position:
+
+- tool `Bash`: Fix #endif placement
+
+## Claude
+
+If the light-counter builds keep the statistics on, they can't measure this saving. I'll enable them only in `SH1_PROF` builds.
+
+- tool `Bash`: Benchmark without fog pair stats
+
+- tool `Bash`: Frame rate excluding dump stalls
+
+- tool `Bash`: Split state lookup cost
+
+- tool `Bash`: Function sizes and Prim layout
+
+## Claude
+
+`prim_state` compiles to 5.3 KB, because `state_other`, `tex_state`, `cache_get` and the register helpers are all inlined into it. I'll read its fast path, the part that runs when nothing changed.
+
+- tool `Bash`: Disassemble prim_state fast path
+
+- tool `Bash`: Find writes to state globals
+
+## Claude
+
+Only the `GP0 E2`–`E6` handler writes those globals, so a generation counter bumped there whenever a value actually changes covers every case. Implementing it:
+
+- tool `Bash`: Generation-based state memo, slim fast path; benchmark
+
+## Claude
+
+The state lookup went from 400 to 334 kcycles a frame, and all 10 dumps still match. The memo path itself still costs about 140 cycles per call, so I'm checking what the fast path compiles to now.
+
+- tool `Bash`: Check slimmed prim_state code
+
+- tool `Bash`: Bounding-box fit check, shared tag for fog pairs; benchmark
+
+- tool `Bash`: Log DrawOTag first pass
+
+## Claude
+
+I've cut `DrawOTag` by 14% in the Kaufmann cutscene, from 1,763 to 1,523 kcycles a frame, about 240k cycles saved per frame. All 10 frame dumps are identical to before. Nothing is committed, and I haven't rerun the warp sweep after these changes.
+
+**How it was measured:** a new light counter set (`SH1_LITEPROF=1`) times the parts of `DrawOTag` with inline cycle-counter reads, which cost a few cycles each. The old profiling sections cost hundreds of cycles per call, which distorted per-primitive work. A sampling profiler doesn't work under the ps2sdk kernel, so I dropped it. The benchmark's frame rate is a poor measure here, because it sits at 60 fps for most of the cutscene and includes the dump stalls. So the cycle counts are the measure and the frame dumps check exactness.
+
+**Where the time went before:** walking the ordering table and handling each packet cost 166k a frame. The rest was about 960 polygon calls a frame (half of them fog pairs), at roughly 1,300 cycles each, split across parsing the PS1 packet, looking up GS state and packing GS data.
+
+**What changed** (in [gpu_gs.c](src/port/ps2/gpu_gs.c)), all exact:
+1. **Fog-pair statistics only in profiling builds:** every polygon ran a `memcmp` and two `memcpy`s just for a diagnostic log line. Parsing went from 436k to 304k.
+2. **State lookup:** a generation counter replaces rebuilding a key from 12 globals on every polygon, and the slow paths are no longer inlined, so the fast path doesn't save 10 registers. It went from 375k to 334k.
+3. **Packing:** a quad's bounding box decides whether it fits the PS1's maximum primitive size, so the 12 per-triangle checks only run for big quads. A fog pair's two polygons now also share one GIF tag. Packing went from 430k to 370k.
+
+**What's left, roughly in order of payoff:**
+- **Packing and parsing:** write GS data straight into the packet while parsing, instead of filling temporary arrays and copying them, and use 128-bit stores. These are the two biggest parts, at about 370k and 300k.
+- **Texture state:** about 330 cycles per texture change, around 160k a frame.
+- **Ordering-table walk:** about 110 cycles per packet, around 166k a frame.
+- **The bigger structural items:** overlapping CPU and GS work, and building packets in the scratchpad.
+
+I've logged the numbers in [PS2 Optimizations.md](PS2%20Optimizations.md). Should I continue with writing straight into the packet?
+
+## User
+
+Yes, but make sure to update the other .md files too. I'm trying to find another cutscene for benchmarking, but I don't remember the performance numbers we've captured. What has historically been the worst performing cutscene?
+
+## Claude
+
+I'll look up the Demo cutscene sweep results recorded in the docs.
+
+- tool `Bash`: Search walkthrough for cutscene frame rates
+
+- tool `Bash`: Find Demo sweep comparison results
+
+- tool `Bash`: Read Demo sweep results section
+
+## Claude
+
+The full per-cutscene numbers are in the sweep logs from October 10. `compare_sweeps.py` tabulates them, so I'll run it.
+
+- tool `Bash`: Check compare_sweeps usage and log dates
+
+- tool `Bash`: Tabulate port vs PS1 cutscene frame rates
+
+## Claude
+
+Now I need the Demo-list numbers for the slowest ones, since `bench_cutscene.sh N` takes a list index.
+
+- tool `Bash`: Find Demo list indices of slow cutscenes
+
+- tool `Bash`: Read structure of walkthrough and planning doc
+
+## Claude
+
+Writing the doc updates: a walkthrough section for today's work, checklist updates in the planning doc, and an optimization-log entry for the display and VRAM changes.
+
+- tool `Bash`: Update walkthrough, planning doc, optimization log
+
+## Claude
+
+The slowest cutscene in the port was **map6_s04 func_800E1D50**, the monster Cybil scene, at **28.1 fps**. It's also the slowest on the PS1, at 9.8 fps.
+
+These are from the last full Demo cutscene sweep, on October 10 in PCSX2. That's before the fog-pair fusion, the mesh batching and today's work, so every scene should be faster now. The bottom of that sweep:
+
+| cutscene | Demo list # | port fps | PS1 fps |
+|---|---|---|---|
+| map6_s04 func_800E1D50 (monster Cybil) | 36 | **28.1** | 9.8 |
+| MapEvent_KaufmannBarFightCutscene | 50 | 33.3 | 15.5 |
+| map5_s02 func_800D4B58 | 13 | 33.9 | 15.9 |
+| map7_s02 func_800DF21C | 33 | 35.7 | 18.8 |
+| map4_s04 func_800D1910 | 6 | 37.8 | 19.7 |
+| map4_s05 func_800D61AC | 16 | 38.4 | 18.6 |
+| *current benchmark: map3_s00 func_800D0CF8 (Kaufmann)* | 4 | 52.8 | 19.8 |
+
+**Suggestion:** map6_s04 func_800E1D50 (#36), or the Kaufmann bar fight (#50) as a second choice. Both are far from 60 fps, so improvements will show in the frame rate as well as the cycle counts. The current benchmark spends most of its time at 60 fps. The list number is what `bench_cutscene.sh` takes, for example `bench_cutscene.sh 36 <dir>`.
+
+**Docs:** I've brought them up to date:
+- **[Running Walkthrough.md](Running%20Walkthrough.md):** a new section for the last two days: Split Head, the Gemini review fixes, the GTE dirty bits, the display changes, the VRAM-copy removal and the `DrawOTag` first pass.
+- **[Planning Doc.md](Planning%20Doc.md):** finished items checked off. New open items for the hardware tests (`SH1_INTERLACE_FIELDS`, `SH1_MODESWITCH`), the 480p/720p assessment, the next `DrawOTag` steps and the benchmark-cutscene candidates.
+- **[PS2 Optimizations.md](PS2%20Optimizations.md):** a GS memory map and display entry, next to today's `DrawOTag` entry.
+
+Next I'll start on writing GS data straight into the packet while parsing, measured on the Kaufmann benchmark, unless you'd like me to switch the benchmark to one of these first.
+
+## User
+
+For now, let's use both #36 and #50 as benchmarks. Rename #36 to CybilFightStart in the demo menu to make it easier to find. Then, move on to writing GS data into the packet while parsing.
+
+## Claude
+
+I'll start with the rename. The Demo list is generated by `tools/port/cutscene_list.py`, so I'm checking how it names entries.
+
+- tool `Bash`: Find naming in cutscene_list.py
+
+- tool `Bash`: Read the display-name function
+
+## Claude
+
+The list is sorted by function name, not by label, so renaming the label keeps it at #36. Adding a small table of readable names:
+
+- tool `Bash`: Add CybilFightStart name and check indices
+
+- tool `Bash`: Baseline benchmark on #36 and #50
+
+- tool `Bash`: Profile CybilFightStart whole frame
+
+- tool `Bash`: Resolve the hot RTPS sites
+
+- tool `Bash`: Read polygon tail to restructure
+
+- tool `Bash`: Read polygon tail
+
+- tool `Bash`: Direct packet writes for quads that fit
+
+## Claude
+
+Benchmarking both cutscenes and checking the frame dumps against the baselines:
+
+- tool `Bash`: Benchmark direct packet writes on #36 and #50
+
+- tool `Bash`: Check exactness on the deterministic Kaufmann benchmark
+
+- tool `Bash`: Where the Kaufmann dump differs
+
+- tool `Bash`: Determinism check: same build twice on #36 and #50
+
+- tool `Bash`: Size of dump differences vs baseline
+
+- tool `Bash`: Same code, counters off: do dumps change?
+
+- tool `Bash`: Compute vertex values only where written; Kaufmann check
+
+- tool `Bash`: Benchmark #36 and #50 after the change
+
+## Claude
+
+Writing the results into the three docs, including the determinism finding about the new benchmarks:
+
+- tool `Bash`: Update the three docs
+
+## Claude
+
+I renamed #36 and moved quad writing straight into the packet. `DrawOTag` is down another 5–8% in all three benchmarks, and the Kaufmann frame dumps are identical. The docs are updated and nothing is committed.
+
+**Rename:** Demo #36 (map6_s04 func_800E1D50) shows as **CybilFightStart** in the Demo menu. It's an entry in a small name table in [cutscene_list.py](tools/port/cutscene_list.py). The list is sorted by function name, so it keeps its place at #36. #50 is still `MapEvent_KaufmannBarFightCutscene`.
+
+**Writing straight into the packet:** a quad that fits the PS1's maximum primitive size is now written straight into the GS packet right after the state lookup, with a fog pair's underlay first. That's nearly every quad. Vertex values are only computed where they're written, not into temporary arrays first. Big quads and triangles keep the old path. `DrawOTag` kcycles per frame:
+
+| | Kaufmann #4 | CybilFightStart #36 | Bar fight #50 |
+|---|---|---|---|
+| end of the first pass | 1,523 | 1,520 | 1,198 |
+| now | **1,396** | **1,418** | **1,132** |
+
+Since this morning, the Kaufmann cutscene has gone from 1,763 to 1,396 kcycles (−21%).
+
+**The two new benchmarks can't check exactness.** Each is deterministic for a given build, but its picture depends on timing. The same source with only the light counters switched off produced different dumps (a few to a few hundred pixels) and slightly different vertical-blank counts. So they measure speed only, and Kaufmann remains the pixel check. It only varies in one subtitle glyph between builds.
+
+**Where CybilFightStart's time actually goes:** it runs at about 28 fps, and `DrawOTag` is only about 15% of its frame. The game update takes 6.3M cycles a frame, led by `func_80057658`, the world mesh's per-vertex point light. That issues about 3,550 RTPS a frame, two per vertex. It's the same kind of hot spot that batching fixed for character meshes, and likely the biggest frame-rate win available for that scene.
+
+**Docs:**
+- [PS2 Optimizations.md](PS2%20Optimizations.md): the numbers, the benchmark caveat, and the `func_80057658` finding.
+- [Planning Doc.md](Planning%20Doc.md): finished items checked off, with new open items for the next `DrawOTag` steps and `func_80057658`.
+- [Running Walkthrough.md](Running%20Walkthrough.md): a short summary.
+
+**Next options:**
+1. **`func_80057658` (point light):** batch its RTPS. This is the big one for CybilFightStart.
+2. **More `DrawOTag`:** texture state (about 330 cycles per change), 128-bit stores, the ordering-table walk.
+
+I'd recommend 1. Which do you want?
+
+## User
+
+<ide_opened_file>The user opened the file /home/alex/Documents/silent-hill-1-ps2-port/PS2 Optimizations.md in the IDE. This may or may not be related to the current task.</ide_opened_file>
+
+Let's go with 1
+
+- tool `Bash`: Read func_80057658
+
+- tool `Bash`: Read Row2 macro and RTPS entry point
+
+- tool `Bash`: Add Gte_CmdRtpsRow2 and use it in func_80057658
+
+- tool `Bash`: Fix directive indentation; check flag plumbing
+
+## Claude
+
+The check-build flag doesn't reach `src/port`, so I'll put the comparison at the call site: a helper that runs both paths from the same register state and compares all 64 registers.
+
+- tool `Bash`: Add check-build comparison at call site
+
+- tool `Bash`: Check build: compare fast path on #36 and #50
+
+## Claude
+
+0 mismatches over 6.2 million calls across both cutscenes. Now the speed:
+
+- tool `Bash`: Benchmark #36 and #50
+
+## Claude
+
+CybilFightStart went from 27.5 to 30.8 fps. Recording it in the docs:
+
+- tool `Bash`: Update docs
+
+## Claude
+
+I sped up the point-light code in `func_80057658`: CybilFightStart is up 12% (27.5 → 30.8 fps) and the Kaufmann bar fight 4% (40.8 → 42.4 fps). The result is exact: a check build found 0 mismatches over 6.2 million calls.
+
+**What was slow:** the function uses RTPS to compute three dot products per vertex, not to project anything. The light vector and the normal sit in rotation rows 0 and 1. Each vertex then puts the same vector into row 2 and into the input vertex V0. Writing row 2 made the emulator unpack all three GTE matrices again before every RTPS, about 3,550 times a frame in CybilFightStart.
+
+**The fix:** a new entry point, `Gte_CmdRtpsRow2` in [gte.c](src/port/gte.c), does all three steps in one call. It writes row 2 and V0 in place, without marking the matrix for a full refresh, then runs the same RTPS code as before. The original macros stay in [bodyprog_80056D8C.c](src/bodyprog/gfx/bodyprog_80056D8C.c) for the PS1 build.
+
+**Exactness check:** in `-DSH_PORT_CHECK_BATCH` builds, each call runs both the new path and the original macros from the same GTE state and compares all 64 registers. That's where the 0 mismatches over 6.2 million calls come from, across both cutscenes.
+
+The frame rates are from benchmark builds, averaged over seconds without a frame-dump stall. All three docs are updated, and nothing is committed.
+
+Next, I can profile CybilFightStart again to see what leads its game update now, or go back to the remaining `DrawOTag` items: texture state, 128-bit stores and the ordering-table walk.
+
+## User
+
+Can these dot products be moved to the EE's MMI?
+
+## Claude
+
+Mostly, they already are. On the EE, `rtp_small` computes its three dot products with MMI: `rt_dot3` uses `PHMADH`, and `Gte_CmdRtpsRow2` goes through that same path. So the multiply-accumulates aren't where the time goes now.
+
+What remains per vertex is the rest of RTPS, which is scalar code:
+- **Perspective divide:** the GTE's reciprocal-table division, with a count-leading-zeros, a table lookup and two refinement steps. This is the largest part.
+- **Screen position:** two 32×32 multiplies with the offsets for SX and SY.
+- **Depth cue for IR0:** another multiply.
+- **Saturation and FLAG bits**, plus writing back about 15 GTE registers.
+
+MMI can't do much for these. They're sequential integer steps for one vertex, and MMI is wide but only helps when the same step runs across lanes.
+
+The bigger remaining saving is to batch the whole loop, as with `Gte_RtpBatch` for meshes:
+- **Only two results are needed:** the function reads just SXY2 and IR0 after each RTPS, so a batch could skip all the per-vertex register writes and the dispatch.
+- **Packing two vertices per MMI instruction:** with all vertices of a normal at hand, the dot products for two vertices could share one MMI instruction.
+- **Keeping it exact:** only the last vertex of each mesh would go through the real GTE, so the registers end up exactly as the PS1 leaves them.
+
+I'd expect that to save roughly another third of this function's GTE time, but that's an estimate I haven't measured yet. One wrinkle: the loop uses each result for the vertex before it, so a batch has to collect all results first, then compute the light values in a second pass.
+
+Do you want me to try it? It's verifiable the same way, with a check build comparing results.
+
+## User
+
+Let's keep this in mind, but go back to the Cybil fight scene and profile it again to figure out what else is slowing it down.
+
+- tool `Bash`: Profile CybilFightStart again
+
+- tool `Bash`: Function-level profile of CybilFightStart
+
+## Claude
+
+The point light is still by far the biggest cost. This profile instruments each function, which inflates small functions, but the ranking is clear. Exclusive time in the game update, per frame:
+
+| function | kcycles/frame | what it is |
+|---|---|---|
+| **`func_80057658`** | **3,469** | world mesh point light, including the emulated RTPS it calls. The port's GTE code isn't instrumented, so it counts toward the caller |
+| `Fs_QueueWaitForEmpty` | 1,131 | waiting for a file load to finish: waiting, not CPU work |
+| `func_80057B7C` | 885 | world mesh vertex transform (already batched) |
+| `Gfx_MeshDrawPort` | 775 | building the world mesh's PS1 packets |
+| `Gte_DataReadInline` + `Gte_CtrlWriteInline` | 456 | GTE register moves called as real functions. That's an artefact of this profiling build; normally they're inlined |
+| character meshes (`func_8005A900`, `func_8005AC50`, `func_8005AA08`, `func_8005A478`) | about 630 | |
+| `WorldEnv_LightTransform` | 192 | |
+| `Port_MemoCheck`, `Port_Nclip`, `Vw_AabbVisibleInScreenCheck` | about 450 | |
+
+`DrawOTag` is separate, at about 1.4M.
+
+**What this means:**
+1. **The point light is about 60% of the game update.** That's about 1,000 cycles per vertex for some 3,500 calls a frame. Today's fix removed the matrix refreshes, but each vertex still pays for a full emulated RTPS: dispatch, register writes, the divide and the flags. The batch I suggested is the main remaining lever: compute only the two values the function reads, and run only the last vertex through the GTE. I'd now expect a large share of that 3.5M to go, though the instrumentation inflates it, so I'll measure before promising a number.
+2. **File waits (1.1M) aren't CPU work.** They're time spent waiting on the disc. They're worth a separate look, for example whether the scene streams data while it plays.
+3. **The world mesh transform and packet building (about 1.7M together)** are the next tier after that.
+
+Should I go ahead with the point-light batch, checked the same way as before?
+
+## User
+
+Yes
+
+- tool `Bash`: Read function tail and rtp_small depth cue
+
+- tool `Bash`: Check mul32 signature
+
+- tool `Bash`: Add Gte_RtpsDotBatch
+
+- tool `Bash`: Read function frame and scratch struct fields
+
+- tool `Bash`: Add the batched port loop
+
+- tool `Bash`: Fix SZ preset, hook in, add check harness
+
+## Claude
+
+Now the reference copy of the original loop for the check build:
+
+- tool `Bash`: Add original-loop reference and compile check build
+
+- tool `Bash`: Run check build on #36, #50, #4
+
+## Claude
+
+0 mismatches over 46,000 meshes in the check build (light values, the scratch fields and all 64 GTE registers compared). Now the speed:
+
+- tool `Bash`: Benchmark #36 and #50
+
+- tool `Bash`: Compare game update before/after batch
+
+## Claude
+
+The batch is a real but modest gain. CybilFightStart's game update dropped from 5,849 to 5,446 kcycles a frame, about 400k or 7%. Recording it:
+
+- tool `Bash`: Update docs
+
+## Claude
+
+The point-light batch works and is exact, but the gain is about 7%, much smaller than the profile suggested. CybilFightStart's game update dropped from 5,849 to 5,446 kcycles a frame, and the profiling build went from 36.9 to 39.0 fps. Over the whole cutscene, the benchmark build took 4% fewer vertical blanks for CybilFightStart (1,918 → 1,849) and 7% fewer for the bar fight (6,492 → 6,040).
+
+**How it works** (in [bodyprog_80056D8C.c](src/bodyprog/gfx/bodyprog_80056D8C.c) and [gte.c](src/port/gte.c)):
+1. A first pass collects every vertex-to-light vector in the same order the original loop visits them.
+2. `Gte_RtpsDotBatch` computes the screen position, depth and depth cue for all of them except the last, using the GTE's exact arithmetic. That skips the dispatch and register writes per vertex.
+3. The original light arithmetic then runs on those results.
+4. The very last vertex goes through the real GTE, with its result queue preset to the earlier results, so every GTE register ends exactly as before.
+
+**Exactness:** the check build runs the batched loop and the original loop from the same state, and compares the light values, the whole scratch structure and all 64 GTE registers. 0 mismatches over 46,000 meshes across both cutscenes.
+
+**Why it's smaller than expected:** the function-level profile inflated this function. Its many small calls each paid for the instrumentation, so the 3.5M was mostly profiling overhead.
+
+**Next candidates for CybilFightStart:**
+- **`Fs_QueueWaitForEmpty`** (about 1.1M a frame): the scene is waiting on file loads, not doing CPU work. It may be worth seeing what it streams mid-scene.
+- **The world mesh transform (`func_80057B7C`) and packet building (`Gfx_MeshDrawPort`):** about 1.7M together.
+
+All three docs are updated, and nothing is committed.
+
+## User
+
+Let's look at the file loads
+
+- tool `Bash`: Find callers of Fs_QueueWaitForEmpty
+
+- tool `Bash`: Log Fs_QueueWaitForEmpty callers during the scene
+
+- tool `Bash`: Resolve callers; timeline
+
+- tool `Bash`: Remove probe and stale warp.txt
+
+## Claude
+
+The file loads aren't a per-frame cost. They all happen at the start of the scene, and during the fight itself the game is purely CPU-bound.
+
+**What the log shows** (CybilFightStart, one run):
+
+| when | caller | files queued | waited |
+|---|---|---|---|
+| scene start | `func_800E1D50` (the cutscene itself) | 4 | 34 vertical blanks |
+| scene start | `WorldGfx_Draw` | 4 | 39 vertical blanks |
+| scene start | `WorldGfx_Draw` | 4 | 26 vertical blanks |
+| later | `Chara_ProcessLoads`, `open_main` | 0 | 2 each (nothing to wait for) |
+
+That's about 100 vertical blanks, roughly 1.6 s, of loading before the action starts. The EE was 94–98% idle then, just waiting on the disc. After that there are no more loads, and the EE sits at 0% idle until the scene ends.
+
+**Why the profile showed 1.1M a frame:** the function-level profile averages over a window that included that start-up load. It's wait time, not CPU work, and it doesn't slow the fight itself. Speeding it up would mean faster loading, which is a separate topic: comparing load times against the PS1, or preloading. It wouldn't raise the cutscene's frame rate.
+
+**For frame rate, the targets stay CPU work during the fight:**
+- the world mesh transform (`func_80057B7C`) and packet building (`Gfx_MeshDrawPort`), about 1.7M together
+- the remaining point-light cost
+- `DrawOTag`, about 1.4M
+
+**Cleanup:** I removed the temporary logging. I also deleted a leftover `build/port/warp.txt` from the warp sweep I stopped earlier. It only redirected the game to a map after each Demo cutscene had finished, so today's cutscene numbers aren't affected.
+
+Which should I go after next: the world mesh transform and packet building, or `DrawOTag`?
+
+## User
+
+Let's do the world mesh transform and packet building
+
+- tool `Bash`: Read func_80057B7C
+
+- tool `Bash`: Locate the two functions
+
+- tool `Bash`: Read port version of func_80057B7C
+
+- tool `Bash`: Add mesh light/transform/packet counters
+
+## Claude
+
+Game code is compiled by `ee_compile_check.sh`, which doesn't pass `SH1_LITEPROF` yet, so I'm adding it there.
+
+- tool `Bash`: Pass LITEPROF to game code; measure #36
+
+## Claude
+
+The point light is still the largest part, at 2.1M cycles a frame, so my batch removed less than I'd expected. I'm splitting it into the batch's arithmetic and the rest.
+
+- tool `Bash`: Split the point light cost
+
+- tool `Bash`: Find the return in Port_PointLight
+
+- tool `Bash`: Apply split counters and measure
+
+## Claude
+
+The batch's arithmetic alone costs about 370 cycles per vertex (1.42M for 3,800 vertices), which is a lot for a few multiplies and a table lookup. I'm checking the generated code for helper calls.
+
+- tool `Bash`: Inspect batch inner loops for helper calls
+
+- tool `Bash`: Read the batch inner loop code
+
+- tool `Bash`: Read clz32
+
+## Claude
+
+The source already uses the EE's `PLZCW` instruction for this, so the call means the `_EE` branch isn't being compiled. I'll check whether `gte.c` gets `_EE` defined at all.
+
+- tool `Bash`: Check whether _EE reaches gte.c
+
+- tool `Bash`: Read EE GTE test runner
+
+- tool `Bash`: Run EE GTE exactness test (with MMI)
+
+## Claude
+
+The MMI GTE code is exact: all seeds match on the EE. Next I'm checking where else `_EE` guards code outside `src/port/ps2/`, then enabling it.
+
+- tool `Bash`: Find _EE guards outside the HAL
+
+- tool `Bash`: See the other _EE matches
+
+## Claude
+
+Only `gte.c` and `vw_calc.c` are affected. Switching their guards to the compiler's own R5900 define:
+
+- tool `Bash`: Enable EE paths in the game build; rerun GTE tests
+
+## Claude
+
+The EE and host GTE tests still pass. Next, the game-level check build, which now exercises the real MMI paths: point light, mesh batch and Gemini's bone matrices.
+
+- tool `Bash`: Check build with MMI paths active
+
+## Claude
+
+All checks report 0 mismatches with the MMI paths live. Now the speed, plus the Kaufmann pixel check:
+
+- tool `Bash`: Benchmark #36, #50 and Kaufmann with MMI on
+
+## Claude
+
+Both cutscenes are clearly faster, and the Kaufmann frame dumps are still identical. Recording the finding:
+
+- tool `Bash`: Document the _EE finding
+
+## Claude
+
+Profiling the world mesh code turned up a build bug: the GTE emulator's EE-specific code had never been compiled into the game. Fixing it made CybilFightStart 7.6% faster and the bar fight 5.2% faster, and everything is still exact.
+
+**The bug:** the fast PS2 code in [gte.c](src/port/gte.c) sits behind `#ifdef _EE`. That covers the `PHMADH` dot products, the `MULT`/`MFHI` multiply and `PLZCW` for counting leading zeros. Only `src/port/ps2/` is compiled with `-D_EE`, and `gte.c` and the game code aren't. So the game always ran the generic C fallbacks.
+- **Why the tests never caught it:** the GTE test's EE build passes `-D_EE` itself, so it exercised code the game never ran.
+- **Gemini's MMI bone-matrix path** in `vw_calc.c` was compiled out the same way, so the scalar fallback is what actually ran.
+- **How it showed up:** the point-light batch was calling the library helper `__clzdi2`, with about 18 register spills around each call, for every vertex.
+
+**The fix:** both files now also check the compiler's own `_MIPS_ARCH_R5900` define, so the EE code is used in the game.
+
+**Exactness:**
+- **GTE test:** all 7 seeds on the EE and on the host compare every register and FLAG, all matching.
+- **Check build** (CybilFightStart and Kaufmann): every comparison reports 0 mismatches. That covers the mesh batch, the character vertex and normal batches, the point light and the bone matrices.
+- **Kaufmann frame dumps:** identical.
+
+**Speed** (benchmark builds, vertical blanks for the whole cutscene):
+
+| | before | after |
+|---|---|---|
+| CybilFightStart #36 (801 frames) | 1,849 | **1,709** |
+| Bar fight #50 (about 4,030 frames) | 6,040 | **5,723** |
+
+Within CybilFightStart's world mesh, the point-light batch fell from 1,419 to 988 kcycles a frame and the transform from 910 to 640.
+
+**Where CybilFightStart's frame goes now** (kcycles a frame):
+
+| part | kcycles |
+|---|---|
+| point light | 1,654 (batch 988, the light arithmetic after it 469) |
+| `DrawOTag` | 1,410 |
+| mesh transform | 640 |
+| mesh packets (`Gfx_MeshDraw`) | 476 |
+
+**Next step for the point light:** its batch still does its dot products in scalar code. It wasn't written with `PHMADH` the way `rtp_small` is. Moving those to MMI is the next step there, and checkable the same way. After that, the mesh packets.
+
+All three docs are updated, and nothing is committed. Should I continue with the point light's MMI dot products?
+
+## User
+
+Yes
+
+- tool `Bash`: Read rt_dot3
+
+- tool `Bash`: MMI dot products in Gte_RtpsDotBatch
+
+- tool `Bash`: Reindent block
+
+## Claude
+
+The game-data check compares the new path against the original loop. I'll run it, then benchmark:
+
+- tool `Bash`: Check build, then benchmark
+
+## Claude
+
+Exact, but slower: the batch went from 988 to 1,146 kcycles a frame. On the EE, the 128-bit store-and-reload around `PHMADH` costs more than the nine scalar multiplies it replaces. I'm reverting it.
+
+- tool `Bash`: Revert, confirm, note in log
+
+- tool `Bash`: Experiment: scalar instead of rt_dot3
+
+- tool `Bash`: Remove rt_dot3 and m_rt_mmi
+
+- tool `Bash`: GTE tests, benchmarks, Kaufmann dumps
+
+- tool `Bash`: Document
+
+## Claude
+
+Moving the point light's dot products to MMI made it slower, so I reverted it. The same test showed the existing MMI dot product elsewhere was also a net loss, and removing it gave a small exact gain.
+
+**Point light with MMI:** I rewrote `Gte_RtpsDotBatch`'s dot products with `PHMADH`. It was exact (0 mismatches over 110,000 meshes in the check build) but slower: the batch went from 988 to 1,146 kcycles a frame. Each `PHMADH` needs the values written to memory as a 128-bit block and read back, and that costs more than the nine scalar multiplies it replaces.
+
+**The same applies to `rt_dot3`:** that's the `PHMADH` dot product the mesh transform batch and per-command RTPS use. Now that the scalar path really uses the fast `MULT`/`MFHI` multiply and `PLZCW`, scalar is slightly faster there too. I removed `rt_dot3` and its MMI copy of the matrix:
+
+| | before | after |
+|---|---|---|
+| CybilFightStart mesh transform (kcycles a frame) | 640 | 613 |
+| CybilFightStart vertical blanks | 1,709 | 1,702 |
+| bar fight mesh transform | 521 | 497 |
+
+It's still exact: the GTE test passes on the EE and the host, and the Kaufmann frame dumps are identical.
+
+MMI only pays off when data stays in the 128-bit registers across several operations, like whole vertex batches. It doesn't help for one dot product at a time. I noted that in [PS2 Optimizations.md](PS2%20Optimizations.md) and updated the Planning Doc entry.
+
+**CybilFightStart now** (kcycles a frame):
+
+| part | kcycles |
+|---|---|
+| point light | about 1,650 (batch 988, the light arithmetic after it 469) |
+| `DrawOTag` | 1,410 |
+| mesh transform | 613 |
+| mesh packets | 476 |
+
+The point light's batch is now plain scalar arithmetic, mostly the GTE's exact divide, and there's no cheap trick left for it. The other part, the 469k of light arithmetic after the batch, is the decompiled code itself. A tighter port version of it is possible, and the check build would verify it.
+
+Nothing is committed. Next options: that light arithmetic, the mesh packets (`Gfx_MeshDraw`, 476k), or `DrawOTag` again (texture state and the ordering-table walk). Which do you want?
+
+## User
+
+Let's start with the light arithmetic
+
+## Claude
+
+Pass 2 does about 120 cycles of work per vertex. Most of that is keeping the original's scratch-memory variables updated as it goes: the screen position, the depth and the matrix rows. Each light value only depends on that vertex's own results, so the loop can run in registers. Only the final scratch state has to match the original, and the check build compares the whole scratch structure, so it will catch any difference.
+
+- tool `Bash`: Register-only light arithmetic
+
+- tool `Bash`: Check build, then benchmark
+
+- tool `Bash`: Document
+
+## Claude
+
+I cut the point light's arithmetic pass to well under half its cost, from 469 to 182 kcycles a frame in CybilFightStart, and it's still exact.
+
+**What changed:** the original loop updates the scene's scratch variables for every vertex (the screen position, the depth, the matrix rows and the current normal). That's a lot of memory writes. Each light value depends only on its own vertex's results and lands in that vertex's own slot. So the new loop works entirely in registers, and the scratch variables get only their final values: the last vertex's, which still goes through the real GTE as before. The change is in [bodyprog_80056D8C.c](src/bodyprog/gfx/bodyprog_80056D8C.c).
+
+**Exactness:** the check build compares the light values, the entire scratch structure and all 64 GTE registers against the original loop. 0 mismatches over 117,000 meshes across CybilFightStart and the bar fight.
+
+**Speed:**
+
+| | before | after |
+|---|---|---|
+| CybilFightStart light arithmetic (kcycles a frame) | 469 | **182** |
+| CybilFightStart whole point light | 1,654 | **1,368** |
+| CybilFightStart vertical blanks (801 frames) | 1,702 | **1,662** |
+| Bar fight light arithmetic | 387 | **193** |
+
+The bar fight's total vertical blanks barely moved (5,723 → 5,725). That scene's timing varies with the build and its light is a smaller share of the frame, so its own counter is the better measure there.
+
+**The point light now** (kcycles a frame):
+
+| part | kcycles |
+|---|---|
+| batch (mostly the GTE's exact divide) | 988 |
+| collecting the vectors | 180 |
+| arithmetic | 182 |
+
+The batch is near its floor without changing the divide itself. Folding the collect pass into the batch might save part of that 180k.
+
+All three docs are updated, and nothing is committed. Since this morning, CybilFightStart has gone from 1,969 to 1,662 vertical blanks for the same 801 frames, about 16% less time. Next up could be the mesh packets (476k) or `DrawOTag` (1.4M). Which do you want?
+
+## User
+
+Let's do the mesh packets
+
+- tool `Bash`: Read port Gfx_MeshDraw
+
+- tool `Bash`: Read memo helpers and start of Gfx_MeshDrawPort
+
+- tool `Bash`: Outline Gfx_MeshDrawPort branches
+
+- tool `Bash`: Read the lit-and-fogged path
+
+- tool `Bash`: Memoize the lit-and-fogged path's colours
+
+## Claude
+
+The existing mesh check compares the packets against the original code, so it covers this change too:
+
+- tool `Bash`: Check build, then benchmark
+
+## Claude
+
+No change, so CybilFightStart doesn't take that path. I'll count faces per path with a temporary probe instead of guessing again.
+
+- tool `Bash`: Count faces per mesh path in CybilFightStart
+
+## Claude
+
+All of CybilFightStart's world faces take the lit path without fog, roughly 2,300 faces a frame at about 200 cycles each. Reading that loop:
+
+- tool `Bash`: Read the lit path loop
+
+- tool `Bash`: Rewrite lit loop with locals
+
+## Claude
+
+`POLY_GT4` corners are 12 bytes apart, not 8, and `field_18` is an `s32`. Fixing both:
+
+- tool `Bash`: Fix corner stride and depth type
+
+- tool `Bash`: Check build, then benchmark
+
+## Claude
+
+Mismatches, so my rewrite differs somewhere. I'll look at what the mesh check compares, and print a mismatch.
+
+- tool `Bash`: Read mesh check harness
+
+- tool `Bash`: Read mismatch reporting
+
+- tool `Bash`: See mismatch details
+
+- tool `Bash`: Rebuild check build; show mismatches
+
+- tool `Bash`: Scratch struct field types
+
+- tool `Bash`: Original local types
+
+## Claude
+
+The original keeps the bound in a `u32` (`temp_t0_3`), so its screen-bounds test compares unsigned, and a negative coordinate counts as huge. My version compared signed. Matching it:
+
+- tool `Bash`: Fix, check, benchmark
+
+- tool `Bash`: Check on Kaufmann and other scenes; dumps
+
+- tool `Bash`: Document
+
+## User
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent:
+   The project is a PS2 port of the Silent Hill (PS1) decomp. The user's requests in this period, in order:
+   - **DrawOTag optimization:** done; small gain.
+   - **Profiling:** profile all cutscenes, then gameplay through the title-screen attract demos with the frame rate uncapped. Find the bottlenecks.
+   - **Optimization targets:** the map6_s02 effect grid, then the world mesh fog paths, then the point light (investigated, dropped), then character packets (reverted), then snow (measured, not pursued).
+   - **Memory card saving:** "one save file, just like PS1". Import the user's two .mcs saves into PCSX2's Mcd001.ps2, then export a uLaunchELF-style .psu for the real PS2 card.
+   - **Console testing:** build and deploy; log performance and check for crashes. Fix the save-screen and ammo digits; fix other found bugs.
+   - **Soft-reset combo:** answered.
+   - **480p/2x:** the user tabled 480p output (#1), has a component cable, and wants the game adapted using source access where useful. Do the screen-read inventory (step 2), including a console menu pass the user performed.
+   - **FMV playback:** implement it. Do an accuracy comparison against DuckStation and make the output exact. Deploy. Add a script/mode to play all FMVs one after another.
+   - **Latest: "Start creating that prototype"**, the 2x renderer prototype.
+   - **Standing instructions from earlier:**
+     - Keep the docs updated with each piece of work: "PS2 Optimizations.md", "Planning Doc.md", "Running Walkthrough.md".
+     - Commit only when asked.
+     - Use DuckStation as the renderer reference.
+     - PCSX2 test runs use the software renderer.
+     - DuckStation runs muted, on the software renderer.
+
+2. Key Technical Concepts:
+   - **Project layout:**
+     - GS renderer: src/port/ps2/gpu_gs.c.
+     - GTE emulator: src/port/gte.c.
+     - The IOP sound module sh1spu, with xa.c as its XA reader.
+     - Remote agent: sh1agent. Deploys go over Neutrino UDPFS: ./build-and-deploy, tools/port/ps2_ctl.py, and ps2_log.py (log in build/port/ps2_log.out).
+   - **Build flags:**
+     - SH1_BENCH (uncapped demos), SH1_LITEPROF (light counters LP_*), SH1_PROF plus SH1_EXTRA_CFLAGS=-finstrument-functions (function profile).
+     - New: SH1_MC_FORMAT, SH1_MC_IMPORT, SH1_MC_SELFTEST, SH1_SCREENREAD. Planned: SH1_HIRES.
+   - **PCSX2 caveats:** it doesn't model EE caches. Busy time per displayed frame = elapsed × (1 − heartbeat idle%); the budget is 4.9M cycles per frame at 60 fps. Attract demos in BENCH builds run fully uncapped.
+   - **Hardware-only GS quirk:** the GS→EE readback DMA moves 8-quadword bursts, so smaller transfers never complete. Readbacks are now aligned to 64 pixels.
+   - **Decomp UB pitfalls on GCC:**
+     - `(val/10) >> 32` gives 0 on GCC.
+     - Arrays declared smaller than used: GCC truncated loops. Fixed with -fno-aggressive-loop-optimizations.
+   - **Warm-restart hang:** after ps2_ctl deploy (warm restart), a hang at gameState 1 step 3. IOP DMA ch10 (SIF0) is busy (CHCR 01000701) and the EE sits in the kernel at 0x81FE0. A cold boot (power cycle) is fine. RESET doesn't revive Neutrino; the user power-cycles.
+   - **PS1 memory card format:** 128KB; frame 0 "MC"; dir frames 1–15 hold state (0x51/52/53, free 0xA0, deleted 0xA1–A3), size, next pointer and a 21-byte name at 0x0A, with an XOR checksum at 0x7F. Frames 16–35 are the broken-sector list; frame 63 is a copy of frame 0.
+   - **libmc:** MCMAN/MCSERV with mcSync. Open modes are IOP values (1 = read, 2 = write, 0x200 = create).
+   - **PS2 memory card filesystem:** 528-byte raw pages, 1KB clusters, an indirect FAT and 512-byte dirents. .psu format: dirent headers, file data padded to 1KB.
+   - **STR/MDEC v2:**
+     - Sectors: video is file 0, ch 1 (submode 0x48); audio is file 1, ch 1. 9 video sectors + 1 audio per frame, at 15 fps, 320x208.
+     - DuckStation-exact arithmetic:
+       - DC dequant: `(v*qt0)<<4`; AC: `((v*q*qt)>>3)<<4`, each ±8 toward zero, clamped to −0x4000..0x3FFF.
+       - IDCT passes: `(sum+0x20000)>>18` floor, with s16 saturation between passes. The result is sign-extended from 9 bits and clamped to −128..127.
+       - YUV→RGB: Mednafen formulas.
+   - **2x renderer design:** see Current Work.
+
+3. Files and Code Sections:
+   - **src/port/ps2/gpu_gs.c**
+     - polygon() now dispatches on `(w[0]>>24)&0x1C` to an always-inline `polygon_t(w,n,under,shape)`.
+     - tex_state has a 64-entry memo keyed `(tpage&0x19F)|(clut<<9)|(raw<<25)`, valid while `s_TexGen` is unchanged. s_TexGen is bumped where s_PageMap/s_ClutMap change.
+     - download_rect is aligned to 64 pixels: `x0 = x & ~63, tw = ((x+w+63)&~63)-x0`.
+     - Screen-read inventory under SH_PORT_SCREENREAD:
+       - Functions: sr_hit, sr_note, sr_texels, sr_screen, sr_summary.
+       - Variables: g_PortGpuCaller, g_PortSrContext.
+       - The case table holds 1024 entries and logs "table full" once. Copies are keyed by destination; log lines include the game state and step.
+     - GpuGs_MovieShow(rgba,w,h,top,lines,clear,blank) uploads a PSMCT32 frame into the SNAP area and sets DISPFB1.
+     - LP labels were added: "map fx (grid)", "map fx: batch", "particles: move", "particles: draw", "snow: rtps".
+     - Constants observed for the 2x work:
+       ```
+       #define VRAM_ADDR 0x300000; VRAM_TBP VRAM_ADDR/256; VRAM_FBP VRAM_ADDR/8192; VRAM_BW 16
+       #define CACHE_ADDR 0x200000; CACHE_SLOT 0x10000; CACHE_SLOTS 37 (15 at CACHE_ADDR, 22 from CACHE2_ADDR)
+       #define CACHE2_ADDR 0xA0000; SNAP_ADDR 0; CLUT_ADDR 0x2F0000; CLUT_ROWS 128
+       ```
+     - Code paths observed:
+       - base_state() sets R_FRAME to VRAM (memoized by s_Epoch).
+       - state_other() calls `scissor(s_AreaX1, s_AreaY1, s_AreaX2, s_AreaY2)`.
+       - emit() computes `xyz = ((x+2048)<<4 & 0xFFFF) | (((y+2048)<<4 & 0xFFFF)<<16)` and UV as `u<<4`.
+       - fill_rect() emits a sprite with scissor 0..1023.
+       - move() does a GS local→local transfer.
+       - display_copy() is a DECAL sprite blit; it sets FRAME, then s_Epoch++.
+       - lines() uses emit().
+       - GpuGs_DisplayShow(x,y,w,h,interlace480,blank) sets PMODE and DISPFB1.
+   - **src/port/libgpu_port.c:**
+     - LoadImage and StoreImage set g_PortGpuCaller (SCREENREAD).
+     - DrawOTagImpl sets g_PortSrContext.
+   - **src/port/ps2/display_ps2.c:**
+     - New `Display_PresentMovie(rgba,w,h,lines)`: uses mode init(w,lines,0), s_MovieShown, and supports frame dumps.
+     - New `Display_MovieEnd()`.
+     - Display_PresentGs is unchanged; it switches mode via init(w,h,interlaced).
+   - **src/port/ps2/movie_ps2.c (new):**
+     - Port_MovieOpen(sector,sectors), Port_MovieTick, Port_MovieClose.
+     - Video sectors arrive from the IOP through a 256×2048-byte ring and s_Count. Reads use the uncached mirror (|0x20000000). Acknowledgement is Port_XaAck every 16 sectors.
+     - Frame n is shown at 4(n−1) vblanks; the stream ends after 180 vblanks with no data. A decode-cycle report is printed every 150 frames.
+   - **src/port/ps2/strdec.c / strdec.h (new; moved from tools/port/str):**
+     - `int StrDec_Frame(data,size,w,h,rgb,bpp)` decodes v2 frames.
+     - Implementation: the VLC LUT, a two-word bit window, the MDEC SCALE table from libpress, DuckStation-exact dequant/IDCT/YUV, and 32-bit half sums via an avg trick (`pass_round(lo,hi)`).
+     - Columns and rows that are empty are skipped, and DC-only blocks take a shortcut.
+     - Output is bit-exact with DuckStation.
+   - **src/port/iop/sh1spu/xa.c and main.c:**
+     - xa_forward(addr,sectors,count) and xa_ack(used).
+     - fwd_sector() copies each video sector to a staging buffer, then sends it by SIF DMA to the EE ring, followed by the count.
+     - New ops: OP_XAFWD 8 and OP_XAACK 9.
+   - **src/port/ps2/spu_ps2.c:** Port_XaForward and Port_XaAck; defines OP_XAFWD 8 and OP_XAACK 9.
+   - **src/port/ps2/libcd_ps2.c:** `int Port_CdHill(unsigned* lsn, unsigned* ps1Start)`, with a prototype `int CdInit(void);` added before it.
+   - **src/screens/stream/stream.c:**
+     - movie_main's SH_PORT loop uses Port_MovieOpen(sector,(f_size+2)*10), Joy_Update, skip and soft reset, and the frame limit.
+     - `Port_MoviePlayAll()` iterates FILE_XA_C1_20670..FILE_XA_ZZ_14239 (21 movies) via open_main. It temporarily sets gameState to GameState_MovieIntro so the soft reset works, and logs "movie test: ...".
+   - **src/port/demo_menu.c and include/port/demo_menu.h:**
+     - The Demo list has an "ALL MOVIES" row at s_Selected=−1, returning PORT_DEMO_MOVIES (−3).
+     - Port_MoviesRemote, an s_RemoteMovies flag, and s_MoviesWanted from demo.txt "movies" (requested once gameState==MainMenu).
+   - **src/port/ps2/demo_sweep_ps2.c:** "movies" in host:demo.txt returns 2.
+   - **src/bodyprog/events/title.c:**
+     - The Demo list now only reads the menu when `chosen == -1`; it was `< 0`, which was a bug.
+     - `chosen == PORT_DEMO_MOVIES` calls Port_MoviePlayAll().
+   - **src/port/psx_card.c (new):**
+     - libcard: InitCARD, StartCARD, _card_info (async via PortMc_InfoStart/Poll with a 30-vblank cache), _card_clear, _card_load, _card_read, _card_write (sector 0 not written).
+     - BIOS calls Port_BuOpen/Close/Lseek/Read/Write/FirstFile/NextFile/Erase/Rename/Format over one 128KB PS1 card image per slot.
+     - Port_CardPoll is called from TestEvent. Builds the PS2 icon. The self-test runs under SH_PORT_MC_SELFTEST.
+   - **src/port/ps2/memcard_ps2.c (new):**
+     - Loads rom0:MCMAN and MCSERV through Port_PadModulesLoad. Uses the folder /BASLUS-00707SH1 with CARD.MCD, icon.sys and SH1.ICO.
+     - Async mcGetInfo; libmc is only used from the main thread (GetThreadId check). MC_O_* open modes.
+     - Test options: SH_PORT_MC_FORMAT (formats card 1 and mirrors to host:cardN.mcd) and SH_PORT_MC_IMPORT (host:importN.mcd).
+   - **src/bodyprog/memcard.c:** `#ifdef SH_PORT` macros map open/close/lseek/read/write/firstfile/nextfile/erase/rename/format to Port_Bu*.
+   - **src/port/libapi_port.c:** the libcard stubs were removed; TestEvent calls Port_CardPoll.
+   - **src/port/ps2/libpad_ps2.c:** `Port_PadModulesLoad()`.
+   - **src/bodyprog/demo.c:** logs "attract demo N started" and "stopped (#k): F frames in V vertical blanks".
+   - **src/port/prof_fn.c:** SLOTS raised to 8192, and probing is bounded (fixes a hang).
+   - **src/maps/particle.c:** LP_SNOW_MOVE, LP_SNOW_DRAW and LP_SNOW_RTPS counters.
+   - **src/maps/map6_s02/map6_s02_2.c:** Port_GridBatch using `Gte_RtpGrid`, with Port_GridCheck in the check build and LP_MAP_FX counters.
+   - **src/port/gte.c:** `rtp_project` helper, and `Gte_RtpGrid(v0,du,dv,nu,xy,z,count)`.
+   - **src/bodyprog/gfx/bodyprog_80056D8C.c:** Gfx_MeshDrawPort fog, lit+fog, lit+black-fog and flat loops rewritten, with Port_FaceTest, Port_FogMemo, PORT_FACE_LOCALS/WRITEBACK and PORT_MESH_PATH counters.
+   - **src/bodyprog/text/text_draw.c and text_draw_jp.c:** `quotient = val / ATLAS_COLUMN_COUNT;` under SH_PORT.
+   - **tools/port/ee_compile_check.sh:** adds -fno-aggressive-loop-optimizations.
+   - **tools/port/port_link.py:** -lmc; new flags SH1_MC_FORMAT, SH1_MC_IMPORT, SH1_MC_SELFTEST (solo) and SH1_SCREENREAD (both lists).
+   - **tools/port/pcsx2_run.py:** --memcards DIR (overrides MemoryCards).
+   - **build-and-deploy:** the messages now say "power-cycle", not "press RESET".
+   - **New tools:**
+     - tools/port/mc_export_psu.py: PS2 card image → .psu, plus --list.
+     - tools/port/str/strdump.c: host decoder test, built with gcc against src/port/ps2/strdec.c.
+     - tools/port/duckstation_movie.py and tools/port/gdb/movie_ps1.py: DuckStation movie frame capture and comparison. The comparison writes build/port/cap/movie_compare_N.png and sets OutputMuted.
+   - **Docs:** the three .md files were updated throughout.
+   - **Memory added:** ps2-stuck-needs-power-cycle.md, plus an index line in MEMORY.md.
+
+4. Errors and fixes:
+   - **Profiler hang:** the 1024-slot table filled up. Enlarged to 8192 and probing bounded.
+   - **Movie reader conflict:** reading video from the EE alongside the IOP XA reader caused stale buffers, 238 dropped frames and an EE hang. Fixed by having the IOP forward video sectors.
+   - **Slow decoder:** bit-by-bit reads and a float IDCT ran at ~10.5 fps. Integer rewrite. The exact version first cost 17M cycles; restructured into 32-bit halves, now ~11.5M in PCSX2 and 7.8–10M on hardware.
+   - **Accuracy mismatch:** fixed using DuckStation's arithmetic, read from its source and reimplemented (not copied; its licence is restrictive).
+   - **Build errors:**
+     - `CdInit` implicit declaration: prototype added.
+     - u16 name clash: renamed to rd16.
+     - io_common.h refuses newlib builds: defined MC_O_* instead.
+   - **Safety check:** an `rm -f $S/*` was blocked; used new directories instead.
+   - **CLUT readback stalls on hardware:** 16x1 reads (2 qwc) hung for about 1 s each. Fixed with the 64-pixel alignment.
+   - **Digit bug:** the `>>32` quotient was 0 on GCC. Fixed.
+   - **Loop truncation:** item-screen loops truncated by GCC UB. Fixed with -fno-aggressive-loop-optimizations.
+   - **ALL MOVIES never started:** `chosen < 0` swallowed −3, and the request fired during boot. Fixed both.
+   - **Warm-restart hangs (3 times):** unresolved, documented. User feedback: RESET doesn't work; power-cycle.
+
+5. Problem Solving:
+   - **Solved:**
+     - memory card saving, confirmed on console and in PCSX2;
+     - FMVs: bit-exact, all 21 play on console with no drops, sound in sync per the user;
+     - the 2x inventory, complete except the credits.
+   - **Inventory results:**
+     - 16 feedback/motion-blur sites using 15-bit pages over the frame buffers (including Screen_BackgroundMotionBlur on the load screens). These sample the 2x buffer.
+     - The lens-flare occlusion test (water.c, func_8008D78C/D850): an 8x8 copy from the screen to (784/792,112), then a 2-pixel StoreImage2.
+     - Uploaded images inside the frame-buffer area: the Konami logo and the title background, 8-bit pages at (64,0)–(192,512), CLUT at (224,15). These must sample 1:1 VRAM.
+     - Menus don't read the screen. FMVs bypass it.
+   - **Open:** the warm-restart hang. Clue: SIF0 IOP→EE busy; to investigate later.
+
+6. All user messages:
+   - "Proceed with DrawOTag optimization"
+   - "Do another run through of all the cutscenes for performance profiling. Figure out where our remaining bottlenecks are."
+   - "Let's start with #1"
+   - "Let's do that"
+   - "Ok, what are some other places that we can speed things up without testing on hardware just yet?"
+   - "Let's start on #1"
+   - "Let's move to #2 for now"
+   - "claude rc" and "/claude rc"
+   - "I want to start remote control, but I don't know how"
+   - "To profile gameplay, let's use the gameplay demos that run on the title screen. Make sure to uncap the frame rate so we can measure performance better."
+   - "Let's try for some gains on the snow particles. There might still be some way to speed things up"
+   - "Before we do that, let's implement saving. What do we need to do to get the PS1 save function saving to a PS2 memory card?"
+   - (answer to the format question) "The PS1 game has multiple save slots in one save file. I want to replicate this on PS2 with one save file, just like PS1"
+   - "I have two .mcs files in this folder (/media/sf_VirtualBox_Shared_Folder) that I want to use. Copy both of them to Mcd001.ps2 that's already in use in PCSX2. I feel confident enough in saving that I just want to use the .ps2 memory card files I'm already using, and I don't have any precious data on them anyways. I will then test saving and loading."
+   - "Saving and loading seems to work just fine. Now, export the PS2 save to a .psu file in the same way that launchELF does it, so I can copy it to my real PS2 memory card"
+   - "Alright, build and deploy the game so that I can do some testing on console. Be sure to log performance and check for crashes."
+   - "A couple minor things: The text isn't formatted correctly for the save file metadata. For example, the Sewer file in file 1 of my save has "Time: 2:0U:0T" and says that it is save # "0F". In the item menu, the number of bullets is formatted wrong. In that same save file, the handgun has "0>" bullets."
+   - "Deploy"
+   - "I got a black screen after the Konami logo. What happened?"
+   - "Just FYI, I have never been able to restart Neutrino by just pressing Reset. I've always had to hold the button to power off the console, then turn it back on"
+   - "It did not hang this time. It also looks like the text issues are fixed."
+   - "Is there a soft reset button combo I can use to go back to the main menu?"
+   - "Alright, I've tested a variety of areas, and performance seems much better than the last long console session I played. There are still some performance issues in some areas, and a few graphical bugs I'd like to fix up, but first, I'm curious about revisiting the viability of 480p as we discussed."
+   - "Let's table #1 for now. I do have a component cable to properly test 480p, so that's not in question. As for #2, since we have the source code available, we should allow the game to essentially adapt its code to account for higher resolutions, so we don't have to do any framebuffer downscaling for effects or whatever. What do you think of that?"
+   - "Let's start with 2"
+   - "We don't have FMV playback implemented yet. Where can we start with that?"
+   - "Yes" (start the decoder prototype)
+   - "Yes" (continue with step 1, the port movie_main)
+   - "Do an accuracy comparison against DuckStation first. Is there anything we can do to get more accurate output?"
+   - "Yes" (deploy)
+   - "The FMVs seem to work fine and have synced video and audio. Can you set up a script to play through all the FMVs, one after another?"
+   - "Is PCSX2 still going? It seems to just be sitting on the title screen"
+   - "The remote restart seems to have resulted in a black screen again. I will restart the PS2"
+   - "Let's go to the remaining parts of the 2x screen inventory. I can do whatever you need me to on console"
+   - "The game has frozen on the Konami screen while fading in or out. I will restart the console"
+   - "I've been through as many screens as I can for the moment"
+   - "Start creating that prototype"
+
+7. Pending Tasks:
+   - **Current:** create the 2x renderer prototype.
+   - **Later/open, not started:**
+     - investigate the warm-restart hang (SIF0 clue);
+     - inventory the credits;
+     - 480p output (tabled by the user);
+     - the user's mention of remaining performance issues in some areas and graphical bugs to fix;
+     - DrawOTag hardware profiling.
+   - **Console:** currently running the SH1_SCREENREAD diagnostic build (19:52:26). The next deploy should be a normal build.
+   - **Commits:** a lot is uncommitted. Commit only if the user asks.
+
+8. Current Work:
+   I had just started the 2x renderer prototype ("Start creating that prototype") and was reading gpu_gs.c to plan the edits. No prototype code has been written yet. The design announced to the user:
+   - **Build flag:** SH1_HIRES=1, giving `-DSH_PORT_HIRES` in the port_link "dump" list for PS2-side code.
+   - **Hires buffer:**
+     - A 640x1024 PSMCT16 buffer at GS address 0 (HIRES_FBP 0, HIRES_TBP 0, FBW 10). It mirrors the VRAM area x 0–319, y 0–511, at 2x.
+     - CACHE2_ADDR moves to 0x140000, giving 12 + 15 = 27 cache slots under SH_PORT_HIRES.
+   - **2x mode (s_Hires):** on when the display is 320 wide, ≤256 lines and not interlaced (gameplay, cutscenes). Decided in GpuGs_DisplayShow on mode change.
+     - Entering: upscale VRAM area → hires (sprite blit).
+     - Leaving: downscale hires → VRAM area, plus cache_invalidate.
+     - Both bump s_TexGen, s_Epoch and s_StateGen.
+   - **Draw target (s_HrTarget):** `s_Hires && s_AreaX2 < 320`.
+     - Coordinates are doubled in emit, polygon_t (both the fast path and the xyz arrays) and rectangle: `xyz = (((x<<sh)+2048)<<4 & 0xFFFF)`.
+     - Scissor ×2 (x1*2, y1*2, x2*2+1, y2*2+1).
+     - FRAME is set to hires or VRAM in state_other (which is memoized by StateGen).
+   - **Feedback textures:** 15-bit pages with px < 320 in 2x mode sample hires with UV doubled. TEX0 = HIRES_TBP + ((py*2/64)*10 + px*2/64)*32, TBW 10, TW/TH 10; the memo is keyed via s_TexGen.
+   - **Uploads (LoadImage) into the area:** upload 1x, then upscale-blit into hires.
+   - **Fills into the area:** also fill hires ×2.
+   - **move():** if the source is in the area, downscale hires → VRAM src first; do the 1x move; if the destination is in the area, upscale it to hires. This covers the lens flare.
+   - **Readbacks (download_rect/StoreImage) overlapping the area:** downscale first.
+   - **4/8-bit pages and CLUTs** stay read from the 1x VRAM (uploads intact), which covers the logo and title.
+   - **Display in 2x:**
+     - display_ps2 uses the existing 640x448i mode, via init(640,448,1).
+     - GpuGs_DisplayShow sets DISPFB to hires at (x*2, y*2) and bypasses the snapshot logic.
+     - 240-line modes are cropped or centred to 448.
+   - **Blit helper:** a generalized DECAL sprite with alpha test off, FBA 0, no blend and TEXA as the base, after display_copy. Bumps s_Epoch.
+   - **Prototype caveats:** lines are thin at 2x; texture windows are ignored for doubled UVs; movies overwrite the snap/hires area (the game redraws after).
+   - **Testing plan:** PCSX2 first (gameplay/cutscene dumps), then console.
+
+9. Optional Next Step:
+   Implement the SH_PORT_HIRES prototype in src/port/ps2/gpu_gs.c and src/port/ps2/display_ps2.c, plus the port_link.py flag, following the design above. Build with SH1_HIRES=1 and test in PCSX2 on a cutscene and gameplay (attract demo or Demo-list cutscene, frame dumps), then deploy to console. This follows the user's latest request, "Start creating that prototype", and my stated plan: "I'll build the prototype behind a build flag, `SH1_HIRES=1`, so normal builds don't change." The work was at the stage of reading fill_rect, move, lines and the FRAME/scissor call sites (gpu_gs.c lines ~667–689, 846, 1504, 1920, 1993) before writing the code.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+The messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.
+
+- tool `Bash`: Outline gpu_gs.c structure
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/display_ps2.c
+
+- tool `Bash`: Find build flag handling and display callers
+
+## Claude
+
+Writing the 2x prototype now: adding the hires buffer, the blits, and doubled coordinates in gpu_gs.c, then the display switch.
+
+- tool `Bash`: Read build flag section
+
+## Claude
+
+Now the edits. Build flag first, then gpu_gs.c.
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/port_link.py
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+## Claude
+
+Now base_state, state_other, prim_state key and tex_state.
+
+- tool `Bash`: Apply state and coordinate edits for hires
+
+## Claude
+
+Now fills, copies, uploads, readbacks and the display.
+
+- tool `Bash`: Hook fills, copies, uploads, readbacks, display
+
+## Claude
+
+Fixing the fill's restore order, then adding the hires helpers.
+
+- tool `Bash`: Add hires helper functions
+
+## Claude
+
+hr_blit can run inside tex_state (a cache miss reading the area), which clobbers the state set just before it. I'm making prim_state redo the rest of the state when that happens.
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+## Claude
+
+Now display_ps2.c: the mode choice and 2x frame dumps.
+
+- tool `Bash`: Edit display_ps2.c for hires mode
+
+- tool `Bash`: Look at build script and tools
+
+## Claude
+
+Compiling with SH1_HIRES=1.
+
+- tool `Bash`: Link the port with the hires flag
+
+## Claude
+
+Built cleanly. Checking how the PCSX2 runner takes a scripted cutscene and dumps.
+
+- tool `Bash`: Read PCSX2 runner and demo sweep usage
+
+- tool `Bash`: Find demo.txt and input.txt script formats
+
+- tool `Bash`: Read cutscene bench script and input script format
+
+## Claude
+
+The existing cutscene bench script fits: it builds, plays one Demo cutscene and collects dumps every 200 frames. Finding which cutscene number was the benchmark.
+
+- tool `Bash`: Find benchmark cutscene number used before
+
+## Claude
+
+Running cutscene 4 (Kaufmann) with the 2x build in PCSX2, in the background.
+
+- tool `Bash`: Run Kaufmann cutscene with hires build in PCSX2
+
+## Claude
+
+While that runs: the script discards PCSX2's console output, so afterwards I'll read the hires lines from PCSX2's own log file.
+
+- tool `Bash`: Locate PCSX2 log file
+
+## Claude
+
+I'll wait for the run to finish.
+
+- tool `ToolSearch`: 
+
+## Claude
+
+The 2x prototype is written and builds, but it hasn't been tested yet. Its first PCSX2 run is in progress.
+
+**What's in it** (behind `SH1_HIRES=1`, so normal builds don't change):
+- **2x drawing:** a 640x1024 16-bit buffer at the bottom of GS memory holds the frame buffer area (VRAM x 0–319) at twice the resolution. To make room, the texture-page cache drops from 37 to 27 slots in this build.
+- **When it's on:** whenever the game shows a 320-wide progressive screen, which covers gameplay and cutscenes. The display then switches to 640 wide in 480i and shows that buffer.
+- **Effects that read the screen:** effects that sample the screen as a texture, such as motion blur and the load-screen blur, read the 2x buffer.
+- **Keeping the normal VRAM copy in sync:**
+  - Uploads, fills and VRAM copies into the area are written to the normal VRAM copy and then scaled up into the 2x buffer.
+  - Anything that reads the area (texture/CLUT cache misses, StoreImage, the lens-flare copy) first scales the 2x buffer back down into the normal copy.
+  - That should keep the Konami logo, the title and the lens flare correct.
+- **Movies and mode changes** turn 2x off first, because both reuse that memory.
+- **Logging:** a drawing area that only partly covers the 2x area gets logged as "hires: clip area … straddles", up to 8 times.
+- **Frame dumps** are written at 2x.
+
+The changes are in [gpu_gs.c](src/port/ps2/gpu_gs.c), [display_ps2.c](src/port/ps2/display_ps2.c) and [port_link.py](tools/port/port_link.py).
+
+**Known limits:**
+- Lines stay 1 pixel thin.
+- Polygons with vertices far off screen (beyond about ±1024 pixels in 2x) could draw wrongly.
+- The output is 480i, not 480p.
+
+The test now running is the Kaufmann cutscene (Demo cutscene 4) in PCSX2, with dumps every 200 frames into `build/port/bc_hires`. Once it finishes I'll check the dumps and logs, and test gameplay, before deploying to the console.
+
+- tool `Bash`: Check hires run results and dumps
+
+## Claude
+
+Ran to the end with 2x dumps. Let me compare against the 1x reference dumps.
+
+- tool `Bash`: Build side-by-side 1x vs 2x images
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/hr_4.png
+
+## Claude
+
+The old reference dumps come from a different benchmark cutscene, so they can't be compared directly. Looking at the 2x frames at full size instead.
+
+- tool `Bash`: Convert hires dumps to PNG
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/hx_1.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/hx_9.png
+
+## Claude
+
+The 3D scene renders properly at 2x, but the subtitle text is broken: it shows as cyan blocks with stripes. Checking the inventory notes for where the font and text live in VRAM.
+
+- tool `Bash`: Look up font VRAM location notes
+
+- tool `Bash`: Find font texture page and CLUT in text code
+
+- tool `Bash`: Read text draw atlas setup
+
+- tool `Bash`: Find tpage and clut values for glyphs
+
+- tool `Bash`: Crop font region from VRAM and hires dumps
+
+## Claude
+
+Those are stale dumps from earlier runs. Picking the matching pair from this run by modification time.
+
+- tool `Bash`: Crop font region from this run's dumps
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/vram_font.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/hires_font.png
+
+## Claude
+
+The font rows (VRAM y 496–511) are black in the 2x buffer. In the 1x VRAM dump the same rows hold scraps of the picture. Comparing the two whole dumps.
+
+- tool `Bash`: Side-by-side hires (halved) and VRAM dumps
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/cmp_vram.png
+
+- tool `Bash`: Rerun cutscene capturing log and grep hires lines
+
+## Claude
+
+The log shows the game sometimes sets a full-VRAM clip area, (0,0)-(1023,511). Those draws go to 1x. To pin down the font, I'm checking where it sits in a VRAM dump from an older 1x run.
+
+- tool `Bash`: Crop bottom/top of an older 1x VRAM dump
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/old_bottom.png
+
+## Claude
+
+That dump is from this run too. Looking for one older than today's 2x builds.
+
+- tool `Bash`: List VRAM dumps by time
+
+- tool `Bash`: Crop bottom of a pre-hires VRAM dump
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/old_bottom.png
+
+- tool `Bash`: Run with timed dumps around hires switches
+
+- tool `Bash`: Compare early VRAM and hires dumps
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/early.png
+
+- tool `Bash`: Check font rows in VRAM vs hires per dump
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+## Claude
+
+Rebuilding and rerunning the dump check.
+
+- tool `Bash`: Rebuild, rerun, recheck font rows
+
+## Claude
+
+The two copies now match exactly. Rerunning the full cutscene to check the subtitles.
+
+- tool `Bash`: Rerun Kaufmann cutscene hires and export dumps
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/hx_9.png
+
+## Claude
+
+The subtitles render correctly now, and the text is sharper because glyphs are sampled at 2x. Next, gameplay: letting the attract demos play from the title screen, with dumps along the way.
+
+- tool `Bash`: Run attract demos in hires build with dumps
+
+- tool `Bash`: Contact sheet of gameplay dumps
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/demo_sheet.png
+
+## Claude
+
+Gameplay renders properly at 2x: the street, the fog, snow and Harry, and the movie before it still plays. Checking whether the attract-demo timing changed.
+
+- tool `Bash`: Compare attract demo timing
+
+- tool `Bash`: Check normal build, then build hires console ISO
+
+## Claude
+
+Both builds are good. Updating the docs: finding the existing 2x sections.
+
+- tool `Bash`: Find 2x sections in docs
+
+- tool `Bash`: Read doc sections to update
+
+## Claude
+
+Docs next. One loose end resolved itself: the 320x224p mode with 2x off at 2.8 s in the log was the intro movie, which turns 2x off as intended.
+
+- tool `Bash`: Update the three docs for the 2x prototype
+
+- tool `Bash`: Update conversation archive
+
+- tool `Bash`: Check archive script usage
+
+- tool `Bash`: Update conversation archive with session file
+
+## Claude
+
+The archive now has 5,160 lines, but earlier it had over 15,000. Checking whether the script just overwrote older sessions.
+
+- tool `Bash`: Check archive history and script behavior
+
+- tool `Bash`: Read archive memory note and list transcripts
+
+- tool `Bash`: Regenerate archive from all sessions
+
+## Claude
+
+The new file has 18,252 lines, fewer than the committed 15,399 plus this session's 5,160. Checking that the committed history is all still there.
+
+- tool `Bash`: Check committed archive lines are retained
+
+## Claude
+
+Every committed line is still there; the committed file already covered the start of this session. Updating the memory note so future regenerations use all sessions.
+
+- tool `Edit`: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/conversation-archive.md
+
+## Claude
+
+The 2x renderer works in PCSX2: the Kaufmann cutscene and the attract demos run at 2x with no crashes. The console hasn't seen it yet.
+
+![Kaufmann cutscene at 2x](/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/hx_9.png)
+
+- **What looks right:**
+  - The 3D scene and the fog are sharper.
+  - Subtitles are crisper, because the font is now sampled at 2x.
+  - The intro movie still plays before the game.
+- **Bug fixed during testing:** on the first run the subtitles came out as cyan stripes. Copying the 2x picture back to the normal copy at the bottom edge of the screen area overflowed a GS texture coordinate field. That wiped the font, which is stored just below the second frame buffer. It now copies in smaller bands, and both copies match exactly.
+- **Speed is unknown until the console:** PCSX2 doesn't model the GS cost of drawing 4x the pixels, so its frame rates mean nothing here.
+- **Untested:** the screens that reuse the last frame for blur effects (the load screen, map6_s02, map7_s02) and the lens flare. None of those came up in these runs.
+
+**Known limits:**
+- Lines stay 1 pixel wide.
+- Polygons stretching far off screen could draw wrongly.
+- The output is 480i; 480p is still tabled.
+
+The changes are in [gpu_gs.c](src/port/ps2/gpu_gs.c), [display_ps2.c](src/port/ps2/display_ps2.c) and [port_link.py](tools/port/port_link.py). The 2x build is behind `SH1_HIRES=1`, and the normal build still compiles. The docs are updated.
+
+I also regenerated "Claude Conversation.md". The archive script on its own would have dropped earlier sessions, so I built it from all three session transcripts; no earlier lines were lost.
+
+**Ready for console:** the 2x console ISO is built (normal speed, not the benchmark build) but not deployed. Deploying restarts the game remotely, which has hung three times before and needed a power cycle. Say when you're at the console and I'll deploy and watch the log. On console, the most useful things to check:
+- the frame rate in heavy areas;
+- the load screen;
+- a scene with a lens flare;
+- how the picture looks on your TV.
+
+## User
+
+Can we have the 2x internal res on the Extra Options screen? I would like to be able to toggle it during gameplay, or at least on the title screen
+
+## Claude
+
+Looking at how the Extra Options screen is built.
+
+- tool `Bash`: Find Extra Options screen code
+
+- tool `Bash`: Outline options.c extra options code
+
+## Claude
+
+Options is reachable from both the title menu and the in-game pause menu, so one new Extra Options entry covers both places. Reading the menu's control, drawing and highlight code.
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/screens/options/options.c
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/screens/options/options.c
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/screens/options/options.c
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/screens/options/options.c
+
+- tool `Bash`: Inspect config struct for spare fields
+
+## Claude
+
+`config.unused_26` is marked unused and is saved with the config on the memory card. Confirming nothing touches it.
+
+- tool `Bash`: Check unused_26 usage
+
+## Claude
+
+Nothing uses it, so the setting goes in `config.unused_26` (0 = x1, 1 = x2). It gets saved to the memory card with the other options. Converting the 2x code in gpu_gs.c from build-time to run-time.
+
+- tool `Bash`: List hires ifdefs and cache slot uses
+
+## Claude
+
+Rewriting the two blocks that have `#else` branches by hand, then stripping the remaining `#ifdef SH_PORT_HIRES` guards with a script.
+
+- tool `Bash`: Read the else-branch hires blocks
+
+- tool `Bash`: Make hires renderer runtime in gpu_gs.c
+
+## Claude
+
+Adding the layout switch next to GpuGs_Hires.
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+## Claude
+
+Now display_ps2.c: removing the build-flag guards and reading the option each frame.
+
+- tool `Bash`: Make display hires runtime-controlled
+
+- tool `Bash`: Feed option to display, document the field
+
+## Claude
+
+Now the menu itself in options.c, all under `SH_PORT`.
+
+- tool `Bash`: Check entry count sets and triangle type
+
+- tool `Bash`: Add Resolution entry to Extra Options
+
+## Claude
+
+The entry-strings pattern also appears in the main menu, so the script stopped before writing anything. Making that match unique and rerunning.
+
+- tool `Bash`: Apply Resolution entry edits to options.c
+
+## Claude
+
+Building the game objects and the port without any special flags, since 2x is now a runtime option.
+
+- tool `Bash`: Full build with runtime hires option
+
+## Claude
+
+It builds. To test it in PCSX2 I need an input script that reaches Extra Options. Checking whether an earlier run already scripted the title menu.
+
+- tool `Bash`: Look for prior menu input scripts
+
+- tool `Bash`: Script Extra Options toggle in PCSX2 with dumps
+
+## Claude
+
+No "hires: option on" line appeared, so the toggle didn't take effect. Looking at the dumps from the options screen.
+
+- tool `Bash`: Contact sheet of options screen dumps
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/menu.png
+
+- tool `Bash`: Read extra options entry trigger
+
+## Claude
+
+R1 is right. Retrying with two Downs, spaced out so they register.
+
+- tool `Bash`: Retry Extra Options toggle script
+
+- tool `Bash`: Contact sheet of the retry dumps
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/menu.png
+
+## Claude
+
+Only one Down registered again, so the first press comes too early. Shifting the presses one second later.
+
+- tool `Bash`: Retry with later menu inputs
+
+- tool `Bash`: View dumps and input log
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/menu.png
+
+## Claude
+
+Both presses were logged but only one moved the cursor, so the menu is probably still fading in at 38 s. Moving the Downs to 40 and 41.5 s.
+
+## User
+
+[Request interrupted by user]
+
+## User
+
+Ok, I just did it myself. Now let's test on real hardware
+
+## Claude
+
+Deploying the current build. It's the normal build, with the Resolution option in Extra Options and x1 as the default.
+
+- tool `Bash`: Deploy current ISO to the PS2
+
+- tool `Monitor`: PS2 log: hires toggles, mode changes, crashes, readback stalls
+
+## Claude
+
+The build is deployed and the game was told to restart. If the PS2 doesn't come back within about 30 seconds, hold power to switch it off, start it again, and launch Neutrino; it will load the new ISO.
+
+I'm watching the console log for crashes, readback stalls and every 2x switch.
+
+**What to try:**
+1. **Turn it on:** Option → R1 (Extra Options) → the new **Resolution** row at the bottom → Left/Right to switch x1 / x2. The options screen is 480i, so nothing changes there. The switch happens when gameplay or a cutscene comes back, after a few black frames while the TV changes mode.
+2. **Gameplay and cutscenes at x2:** check smoothness in the heavy areas you noticed before. This is the GS fill-cost question PCSX2 couldn't answer.
+3. **Effects that reuse the last frame:** the load screen's blur, and any scene with a lens flare.
+4. **Toggle back to x1 mid-game** (pause → Option) to compare.
+5. **Saving:** the setting is stored in the save's options, so it should come back after a save and reload.
+
+Tell me what you see, especially slowdowns, flicker or wrong pictures, and roughly where.
+
+## Claude
+
+The PS2 restarted on its own this time; no power cycle was needed. It's running the new build (21:37:23), so you can start testing.
+
+## Claude
+
+The heartbeat lines would arrive every second, so I'm restarting the log watch without them.
+
+- tool `TaskStop`: 
+
+- tool `Monitor`: PS2 log: hires toggles, mode changes, crashes, readback stalls
+
+## Claude
+
+The PS2 has booted normally into the new build, and nothing has gone wrong in the log. I'm now watching it without the once-a-second heartbeat lines. Go ahead and test; tell me what you see on screen.
+
+## User
+
+The game crashed on a black screen again when redeploying the build. I’m restarting the PS2
+
+## Claude
+
+Checking what the log captured just before the hang.
+
+- tool `Bash`: Read the end of the PS2 log
+
+- tool `Bash`: Show last lines before each restart in the log
+
+## Claude
+
+Those are the loader's lines. Looking instead at what followed each MCSERV load in earlier runs.
+
+- tool `Bash`: Show what follows each MCSERV load
+
+- tool `Bash`: Find MCSERV load sites and log context
+
+## Claude
+
+Our code loads MCSERV in only one place. Checking whether a second load also happens in runs that didn't hang.
+
+- tool `Bash`: List module loads per run
+
+## Claude
+
+Only this run loaded MCSERV a second time, right after "port 2: no save folder yet". Reading memcard_ps2.c to see what runs after that message.
+
+- tool `Bash`: Find module loading paths
+
+- tool `Bash`: Read memcard and pad module init
+
+## Claude
+
+Our code loads MCSERV once and guards against repeats, so something else issued the second load. Searching the linked libraries for code that loads it.
+
+- tool `Bash`: Search ELF strings for module names
+
+- tool `Bash`: Read memcard load path after missing folder
+
+## Claude
+
+Our code only loads MCSERV from `init()`, which can't run its loading part twice, so the second load came from outside the game. I'm noting this in the docs as the best lead on the warm-restart hang.
+
+- tool `Bash`: Find warm-restart item in planning doc
+
+- tool `Bash`: Find hang item in planning doc
+
+- tool `Bash`: Record option and hang clue in planning doc
+
+## Claude
+
+The PS2 is back up on the new build (it restarted at 40935), so you can start testing. The hang was the same warm-restart problem as before, not the 2x code; 2x stays off unless you switch it on.
+
+**What the log shows:**
+- The game started and reached the title screen.
+- About 3 seconds in, the IOP memory card server (`rom0:MCSERV`) was loaded a second time. The log stopped right after that.
+- It wasn't the game: the port loads MCSERV in only one place, once. None of the earlier restarts loaded it twice, including the ones that also hung.
+- Best guess: something left over from the previous run, because a warm restart doesn't reset the IOP. That fits the earlier clue of a stuck IOP→EE transfer.
+
+I've added this to the Planning Doc as an open item for later.
+
+I'm watching the log for crashes and 2x switches. To test, go to Option → R1 → **Resolution** → x2, then return to gameplay. Tell me how it looks and runs.
+
+## Claude
+
+The game is on the title menu (320x448i). No 2x switch yet, and no errors.
+
+## Claude
+
+The game has switched to a 320x224 progressive screen with 2x still off, so the option hasn't been switched on yet. No errors so far.
+
+## Claude
+
+The game is back on a menu screen (320x448 interlaced). Still no 2x switch and no errors.
+
+## Claude
+
+The game just went from a menu back to a 320x224 screen, and there's still no "hires: option on" in the log. If you've already set Resolution to x2, the setting didn't reach the renderer; tell me and I'll dig into it. Otherwise it's simply not switched on yet.
+
+## Claude
+
+Your x2 setting reached the console: the log shows the option on and 2x drawing active, with the display in 640x448 interlaced. I'm watching for errors. Tell me how it looks and how smooth it runs.
+
+## Claude
+
+The 2x mode switched on for about 1.5 seconds, then back off. The log shows the option itself going off at the same moment, so it looks like you flipped it back on the options screen rather than the game dropping out. Both switches happened cleanly, with no errors.
+
+## Claude
+
+The 2x mode is back on. Each switch is taking effect right away.
+
+## Claude
+
+The 2x mode is back off, and each switch is still clean. The screen you're on is 320 wide and progressive, so each toggle switches the renderer right away. That includes the mode change, with a few black frames each time.
+
+## Claude
+
+2x is on again. Every switch so far has been clean, with no errors in the log.
+
+## Claude
+
+You've left for a 448-line interlaced screen, so 2x has paused as designed. The option is still on, so 2x will come back on the next gameplay or cutscene screen.
+
+## Claude
+
+Back in 2x on a gameplay or cutscene screen. I'll check the frame-rate figures in the log in a minute.
+
+- tool `Bash`: Check heartbeat idle in 2x on hardware
+
+- tool `Bash`: Check heartbeat idle around 2x periods
+
+- tool `Bash`: Heartbeats during the longer 2x period
+
+## Claude
+
+The first numbers from the console look good. During about 14 seconds at 2x (40980–40994), the game ran at full speed: 60 frames for every 60 vertical blanks, the same as at 1x. Idle time was 33–56%, similar to the 1x stretch right after (45–63%). So the GS is keeping up with 4x the pixels here, at least in this scene. The 2x switches were all clean, with no stuck readbacks and no errors.
+
+Tell me how it looks on the TV. A heavier area, such as fog with lots of geometry, or a cutscene, would be the next good test.
+
+## Claude
+
+The game is back on a 320x224 progressive screen at 1x. The Resolution option is still on x1, since your last toggle at 41000 set it back.
+
+## Claude
+
+You switched 2x on and back off within a fraction of a second, and both switches were clean. The option is set to x1 now.
+
+## Claude
+
+2x is on again, and the quick toggling keeps switching cleanly.
+
+## Claude
+
+Rapid toggling is holding up: about 0.2 s between switches, with no errors.
+
+## Claude
+
+Still clean through the fast toggling, with no errors or stuck readbacks. The option is back on x1.
+
+## Claude
+
+2x is on again, and every switch is still working.
+
+## Claude
+
+Still holding up under fast toggling.
+
+## Claude
+
+Every switch still completes cleanly, with no errors in the log. I'll stay quiet now unless something goes wrong.
+
+## Claude
+
+The toggle lines are filling up the conversation, so I'm narrowing the log watch to crashes and stuck readbacks.
+
+- tool `TaskStop`: 
+
+- tool `Monitor`: PS2 log: crashes, restarts, readback stalls
+
+## Claude
+
+The log watch now reports only crashes, restarts and stuck readbacks. So far, every 2x toggle has worked on the console, including rapid back-and-forth switching, with no errors. When you're done, tell me how 2x looked on the TV, and about any slowdowns or picture problems.
+
+## User
+
+Well, the resolution is higher, but there are lots of rendering errors. Toggling the resolution setting repeatedly also seems to worsen the issues. For example, text gets corrupted again and again. You should check against DuckStation using an internal 2x resolution multiplier to check what it should look like.
+
+## Claude
+
+Two things to do:
+
+1. **Reproduce the toggle damage in PCSX2.** I'll add a test switch that flips the 2x option automatically every few seconds during a cutscene.
+2. **Get DuckStation 2x reference frames.** DuckStation's software renderer can't upscale, so these captures will temporarily use its hardware renderer at 2x.
+
+My first suspect for text that degrades with each toggle is the 2x↔1x scaling round trip. If the real GS samples a fraction of a texel differently from PCSX2, each round trip shifts the font atlas by a pixel. Starting with the DuckStation capture tooling.
+
+- tool `Bash`: Inspect DuckStation cutscene capture tooling
+
+## Claude
+
+The gdb route only reads native-resolution VRAM, so the 2x reference has to come from DuckStation's own screenshots. Checking whether the tools already take any.
+
+- tool `Bash`: Check screenshot tooling and DuckStation settings
+
+## Claude
+
+DuckStation has a screenshot hotkey (F10), and its screenshot mode can be set to internal resolution. xdotool isn't installed, so I'm looking for another way to press F10 in its window.
+
+- tool `Bash`: Check for key-injection tools and session type
+
+## Claude
+
+This is a Wayland session with no key-injection tools. Checking DuckStation's command-line options for a screenshot or frame-dump flag.
+
+- tool `Bash`: List DuckStation command-line options
+
+- tool `Bash`: Install python-xlib in the venv
+
+## Claude
+
+Installed. Now the capture script: I'll reuse duckstation_cutscene.py, which drives the PS1 game into a named cutscene through gdb. Reading how it sets up DuckStation's settings.
+
+- tool `Bash`: Read rest of DuckStation cutscene script
+
+- tool `Bash`: Read settings overrides and cutscene 4 name
+
+- tool `Bash`: Add upscaled screenshot mode to DuckStation script
+
+## Claude
+
+Running the capture in the background, using the venv's Python so python-xlib is available.
+
+- tool `Bash`: Capture DuckStation 2x screenshots of Kaufmann cutscene
+
+- tool `Bash`: Read current hr_blit and its callers
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+## Claude
+
+Rewriting hr_blit with the dirty-tile map and the sampling offsets.
+
+- tool `Bash`: Rewrite hires scaling with dirty tiles and biases
+
+- tool `Bash`: Rebuild hires bench and compare with previous dumps
+
+## Claude
+
+In PCSX2 the dumps are pixel-identical to the previous 2x run, so the change doesn't alter the picture there. Checking on the DuckStation capture.
+
+- tool `Bash`: Check DuckStation capture output
+
+## Claude
+
+The capture is still running. Meanwhile I'm rebuilding the normal console ISO, since the bench script left a benchmark build in place.
+
+- tool `Bash`: Build normal console ISO
+
+- tool `Bash`: Read capture results
+
+- tool `Bash`: Write X key sender and launch DuckStation under XWayland
+
+- tool `Bash`: Send F10 to DuckStation window and check screenshots
+
+## Claude
+
+I'm waiting for that key-send test to finish.
+
+- tool `Bash`: Read key-send test output
+
+## Claude
+
+One screenshot was saved, so sending the key straight to DuckStation's window works. Closing this test instance of DuckStation.
+
+- tool `Bash`: Stop the test DuckStation instance
+
+- tool `Bash`: Inspect remaining DuckStation-related processes
+
+- tool `Bash`: Stop the remaining DuckStation process
+
+## Claude
+
+DuckStation is closed. Updating the capture script to send the key the way that worked: find DuckStation's window, send it the key event directly, give it focus, then also press F10 through XTEST.
+
+- tool `Bash`: Update screenshot sender in capture script
+
+## Claude
+
+Running the 2x DuckStation capture again.
+
+- tool `Bash`: Capture DuckStation 2x screenshots again
+
+## Claude
+
+The DuckStation 2x capture of the Kaufmann cutscene is running again, this time sending the screenshot key straight to DuckStation's window.
+
+While it runs, I've made a fix for the text that got worse with each toggle:
+- **Likely cause:** every toggle scaled the whole 2x area down to normal VRAM and back up. That included the font atlas and the CLUTs (colour palettes) next to the frame buffers, which the game never draws over. If the real GS samples a fraction of a pixel differently from PCSX2, every round trip damages them a little more. Before this fix, every texture or CLUT cache miss in that area also triggered a scale-down, which could explain wrong colours elsewhere too.
+- **Fix:** the renderer now tracks which 16×16 tiles were actually drawn at 2x, and only those are ever scaled down. The font and CLUTs never make a round trip. The scaling sprites also sample from the middle of each texel, so a slightly different sampling rule on the GS can't change the result.
+- **Checked in PCSX2:** the Kaufmann cutscene renders pixel-identically to before.
+
+The new console ISO is built (21:59) but not deployed. Deploying restarts the game, which may need a power cycle again. Say when you're ready.
+
+Once the DuckStation shots come in, I'll compare them with the PS2's 2x frames. It would also help to know what the other errors look like and where you saw them, for example missing or misplaced polygons, flicker, seams or wrong colours.
+
+- tool `Bash`: List captured DuckStation screenshots
+
+## Claude
+
+DuckStation saved 37 screenshots at 1195×896, its 2x internal resolution with aspect correction applied. Putting a few next to the PS2's 2x frames from the same cutscene.
+
+- tool `Bash`: Contact sheet of DuckStation 2x shots
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/ds_sheet.png
+
+- tool `Bash`: Run cutscene 4 at 1x and compare with 2x
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/1x_vs_2x.png
+
+- tool `Bash`: Log which pages are sampled from the hires buffer
+
+- tool `Bash`: Check for straddling clip areas in the run
+
+- tool `Bash`: Make 2x coordinates relative to the drawing offset
+
+## Claude
+
+The fill path also goes through the new coordinate macro, and its coordinates are absolute VRAM positions. So the 2x half of a fill has to zero the drawing offset temporarily.
+
+- tool `Bash`: Rebuild 2x bench and compare with 1x
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/1x_vs_2x.png
+
+## Claude
+
+Fixed: the 2x room now matches 1x, with sharper detail. Now a closer look against DuckStation's 2x at full resolution, to catch seams, gaps or texture problems that only show up when zoomed in.
+
+- tool `Bash`: Side-by-side DuckStation 2x vs PS2 2x
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/ds_vs_ps2.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/ds_vs_ps2_zoom.png
+
+- tool `Bash`: Update docs, build normal ISO, deploy
+
+## Claude
+
+I fixed both 2x bugs and confirmed them against DuckStation's 2x renderer. The deploy didn't go through, though: the PS2 isn't answering, so it's frozen or off.
+
+**What was wrong:**
+- **Flat olive bands instead of room walls and floors.** This was broken in PCSX2 too, and I missed it. Doubling the coordinates pushed vertices that sit far off screen past the GS's coordinate range, so those polygons wrapped into huge flat shapes. Now, at 2x, vertices are measured from the game's drawing offset, which always fits. The office in the Kaufmann cutscene now matches 1x and DuckStation's 2x, with sharper detail.
+- **Text getting worse with each toggle.** Every toggle, and every texture or palette cache miss near the screen, copied the whole 2x area down to normal resolution and back up. The font and colour palettes went along with it, and on real hardware each round trip damaged them a little more. Only areas the game actually drew at 2x are copied down now, so the font and palettes never make the trip. That damage only happened on hardware, so the console test is what will confirm this one.
+
+![PCSX2 1x (left) vs fixed 2x (right)](/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/1x_vs_2x.png)
+
+To get the DuckStation reference I added a 2x screenshot mode to `tools/port/duckstation_cutscene.py` (`--scale 2 --shots N`).
+
+The fixed build (22:10) is ready. Hold power to switch the PS2 off, then start it and Neutrino again; it will load the new ISO. Your Resolution setting is saved with the options, so after loading your save it should still be x2. I'll watch the log for crashes. Things worth checking:
+- toggling the setting a few times;
+- text and menus afterwards;
+- indoor scenes;
+- anything else that still looks wrong compared to x1.
+
+## User
+
+I will do hardware tests tomorrow. Let’s move this setting (and future debug settings) to a Debug Options page. This should be accessible by pressing Triangle on the options screen. Make sure to check that this doesn’t conflict with any button combos that already exist. The Debug Options screen should basically look the same as the Extra Options.
+
+## Claude
+
+Checking how the main options screen handles buttons, in particular whether Triangle is already the cancel button.
+
+- tool `Bash`: Read main options control and cancel defaults
+
+- tool `Bash`: Read options cancel handling and controller defaults
+
+## Claude
+
+Cancel (jump to Exit) is a configurable button, so I need its default and what else uses Triangle.
+
+- tool `Bash`: Find Triangle flag definition and users
+
+- tool `Bash`: Show Triangle uses in settings reset and warm boot
+
+- tool `Bash`: Check port-side button combos
+
+- tool `Bash`: Read warm boot combo and cancel uses in options
+
+- tool `AskUserQuestion`: 
+
+- tool `Bash`: Read options state machine around extra options
+
+- tool `Bash`: Show current port changes in options.c
+
+- tool `Bash`: Rework Resolution into a Debug Options page
+
+## Claude
+
+Now taking Triangle out of Cancel on the main options screen only: the Exit entry's leave check and the jump-to-Exit check.
+
+- tool `Bash`: Mask Triangle from cancel on main options screen
+
+## Claude
+
+Building and testing in PCSX2 with a scripted run: title → Option → Triangle → toggle Resolution → back out → R1 (to confirm Extra Options no longer has the Resolution row).
+
+- tool `Bash`: Build and script the Debug Options page in PCSX2
+
+- tool `Bash`: Contact sheet of debug menu dumps
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/dbg.png
+
+## Claude
+
+The cursor stopped on DEMO, so only one Down registered again. Cross opened the Demo list and Triangle closed it. Spacing the presses 3 seconds apart.
+
+- tool `Bash`: Retry debug menu script with wider spacing
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/dbg.png
+
+## Claude
+
+Both Downs probably did register. With saves on the card the cursor starts on CONTINUE, so Option is three Downs away, not two. Adding a third.
+
+- tool `Bash`: Retry debug menu script with three downs
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/dbg.png
+
+- tool `Bash`: Read log after hires switched on
+
+- tool `Bash`: Check leaving debug page and Extra Options contents
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/dbg.png
+
+- tool `Bash`: Document the Debug Options page
+
+## Claude
+
+The Debug Options page is in, and Resolution has moved there from Extra Options. I tested it in PCSX2 but not on the console.
+
+![Debug Options page](/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/dbg.png)
+
+- **Opening it:** press Triangle on the main options screen. It looks like Extra Options: same layout, highlight and arrows, under a "DEBUG OPTIONS" heading.
+- **Behind the scenes:** it reuses the Extra Options screen with a separate list of entries. A future debug setting is one line in a table plus its value and change code, in [options.c](src/screens/options/options.c).
+- **Button conflicts:**
+  - **Cancel:** Triangle is one of the game's default Cancel buttons (with Circle and Square) in all three controller layouts. On the main options screen, Triangle now only opens Debug Options; Circle and Square still cancel. Everywhere else Triangle works as before.
+  - **Soft reset:** Triangle is ignored while Start or Select is held, so the soft-reset combos (Select+Start, Start+Triangle+Square) can't open the page by accident.
+  - **Extra Options:** L1/L2/R1/R2 still open it.
+  - The note that Triangle is temporary is in the code and in the Planning Doc as an open item.
+- **What I checked:** a scripted run went to Debug Options, switched Resolution to x2 (the options screen switched to 2x right away), went back with Triangle and stayed in Options, then opened Extra Options with R1 and found no Resolution row there.
+
+The console ISO for tomorrow is built (22:17) but not deployed. It includes today's two 2x fixes (room walls and toggle damage to text) and this page.
+
+## User
+
+Commit the pending changes.
+
+## Claude
+
+Regenerating the conversation archive first (as noted in memory, before commits), then reviewing what's pending.
+
+- tool `Bash`: Regenerate archive and review pending changes
+

@@ -45,6 +45,19 @@ static int      s_MixSema, s_ReadSema;
 static volatile int s_Active;
 static volatile u32 s_Gen;
 static u32          s_HillLsn, s_Index, s_File, s_Chan;
+
+/* Movies (xa_forward): the stream's video sectors (file 0, data) also go to the EE, 2048 data bytes
+ * each, into a ring there (s_FwdRing sectors at s_FwdAddr), then the count of sectors sent into a
+ * 16-byte block at s_FwdCount. The EE reports how many it has used (xa_ack); a full ring holds the
+ * reader up. One reader for audio and video, as the PS1's drive: a second reader on the EE confused
+ * the drive's busy status between the two. */
+static u32          s_FwdAddr, s_FwdRing, s_FwdCount;
+static volatile u32 s_FwdSent, s_FwdAck;
+static int          s_FwdOn;
+static u8           s_FwdStage[2][2048] __attribute__((aligned(16)));
+static u32          s_FwdCnt[2][4] __attribute__((aligned(16)));
+static int          s_FwdDma[2] = { -1, -1 };
+static int          s_FwdSlot;
 static int          s_Started; /* s_FifoIn when the stream started */
 
 /* Decoder and resampler (mixer thread only). */
@@ -320,6 +333,61 @@ static void mixer(void* arg)
     }
 }
 
+/** Sends one video sector's data to the EE's ring, then the new count (waits while the ring is full). */
+static void fwd_sector(const u8* data, u32 gen)
+{
+    SifDmaTransfer_t dt[2];
+    int              slot = s_FwdSlot, state;
+    while (s_FwdSent - s_FwdAck >= s_FwdRing && s_Active && gen == s_Gen && s_FwdOn)
+    {
+        DelayThread(2000);
+    }
+    if (!s_Active || gen != s_Gen || !s_FwdOn)
+    {
+        return;
+    }
+    if (s_FwdDma[slot] >= 0)
+    {
+        while (sceSifDmaStat(s_FwdDma[slot]) >= 0) /* this staging buffer's last transfer */
+        {
+        }
+    }
+    memcpy(s_FwdStage[slot], data, 2048);
+    s_FwdCnt[slot][0] = s_FwdSent + 1;
+    s_FwdCnt[slot][1] = gen;
+    dt[0].src  = s_FwdStage[slot];
+    dt[0].dest = (void*)(s_FwdAddr + (s_FwdSent % s_FwdRing) * 2048);
+    dt[0].size = 2048;
+    dt[0].attr = 0;
+    dt[1].src  = s_FwdCnt[slot];
+    dt[1].dest = (void*)s_FwdCount;
+    dt[1].size = 16;
+    dt[1].attr = 0;
+    CpuSuspendIntr(&state);
+    s_FwdDma[slot] = sceSifSetDma(dt, 2);
+    CpuResumeIntr(state);
+    s_FwdSent++;
+    s_FwdSlot ^= 1;
+}
+
+/** The next stream (xa_start) is a movie: its video sectors go to the EE's ring (`addr`, `sectors`
+ * of 2048 bytes; the count of sectors sent into the 16 bytes at `count`). */
+void xa_forward(u32 addr, u32 sectors, u32 count)
+{
+    s_FwdAddr  = addr;
+    s_FwdRing  = sectors;
+    s_FwdCount = count;
+    s_FwdSent  = 0;
+    s_FwdAck   = 0;
+    s_FwdOn    = sectors != 0;
+}
+
+/** The EE has used `used` of the forwarded sectors (a running count). */
+void xa_ack(u32 used)
+{
+    s_FwdAck = used;
+}
+
 static void reader(void* arg)
 {
     sceCdRMode      mode;
@@ -370,6 +438,11 @@ static void reader(void* arg)
         for (k = 0; k < BATCH && s_Active && gen == s_Gen; k++)
         {
             const u8* p = s_Read + skip + k * PS1_RAW;
+            if (s_FwdOn && p[0] == 0 && p[1] == s_Chan && (p[2] & 0x08)) /* a movie's video sector */
+            {
+                fwd_sector(p + 8, gen);
+                continue;
+            }
             if (p[0] != s_File || p[1] != s_Chan || !(p[2] & 0x04)) /* file, channel, audio */
             {
                 continue;
@@ -418,6 +491,7 @@ void xa_start(u32 hillLsn, u32 index, u32 file, u32 chan)
 
 void xa_stop(void)
 {
+    s_FwdOn  = 0;
     s_Active = 0;
     s_Gen++;
     s_FifoOut = s_FifoIn;

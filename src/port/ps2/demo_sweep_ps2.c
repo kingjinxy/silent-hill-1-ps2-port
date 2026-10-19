@@ -2,7 +2,8 @@
  *
  * "sweep FIRST [TIMEOUT [LAST]]": play the Demo list from cutscene FIRST to LAST (default: the end),
  * one after another, giving each TIMEOUT seconds (default 300) to return to gameplay (src/port/demo_menu.c). Used by
- * tools/port/demo_sweep.py. Without the file (on hardware, no host: device) nothing happens.
+ * tools/port/demo_sweep.py. "movies": play every FMV in a row from the main menu (returns 2). Without
+ * the file (on hardware, no host: device) nothing happens.
  */
 
 #include <stdio.h>
@@ -24,6 +25,10 @@ int Port_DemoSweepConfig(int* first, int* timeout, int* last)
     *first   = 0;
     *timeout = 300;
     *last    = 9999;
+    if (strncmp(buf, "movies", 6) == 0)
+    {
+        return 2;
+    }
     if (sscanf(buf, "sweep %d %d %d", first, timeout, last) < 1)
     {
         return 0;

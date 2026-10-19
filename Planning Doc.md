@@ -248,6 +248,19 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [x] Snow particles measured in gameplay: 170-200k cycles a frame (6-8% of busy); a batched RTPS would save ~1.5% at most: not pursued
 - [ ] Hardware tests: `SH1_INTERLACE_FIELDS=1` (PS1-style field drawing for the 448i screens, broken in PCSX2) and `SH1_MODESWITCH=0/1/2` (video signal gaps on mode switches; film the TV)
 - [ ] 480p / 720p modes (2026-10-17 assessment: 480p fits in VRAM with a 2x render buffer and the 1:1 VRAM image; fill rate isn't the limit; the work is keeping the 2x image and the PS1 VRAM in step for effects that read the frame buffer; true 720p doesn't fit double-buffered)
+  - [x] Screen-read inventory for 2x rendering (2026-10-18): 16 feedback/motion-blur sites (15-bit pages over the frame buffers) and the lens-flare occlusion test; nothing else in cutscenes, attract demos and all maps (Running Walkthrough.md)
+  - [x] Inventory of menus, title and FMVs (2026-10-18): menus none; the boot logo and title background are uploaded images inside the frame-buffer area (sample 1:1 VRAM); FMVs bypass the screen
+  - [ ] Inventory: the credits
+  - [x] 2x renderer prototype (2026-10-18, `SH1_HIRES=1`): 320-wide progressive screens drawn at 640 x 2h into a hires buffer, shown in 480i; VRAM kept in step lazily (scale up on uploads, fills and copies; scale down before reads); cutscene 4 and the attract demos correct in PCSX2
+  - [x] 2x as an option (2026-10-18): Extra Options "Resolution" x1/x2 (options.c under SH_PORT; kept in config.unused_26, saved with the options); the renderer switches layout at run time (27 or 37 page cache slots); SH1_HIRES=1 forces it on
+  - [x] Debug Options page (2026-10-18): Triangle on the main options screen opens it (looks like Extra Options; options.c s_PortDebugPage, PORT_DEBUG_ENTRIES); "Resolution" moved there. Future debug settings go there too
+  - [ ] Replace the Triangle shortcut with a better way in: Triangle is one of the default Cancel buttons, so on the main options screen Cancel is only Circle/Square for now (TEMPORARY)
+  - [ ] 2x on hardware: GS fill cost, picture, the feedback effects (load screen, map6_s02, map7_s02), the lens flare
+- [ ] Warm-restart hang (deploy restarts the game; a cold boot is fine): 2026-10-18 run: the title screen came up, then rom0:MCSERV was loaded a second time (id 37, ret 1), not by the port (memcard_ps2.c loads it once), and the log stopped. Fits the earlier clue (IOP SIF0 DMA busy, EE in the kernel). Suspect: a module or RPC server left from the previous run on the un-reset IOP
+- [x] FMV playback (2026-10-18): movie_main via movie_ps2.c (the IOP's XA reader forwards video sectors; strdec.c decodes; a 32-bit GS buffer); the intro plays at 15 fps in PCSX2
+- [x] FMV decoder bit-exact with DuckStation's MDEC (tools/port/duckstation_movie.py: 100% of channel values on 4 intro frames); ~11.5M EE cycles a frame in PCSX2
+- [x] FMV on hardware (2026-10-18): the intro and the opening at 15 fps, 7.8-9.5M EE cycles a frame; sound in sync (by ear)
+- [x] All 21 FMVs play through (Demo list: ALL MOVIES; host:demo.txt "movies")
 - [x] Benchmarks besides Kaufmann (#4): #36 CybilFightStart (map6_s04 func_800E1D50, 28.1 fps in the 2026-10-10 sweep) and #50 MapEvent_KaufmannBarFightCutscene (33.3); speed only, their pictures depend on timing
 - [ ] Alley end (child ghosts) and onward: 34-55 fps with the EE fully busy for minutes; profile and optimise
 - [ ] `Gfx_EffectsUpdate` reads through a null pointer (address 8) at the start of map0_s00 (harmless in PCSX2)

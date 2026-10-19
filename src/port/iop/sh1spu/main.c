@@ -29,11 +29,15 @@ IRX_ID("sh1spu", 1, 0);
 #define OP_XA    5 /* a: DVD sector of HILL., b: PS1 sector in it, c: file | channel << 8 (xa.c) */
 #define OP_XASTOP 6
 #define OP_SHUTDOWN 7 /* the game is about to restart: stop every transfer and voice */
+#define OP_XAFWD 8 /* a: EE ring address, b: ring sectors, c: EE count address (xa.c xa_forward; before OP_XA) */
+#define OP_XAACK 9 /* a: forwarded sectors the EE has used (xa.c xa_ack) */
 
 void xa_init(void);
 void xa_start(u32 hillLsn, u32 index, u32 file, u32 chan);
 void xa_stop(void);
 void xa_check(void);
+void xa_forward(u32 addr, u32 sectors, u32 count);
+void xa_ack(u32 used);
 
 typedef struct
 {
@@ -153,6 +157,12 @@ static u32 run(u32 pos)
             return 16;
         case OP_XASTOP:
             xa_stop();
+            return 16;
+        case OP_XAFWD:
+            xa_forward(p[1], p[2], p[3]);
+            return 16;
+        case OP_XAACK:
+            xa_ack(p[1]);
             return 16;
         case OP_SHUTDOWN:
         {
