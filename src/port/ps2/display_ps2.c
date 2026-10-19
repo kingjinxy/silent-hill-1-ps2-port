@@ -36,12 +36,14 @@ extern void GpuGs_Sync(void); /* gpu_gs.c: its GIF sends run in the background; 
 extern void Port_VBlankReinstall(void); /* libetc_ps2.c */
 extern void GpuGs_DisplayShow(int x, int y, int w, int h, int interlace480, int blank);
 extern void GpuGs_Hires(int on);
-extern void GpuGs_HiresLayout(int on);
+extern void GpuGs_HiresLayout(int mode);
 extern int  GpuGs_HiresOn(void);
-extern void GpuGs_StoreHires(int x, int y, int w, int h, unsigned short* dst);
+extern int  GpuGs_HiresShift(void);
+extern int  GpuGs_HiresBits(void);
+extern void GpuGs_StoreHires(int x, int y, int w, int h, void* dst);
 
-/* The 2x renderer option (gpu_gs.c HIRES_ADDR): the Extra Options "Resolution" setting, set by
- * libgpu_port.c before each frame; SH1_HIRES=1 builds force it on. */
+/* The Debug Options rendering settings (gpu_gs.c HIRES_ADDR), set by libgpu_port.c before each frame:
+ * bit 0 Resolution x2, bit 1 Color Depth 32-bit. SH1_HIRES=1 builds force 2x on. */
 int g_PortHiresOption;
 
 
@@ -215,15 +217,27 @@ static void dump_rect_from(int hires, const char* what, int x, int y, int w, int
         return;
     }
     fprintf(f, "P6\n%d %d\n255\n", w, h);
-    for (row = 0; row < h; row += DUMP_BAND)
+    for (row = 0; row < h;)
     {
-        int n = h - row < DUMP_BAND ? h - row : DUMP_BAND;
+        int band = hires && GpuGs_HiresBits() == 32 ? DUMP_BAND / 2 : DUMP_BAND; /* 32-bit: 4 bytes a pixel */
+        int n    = h - row < band ? h - row : band;
         if (hires)
         {
             GpuGs_StoreHires(x, y + row, w, n, s_DumpBand);
         }
         else
         GpuGs_StoreImage(x, y + row, w, n, s_DumpBand);
+        row += n;
+        if (hires && GpuGs_HiresBits() == 32)
+        {
+            /* RGBA, 8 bits a channel: the colours as drawn. */
+            const unsigned char* px = (const unsigned char*)s_DumpBand;
+            for (i = 0; i < w * n; i++)
+            {
+                fwrite(&px[i * 4], 1, 3, f);
+            }
+            continue;
+        }
         for (i = 0; i < w * n; i++)
         {
             unsigned short c = s_DumpBand[i];
@@ -314,11 +328,16 @@ void Display_PresentGs(int x, int y, int w, int h, int rgb24, int isinter)
         /* 2x: 320-wide progressive screens drawn at 640 x 2h, shown in 480i (gpu_gs.c HIRES_ADDR). */
         int hires;
 #ifdef SH_PORT_HIRES
-        g_PortHiresOption = 1;
+        g_PortHiresOption |= 1;
 #endif
-        GpuGs_HiresLayout(g_PortHiresOption); /* no-op unless the option changed */
+#ifdef SH_PORT_TRUECOLOR
+        g_PortHiresOption |= 2;
+#endif
+        GpuGs_HiresLayout(g_PortHiresOption); /* no-op unless the options changed */
         hires = g_PortHiresOption && w == 320 && h <= 256 && !interlaced && !rgb24;
-        int gw = hires ? 640 : w, gh = hires ? h * 2 : h, gi = hires ? 1 : interlaced;
+        /* 2x: 640 x 2h in 480i; 1x (32-bit only): the PS1's own mode. */
+        int x2 = hires && (g_PortHiresOption & 1);
+        int gw = x2 ? 640 : w, gh = x2 ? h * 2 : h, gi = x2 ? 1 : interlaced;
         if (gw != s_Mode[0] || gh != s_Mode[1] || gi != s_Mode[2])
         {
             GpuGs_Hires(0); /* scaled down into VRAM before gsKit's setup clears its memory */
@@ -354,8 +373,9 @@ void Display_PresentGs(int x, int y, int w, int h, int rgb24, int isinter)
         }
         if (GpuGs_HiresOn())
         {
-            dump_rect_from(1, "frame", x * 2, y * 2, w * 2, h * 2);
-            dump_rect_from(1, "hires", 0, 0, 640, 1024);
+            int sh = GpuGs_HiresShift();
+            dump_rect_from(1, "frame", x << sh, y << sh, w << sh, h << sh);
+            dump_rect_from(1, "hires", 0, 0, 320 << sh, 512 << sh);
         }
         else
         dump_rect("frame", x, y, w, h);

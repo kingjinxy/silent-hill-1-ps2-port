@@ -43,6 +43,7 @@ def main():
                     "(its patch database; frame interval 2 -> 1 vertical blank)")
     ap.add_argument("--overclock", type=int, default=0, help="CPU overclock in percent (e.g. 300)")
     ap.add_argument("--scale", type=int, default=0, help="hardware renderer at this internal resolution scale")
+    ap.add_argument("--dithering", help="DuckStation's DitheringMode for the run (e.g. Unscaled, TrueColor)")
     ap.add_argument("--shots", type=float, default=0, help="screenshot every N wall-clock seconds of the cutscene")
     ap.add_argument("--log", default=os.path.join(REPO, "build", "port", "ps1_cutscene.log"))
     args = ap.parse_args()
@@ -71,6 +72,8 @@ def main():
         warp_sweep.OVERRIDES.update({"Renderer": "Vulkan", "ResolutionScale": str(args.scale),
                                      "ScreenshotMode": "InternalResolution", "EmulationSpeed": "1"})
         env = dict(os.environ, QT_QPA_PLATFORM="xcb")
+    if args.dithering:
+        warp_sweep.OVERRIDES["DitheringMode"] = args.dithering
     shots_dir = os.path.join(os.path.dirname(warp_sweep.SETTINGS), "screenshots")
     before = set(os.listdir(shots_dir)) if os.path.isdir(shots_dir) else set()
     backup = warp_sweep.patch_settings()

@@ -95,7 +95,7 @@ typedef struct _OptionsConfig
     /* 0x23 */ u8                 extraWeaponCtrl;     /** `bool` | Switch: `false`, Press: `true`, default: Press. */
     /* 0x24 */ u8                 extraBloodColor;     /** `e_BloodColor` | Default: Normal. */
     /* 0x25 */ s8                 autoLoad;            /** `bool` | Off: `false`, On: `true`, default: Off. */
-    /* 0x26 */ s8                 unused_26;           /** @unused on the PS1. Port: the Extra Options "Resolution" setting (0: x1, 1: x2 renderer). */
+    /* 0x26 */ s8                 unused_26;           /** @unused on the PS1. Port: the Debug Options rendering settings: bit 0 Resolution x2, bit 1 Color Depth 32-bit. */
     /* 0x27 */ u8                 extraOptionsEnabled; /** Holds unlocked option flags. */
     /* 0x28 */ s8                 extraViewCtrl;       /** `bool` | Normal: `false`, Reverse: `true`, default: Normal. */
     /* 0x29 */ s8                 extraViewMode;       /** `bool` | Normal: `false`, Self View: `true`, default: Normal. */

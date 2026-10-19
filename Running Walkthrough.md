@@ -1377,6 +1377,30 @@ Port settings now have their own page, starting with Resolution (moved from Extr
   - L1/L2/R1/R2 still open Extra Options.
 - **Tested in PCSX2:** title -> Option -> Triangle -> Resolution x1 -> x2 (the options screen itself goes 2x) -> Triangle back (stays in Options, cursor on Exit) -> R1 opens Extra Options without Resolution.
 
+### Color Depth: 32-bit drawing (2026-10-18)
+
+How the emulators do it:
+- **DuckStation's True Color** (gpu_hw_shadergen.cpp): the shader keeps 8 bits a channel through texture modulation and blending, instead of reducing to 5 bits each draw. Dithering is never on with it. Textures stay 5:5:5. VRAM reads for palettes and the CPU are converted back to 5:5:5. It has been off by default since 2020: too many games broke.
+- **PCSX2's Dithering setting**, "Force 32bit" mode: treats 16-bit draws as 32-bit (PS2 games).
+
+Here, the 2x shadow buffer became a shadow buffer with a scale (1x/2x) and a format (16/32-bit), set by the Debug Options Resolution and Color Depth (config.unused_26 bits 0 and 1):
+- **32-bit buffer:** a PSMCT32 buffer drawn with dithering off and no 5-bit quantization of flat colours.
+- **Mask bit:** alpha's bit 7. FBA and DATE use it for PSMCT32 as bit 15 for PSMCT16.
+- **Syncing with 16-bit VRAM:** scaling down converts 32-bit to 16-bit (truncated). Scaling up widens 5 bits to 8, with bit 15 to alpha through TEXA.
+- **Feedback effects** sample a 32-bit buffer as PSMCT24 with TEXA, so black is transparent as for 16-bit pages (the mask bit is lost there).
+
+GS memory:
+
+| Mode | Buffer | Page cache slots |
+|---|---|---|
+| 1x 32-bit | 640 KiB | 37 (unchanged) |
+| 2x 16-bit | 1.25 MiB | 27 |
+| 2x 32-bit | 2.5 MiB | 7 |
+
+Kaufmann cutscene (Demo 4) in PCSX2:
+- **Speed:** 1x/2x 32-bit run with no crashes. 2x 32-bit re-reads 9-14 texture pages a frame (0 for the others), which will be slow on hardware.
+- **Picture:** no dither pattern, and about 16% brighter on average than 16-bit (no 5-bit truncation in each blend pass). DuckStation's True Color is about 13% brighter than its dithered mode in the same cutscene (tools/port/duckstation_cutscene.py --dithering TrueColor), and looks the same.
+
 ## FMV playback: decoder prototype (2026-10-18)
 
 The movie player (src/screens/stream/stream.c) is skipped in the port (movie_main returns under SH_PORT). On the PS1 it streams with libcd (StSetRing/StSetStream/CdRead2), decodes each frame's bitstream on the CPU (DecDCTvlc) and with the MDEC (DecDCTin/DecDCTout, slices uploaded by a callback), and shows the result in 24-bit display mode. Plan: a port movie_main that reads the movie's raw sectors itself, decodes in C, shows frames from a 32-bit GS buffer, and starts the IOP's XA player (xa.c) on the movie's audio channel.

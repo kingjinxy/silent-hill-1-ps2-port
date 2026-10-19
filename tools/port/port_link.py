@@ -245,6 +245,8 @@ def main():
     # 2x renderer prototype (src/port/ps2/gpu_gs.c, display_ps2.c): 320-wide progressive screens drawn
     # at 640 x 2h and shown in 480i: SH1_HIRES=1.
     dump += ["-DSH_PORT_HIRES"] if os.environ.get("SH1_HIRES") else []
+    # 32-bit colour (true colour) forced on (src/port/ps2/gpu_gs.c HIRES_ADDR): SH1_TRUECOLOR=1.
+    dump += ["-DSH_PORT_TRUECOLOR"] if os.environ.get("SH1_TRUECOLOR") else []
     # The Demo menu's cutscene list (src/port/demo_menu.c), found in the decomp's map code.
     run([sys.executable, "tools/port/cutscene_list.py", "--c", os.path.join(OUT, "demo_cutscenes.c")])
     for src in sorted(glob.glob("src/port/*.c")) + [os.path.join(OUT, "demo_cutscenes.c")]:

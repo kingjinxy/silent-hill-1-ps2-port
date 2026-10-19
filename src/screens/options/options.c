@@ -45,7 +45,8 @@ static s32 g_ExtraOptionsMenu_BulletMultMax;
  * the extra options screen (its states, fades, drawing and controls) showing another list
  * (s_PortDebugPage). Entries are kept in the config's unused byte(s), so they are saved with the
  * other options:
- *   Resolution: x1, or the GS renderer's 2x mode (libgpu_port.c, gpu_gs.c HIRES_ADDR); unused_26.
+ *   Resolution: x1, or the GS renderer's 2x mode (libgpu_port.c, gpu_gs.c HIRES_ADDR); unused_26 bit 0.
+ *   Color Depth: 16-bit, or 32-bit drawing (true colour: no 5-bit quantization or dithering); bit 1.
  * TEMPORARY: Triangle is also one of the default Cancel buttons; on the main options screen it now
  * only opens this page (Circle and Square still cancel). To be replaced by a better way in. */
 static s32 s_PortDebugPage; /* the extra options screen shows the debug list */
@@ -53,9 +54,12 @@ static s32 s_PortDebugPage; /* the extra options screen shows the debug list */
 static const struct
 {
     const char* name;
-    s32         width; /* selection highlight length, as SELECTION_HIGHLIGHT_WIDTHS */
+    s32         width;    /* selection highlight length, as SELECTION_HIGHLIGHT_WIDTHS */
+    s32         arrowRow; /* extra options entry whose left/right arrows fit the values (their spacing) */
+    s32         valueX;   /* value string position */
 } PORT_DEBUG_ENTRIES[] = {
-    { "Resolution", 118 },
+    { "Resolution",  118, ExtraOptionsMenuEntry_BulletMult, 230 }, /* "x1"/"x2", as Bullet_Adjust's */
+    { "Color_Depth", 124, ExtraOptionsMenuEntry_ViewCtrl,   210 }, /* "16-bit"/"32-bit", as View_Control's "Normal" */
 };
 #define PORT_DEBUG_COUNT ((s32)(sizeof(PORT_DEBUG_ENTRIES) / sizeof(PORT_DEBUG_ENTRIES[0])))
 #define PORT_ENTRY_WIDTH(widths, i) (s_PortDebugPage ? PORT_DEBUG_ENTRIES[i].width : (widths)[i])
@@ -70,8 +74,12 @@ static void Port_DebugEntryChange(s32 i)
     Sd_SfxPlay(Sfx_MenuMove, Q8(0.0f), Q8(0.25f));
     switch (i)
     {
-        case 0:
-            g_GameWork.config.unused_26 = !g_GameWork.config.unused_26;
+        case 0: /* Resolution */
+            g_GameWork.config.unused_26 ^= 1;
+            break;
+
+        case 1: /* Color Depth */
+            g_GameWork.config.unused_26 ^= 2;
             break;
     }
 }
@@ -82,7 +90,10 @@ static const char* Port_DebugEntryValue(s32 i)
     switch (i)
     {
         case 0:
-            return g_GameWork.config.unused_26 ? "x2" : "x1";
+            return (g_GameWork.config.unused_26 & 1) ? "x2" : "x1";
+
+        case 1:
+            return (g_GameWork.config.unused_26 & 2) ? "32-bit" : "16-bit";
     }
     return "";
 }
@@ -1264,10 +1275,11 @@ void Options_ExtraOptionsMenu_ConfigDraw(void) // 0x801E4B2C
 #ifdef SH_PORT
     if (s_PortDebugPage)
     {
-        /* As Bullet_Adjust's (its short values at the same x), moved to the selected entry's line. */
-        s32                 dy   = (g_ExtraOptionsMenu_SelectedEntry - ExtraOptionsMenuEntry_BulletMult) * STR_OFFSET_Y;
-        const s_Triangle2d* fr   = &FRONT_ARROWS[ExtraOptionsMenuEntry_BulletMult * 2];
-        const s_Triangle2d* bk   = &BACK_ARROWS[ExtraOptionsMenuEntry_BulletMult * 2];
+        /* Another entry's (values of the same width), moved to the selected entry's line. */
+        s32                 row  = PORT_DEBUG_ENTRIES[g_ExtraOptionsMenu_SelectedEntry].arrowRow;
+        s32                 dy   = (g_ExtraOptionsMenu_SelectedEntry - row) * STR_OFFSET_Y;
+        const s_Triangle2d* fr   = &FRONT_ARROWS[row * 2];
+        const s_Triangle2d* bk   = &BACK_ARROWS[row * 2];
         s_Triangle2d        f[2] = { fr[0], fr[1] }, b[2] = { bk[0], bk[1] };
         for (i = 0; i < 2; i++)
         {
@@ -1311,7 +1323,7 @@ void Options_ExtraOptionsMenu_ConfigDraw(void) // 0x801E4B2C
 #ifdef SH_PORT
         if (s_PortDebugPage)
         {
-            Gfx_StringPositionSet(230, STR_BASE_Y + (STR_OFFSET_Y * j));
+            Gfx_StringPositionSet(PORT_DEBUG_ENTRIES[j].valueX, STR_BASE_Y + (STR_OFFSET_Y * j));
             Gfx_StringDraw(Port_DebugEntryValue(j), 10);
             continue;
         }

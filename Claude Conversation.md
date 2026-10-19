@@ -26157,3 +26157,303 @@ Regenerating the conversation archive first (as noted in memory, before commits)
 
 - tool `Bash`: Regenerate archive and review pending changes
 
+- tool `Bash`: Run matching PS1 build checksum
+
+- tool `Bash`: Find the matching-build target
+
+## Claude
+
+Plain `make` stopped at an intermediate target; the checksum lives in `make build`.
+
+- tool `Bash`: Run matching build and checksum
+
+## Claude
+
+50 outputs report OK. The Planning Doc mentions 51 outputs, so checking for any failures.
+
+- tool `Bash`: Check for checksum failures and count
+
+- tool `Bash`: Count expected checksums and failures
+
+## Claude
+
+The matching build passes: no failures, and every listed output is OK. Committing everything pending.
+
+- tool `Bash`: Commit pending changes
+
+## Claude
+
+I committed all pending changes on master as `66f74be20`, and nothing is left uncommitted. I didn't push.
+
+The commit covers:
+- **FMV playback:** the decoder and player, plus the "ALL MOVIES" mode.
+- **2x renderer:** both of today's fixes, and the DuckStation 2x screenshot mode for comparisons.
+- **Debug Options page:** Triangle opens it, and the Resolution setting lives there.
+- **Smaller changes:** the screen-read inventory build, and the GS readback alignment.
+- **Docs:** the Planning Doc, Running Walkthrough, PS2 Optimizations, and the conversation archive.
+
+Before committing, I ran the matching PS1 build, and every checksum still passes. I also regenerated "Claude Conversation.md" from all three session transcripts, and none of the earlier history was dropped.
+
+## User
+
+If possible push changes too
+
+- tool `Bash`: Check remotes and branch tracking
+
+- tool `Bash`: Push master to origin
+
+- tool `Bash`: Check GitHub CLI authentication
+
+## Claude
+
+I couldn't push: this machine has no GitHub login, and the push failed with "could not read Username for 'https://github.com'". The commit `66f74be20` is still only local, one commit ahead of origin/master.
+
+You can push it yourself from a terminal where you're signed in to GitHub (for example VS Code's Source Control or a credential manager):
+
+```
+git push origin master
+```
+
+If you'd like me to push from now on, either of these would work:
+- install the GitHub CLI and run `gh auth login`;
+- set a credential helper with a personal access token.
+
+## User
+
+That’s ok, I’ll do it myself
+
+## Claude
+
+Sounds good. The commit is ready to push.
+
+For tomorrow's console test, power-cycle the PS2 and start Neutrino again; it will load the new ISO (build 22:17). Then press Triangle on the options screen to open Debug Options, and set Resolution to x2. Things to check:
+- whether text still gets corrupted after toggling the setting a few times;
+- indoor rooms like Kaufmann's office (the flat-band bug);
+- frame rate in heavy areas at x2;
+- anything that looks different from x1.
+
+## User
+
+I’d like to add another enhancement to the debug options: forcing higher bit depth color rendering. It will consume more VRAM, but I’d like to see if it’s feasible. Check DuckStation and PCSX2 to see how this works as an enhancement.
+
+## Claude
+
+I'll look at how DuckStation's True Color option and PCSX2's dithering options work, then at what our GS renderer would need. Checking first for local copies of their source.
+
+- tool `Bash`: Look for local DuckStation/PCSX2 sources
+
+## Claude
+
+No local sources, only the AppImages, so I'll check their GitHub sources and docs.
+
+- tool `ToolSearch`: 
+
+- tool `WebSearch`: 
+
+- tool `WebSearch`: 
+
+## Claude
+
+Search results don't explain the mechanics, so I'll read DuckStation's hardware renderer shader source on GitHub directly.
+
+- tool `WebFetch`: 
+
+- tool `WebSearch`: 
+
+- tool `WebFetch`: 
+
+## Claude
+
+DuckStation's True Color path is clear now. Next, how PCSX2 exposes its dithering and 32-bit options.
+
+- tool `WebFetch`: 
+
+## Claude
+
+Both emulators handle this the same basic way, and our GS renderer can do the same.
+
+**DuckStation: True Color** (hardware renderers only)
+- The PS1 normally cuts every drawn pixel down to 5 bits per channel and dithers to hide the banding. With True Color on, the shaders keep 8 bits per channel instead. Shading, texture modulation and semi-transparent blending all happen at 8 bits, and dithering is switched off (the code asserts the two are never on together).
+- Textures stay 15-bit, as in VRAM. Only shading and blending gain precision.
+- Its VRAM is already an 8-bit-per-channel render target. Anything that reads VRAM back as PS1 data (palette lookups, the CPU) is converted down to 5:5:5 first.
+- They turned it off by default in 2020 because too many games broke, and made scaled dithering the default instead.
+
+**PCSX2: Dithering setting** (Off / Scaled / Unscaled / Force 32bit)
+- "Force 32bit" treats 16-bit draws as 32-bit to avoid banding and dithering. It's the same idea for PS2 games.
+
+**What it would take here**
+- The GS can already do it. Drawing into a 32-bit (PSMCT32) buffer with dithering off gives 8-bit shading and blending. The mask bit maps to the top bit of alpha, which the GS's mask write and mask test already handle for 32-bit buffers.
+- The 2x mode already keeps a separate buffer for the screen area and syncs it with the 16-bit VRAM: scale up on uploads, scale down before reads. Making that buffer's format selectable gives true colour almost for free. The GS converts 32-bit to 16-bit itself when it scales down, which matches DuckStation's conversion back to 5:5:5.
+- One small difference: for screen-reading effects (motion blur), the PS1 treats a fully black, unmasked texel as transparent. That's harder to reproduce from a 32-bit texture, but those effects draw over the whole screen, so it should rarely matter.
+
+**GS memory cost (4 MB total)**
+
+| Mode | Buffer | Texture page cache |
+|---|---|---|
+| 1x, 16-bit (now) | none | 37 slots |
+| 2x, 16-bit (now) | 1.25 MB | 27 slots |
+| 1x, 32-bit | 0.625 MB | 37 slots (fits where the movie/snapshot buffer goes) |
+| 2x, 32-bit | 2.5 MB | about 7 slots |
+
+1x true colour costs nothing. 2x true colour fits only by cutting the texture page cache to about 7 slots. Whether that's playable depends on how many 4/8-bit texture pages a scene touches per frame. If it's more than about 7, the GS re-reads pages from VRAM every frame and slows down. I can measure that in PCSX2 before committing to it.
+
+**Proposal:** a "Color Depth" entry on the Debug Options page (16-bit / 32-bit), independent of Resolution. I'd build the 1x/2x × 16/32-bit combinations on the existing 2x buffer, and log the cache misses per frame for the 2x 32-bit case so we can see how it holds up. Shall I go ahead?
+
+Sources:
+- [DuckStation True Color option text (commit 10d42446)](https://repo.retrodeck.net/Xargon/Duckstation/commit/10d42446f428f0d05f51f0a4e77d2797e1543d30)
+- [DuckStation: true color off / scaled dithering on by default (commit 14b2506d)](https://repo.retrodeck.net/Xargon/Duckstation/commit/14b2506d7d4c84077104192075cbec1d9644ee27)
+- [DuckStation gpu_hw_shadergen.cpp](https://raw.githubusercontent.com/stenzek/duckstation/master/src/core/gpu_hw_shadergen.cpp)
+- [PCSX2 GraphicsSettingsWidget.cpp (Dithering help text)](https://raw.githubusercontent.com/PCSX2/pcsx2/master/pcsx2-qt/Settings/GraphicsSettingsWidget.cpp)
+- [PCSX2 GSdx wiki](https://wiki.pcsx2.net/GSDX)
+
+## User
+
+Yes
+
+## Claude
+
+Starting the implementation. I'll generalize the 2x buffer into a "shadow buffer" with a configurable scale (1x/2x) and format (16/32-bit). Listing every place the code assumes 2x or 16-bit.
+
+- tool `Bash`: Locate hires-specific code to generalize
+
+## Claude
+
+Applying the generalization: scale shift `s_HrSh`, format `s_HrPsm`, and a layout per mode, so the page cache moves to whatever memory the buffer leaves free.
+
+- tool `Bash`: Generalize shadow buffer constants and layout
+
+## Claude
+
+Now the drawing paths: frame register, textures, scissor, offset, texture window, dither, colour quantization and UVs.
+
+- tool `Bash`: Generalize drawing paths to scale and depth
+
+## Claude
+
+Now the scaling blits, the on/off and layout functions, and the dump readback.
+
+- tool `Bash`: Locate shadow buffer functions
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/gpu_gs.c
+
+## Claude
+
+Rewriting the blits, mode functions and readback for both scales and formats in one replacement.
+
+- tool `Bash`: Rewrite shadow blits, modes and readback
+
+## Claude
+
+Now display_ps2.c: pick the GS video mode from the scale (2x → 640 × 2h in 480i, 1x → the normal mode) and write 32-bit dumps in full colour.
+
+- tool `Bash`: List hires code in display_ps2.c
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/display_ps2.c
+
+- tool `Bash`: Update display for scale/depth modes and dumps
+
+- tool `Bash`: Add Color Depth entry and option bit plumbing
+
+- tool `Bash`: Per-entry arrows/value position, then build
+
+- tool `Bash`: Run cutscene 4 in three shadow modes
+
+## Claude
+
+Color Depth (16-bit / 32-bit) is now the second entry on the Debug Options page, and the renderer supports all four combinations of 1x/2x and 16/32-bit. Three PCSX2 test runs are going in the background (2x 16-bit, 1x 32-bit, 2x 32-bit). I'll report once they finish.
+
+- tool `Bash`: Summarize the three mode runs
+
+- tool `Bash`: Visualize 2x16 regression diff
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/diff2x16.png
+
+- tool `Bash`: Compare 16-bit and 32-bit output
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/depth_full.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/depth_zoom.png
+
+## Claude
+
+The 32-bit frames are smooth, with no dither pattern, but they also look noticeably lighter than 16-bit. Measuring how much.
+
+- tool `Bash`: Measure mean brightness across modes
+
+- tool `Bash`: Check DuckStation true color setting
+
+- tool `Bash`: Capture DuckStation dithered vs true color runs
+
+## Claude
+
+While DuckStation runs, I'm checking frame rates in the three PCSX2 logs. The benchmark build runs cutscenes uncapped, so the 2x 32-bit cache thrashing should show up as a lower number.
+
+- tool `Bash`: Compare cutscene frame rates across modes
+
+## Claude
+
+Those frame rates aren't usable. Each run wrote 10 dumps that stall the game, and the 2x dumps stall it longer. PCSX2 also doesn't model GS fill cost, so the console test will have to answer the speed question. Waiting for the DuckStation comparison.
+
+- tool `Bash`: Compare DuckStation brightness by dithering mode
+
+- tool `Bash`: Side-by-sides of DuckStation and ours, 16 vs 32-bit
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/ds_tc.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/ours_tc.png
+
+## Claude
+
+Our 32-bit output matches DuckStation's True Color look: no dither pattern, slightly hazier and lighter fog, same colours. Finishing up: docs, then the normal console ISO.
+
+- tool `Bash`: Document findings and build console ISO
+
+## Claude
+
+Last check: the Debug Options page with the new row. This run opens the page, dumps it, moves down to Color Depth, sets it to 32-bit, and dumps again.
+
+- tool `Bash`: Check Color Depth entry in Debug Options
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/dbg2.png
+
+- tool `Bash`: Narrower arrows for Color Depth, rebuild, recheck
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/dbg3.png
+
+## Claude
+
+Color Depth (16-bit / 32-bit) is the second row on the Debug Options page, under Resolution, and works with either resolution. I tested it in PCSX2; it hasn't run on the console yet.
+
+![Debug Options with Color Depth](/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/dbg3.png)
+
+**How it works:** with 32-bit on, the game draws into a 32-bit buffer with dithering off, so shading and blending keep 8 bits per colour channel instead of being cut to 5. That's the same idea as DuckStation's True Color and PCSX2's "Force 32bit" dithering mode. Textures stay 15-bit, as in DuckStation, and the setting is saved with the other options.
+
+**How it looks:** no dither pattern, and about 16% brighter on average, because colours are no longer rounded down after every draw. I captured DuckStation's True Color in the same cutscene: it comes out about 13% brighter than its normal mode, and the two pictures look alike.
+
+![PS2 16-bit 1x vs 32-bit 2x](/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5f949c47-2c99-476f-9017-d4111adb5863/scratchpad/ours_tc.png)
+
+**Cost (GS memory and speed):**
+
+| Mode | Extra memory | Texture cache | Per frame, Kaufmann cutscene in PCSX2 |
+|---|---|---|---|
+| x1, 32-bit | 0.6 MB | unchanged (37 slots) | no re-reads |
+| x2, 16-bit | 1.25 MB | 27 slots | no re-reads |
+| x2, 32-bit | 2.5 MB | 7 slots | 9–14 texture pages re-read every frame |
+
+1x 32-bit should cost nothing extra. 2x 32-bit fits in memory, but leaves room for so few cached textures that the GS keeps re-reading them from VRAM. On real hardware that will likely be slow. If it's worth keeping, there are ways to free up cache space, which I've noted in the Planning Doc.
+
+**For tomorrow on the console:**
+- 1x 32-bit speed, which I'd expect to be fine;
+- 2x 32-bit, which may be noticeably slower;
+- whether the brighter look bothers you.
+
+Today's earlier 2x checks still apply: toggling, text, and indoor rooms. The console ISO is built (22:5x) but not deployed. I haven't committed this work yet; tell me when you want it committed.
+
+## User
+
+Commit these changes
+
+- tool `Bash`: Update archive, review status, check matching build
+

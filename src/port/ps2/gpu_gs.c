@@ -49,10 +49,9 @@ typedef unsigned long long u64x;
 #define CACHE_SLOT 0x10000
 #define CACHE_SLOTS 37 /* 15 at CACHE_ADDR, 22 more from CACHE2_ADDR */
 #define CACHE2_ADDR 0xA0000 /* above SNAP_ADDR's 640x480x2 = 0x96000 */
-/* With the 2x option (GpuGs_HiresLayout), the hires buffer takes the bottom 1.25 MiB: 27 slots, the
- * 12 others from CACHE2_HR_ADDR. */
-#define CACHE_SLOTS_HR 27
-#define CACHE2_HR_ADDR 0x140000 /* above HIRES_ADDR's 640x1024x2 */
+/* With a shadow buffer (GpuGs_HiresLayout), the page cache slots after the first 15 move above it:
+ * 2x 16-bit (640x1024x2, 1.25 MiB): 27 slots, 12 from 0x140000; 1x 32-bit (320x512x4, 640 KiB): all 37,
+ * as without; 2x 32-bit (640x1024x4, 2.5 MiB, over the first slots too): 7 slots from 0x280000. */
 /* 2x renderer (the Extra Options "Resolution" setting; SH1_HIRES=1 forces it on): the PS1's frame
  * buffer area, VRAM x 0-319, y 0-511, drawn at twice the resolution into a 640x1024 PSMCT16 buffer
  * (shared with SNAP_ADDR and gsKit's frame buffer, neither used while it is on). On while the option
@@ -68,7 +67,11 @@ typedef unsigned long long u64x;
 #define HIRES_ADDR 0
 #define HIRES_FBP  (HIRES_ADDR / 8192)
 #define HIRES_TBP  (HIRES_ADDR / 256)
-#define HIRES_BW   10
+/* The shadow buffer's scale and format (the Debug Options "Resolution" and "Color Depth"): 2x and/or
+ * 32-bit (PSMCT32 drawn with dithering off: 8 bits a channel in shading and blending, as DuckStation's
+ * True Color; the mask bit is alpha's bit 7, which FBA and DATE use for PSMCT32 as bit 15 for PSMCT16). */
+#define HIRES_BW   ((HR_W << s_HrSh) / 64)
+#define HR_PAGE_H  (s_HrPsm == PSM_CT32 ? 32 : 64) /* GS page height in the shadow format */
 #define HR_W       320 /* the area mirrored, in VRAM pixels */
 #define HR_H       512
 /* Snapshot of single-buffered interlaced screens (GpuGs_DisplayShow), 640 wide, 16-bit; shared with
@@ -308,15 +311,19 @@ static s32 s_OffX, s_OffY;
 static u32 s_SetMask, s_CheckMask;
 
 static s32 s_Hires;    /* the hires buffer is on */
-static s32 s_HrLayout; /* GS memory laid out for it (the option is on; GpuGs_HiresLayout) */
+static s32 s_HrLayout; /* GS memory laid out for it: the option's bits (1: 2x, 2: 32-bit), 0 none (GpuGs_HiresLayout) */
+static u32 s_HrSh;     /* its scale: coordinates << s_HrSh */
+static u32 s_HrPsm = PSM_CT16;
 static u32 s_Sh;       /* 1: primitives are drawn into the hires buffer (coordinates doubled) */
 #define HR_SH s_Sh
+/* Drawing into a 32-bit shadow buffer: colours keep 8 bits (no 5-bit quantization, no dithering). */
+#define HR_TRUECOLOR (s_Sh && s_HrPsm == PSM_CT32)
 /* GS vertex coordinate (12.4, before << 4) of a PS1 one. At 2x, relative to the drawing offset (E5)
  * and doubled, with XYOFFSET moved to match (state_other): the PS1's vertex range is +-1024 around
  * the offset, which doubled still fits the GS's 0-4095 (absolute coordinates doubled didn't: room
  * walls with far-off vertices wrapped into flat bands). */
-#define HR_X(x) (s_Sh ? (((x) - s_OffX) << 1) + 2048 : (x) + 2048)
-#define HR_Y(y) (s_Sh ? (((y) - s_OffY) << 1) + 2048 : (y) + 2048)
+#define HR_X(x) (s_Sh ? (((x) - s_OffX) << s_HrSh) + 2048 : (x) + 2048)
+#define HR_Y(y) (s_Sh ? (((y) - s_OffY) << s_HrSh) + 2048 : (y) + 2048)
 /** Whether a 15-bit page `tpage` is sampled from the hires buffer. */
 #define HR_TEX(depth, tpage) (s_Hires && (depth) >= 2 && ((tpage) & 15) * 64 < HR_W)
 static void hr_target(void);
@@ -353,13 +360,17 @@ typedef struct
 } Slot;
 
 static Slot s_Slots[CACHE_SLOTS];
-static s32  s_CacheSlots = CACHE_SLOTS; /* in use: CACHE_SLOTS_HR with the 2x layout */
+static s32  s_CacheSlots = CACHE_SLOTS; /* in use (fewer with a 2x shadow buffer) */
 
 /** GS block address of page cache slot i. */
 static u32 slot_tbp(s32 i)
 {
+    if (s_HrLayout == 3)
+    {
+        return (u32)(0x280000 + i * CACHE_SLOT) / 256; /* 2x 32-bit: 7 slots up to CLUT_ADDR */
+    }
     return (u32)(i < 15 ? CACHE_ADDR + i * CACHE_SLOT
-                        : (s_HrLayout ? CACHE2_HR_ADDR : CACHE2_ADDR) + (i - 15) * CACHE_SLOT) / 256;
+                        : (s_HrLayout == 1 ? 0x140000 : CACHE2_ADDR) + (i - 15) * CACHE_SLOT) / 256;
 }
 
 typedef struct
@@ -713,7 +724,7 @@ static void base_state(void)
     doneSh    = HR_SH;
     if (s_Sh)
     {
-        set(R_FRAME, (u64x)HIRES_FBP | ((u64x)HIRES_BW << 16) | ((u64x)PSM_CT16 << 24));
+        set(R_FRAME, (u64x)HIRES_FBP | ((u64x)HIRES_BW << 16) | ((u64x)s_HrPsm << 24));
     }
     else
     set(R_FRAME, (u64x)VRAM_FBP | ((u64x)VRAM_BW << 16) | ((u64x)PSM_CT16 << 24));
@@ -859,10 +870,13 @@ static void tex_state(const Prim* p)
         e->tex0 |= (8ULL << 26) | (8ULL << 30) | (1ULL << 34) | ((u64x)(p->raw ? 1 : 0) << 35); /* 256x256, TCC, TFX */
         if (p->hr)
         {
-            /* The page's 512x512 in the hires buffer (pages there are 64 pixels wide, as in VRAM). */
-            e->tex0 = (u64x)(HIRES_TBP + ((py * 2 / 64) * HIRES_BW + px * 2 / 64) * 32) | ((u64x)HIRES_BW << 14) |
-                      ((u64x)PSM_CT16 << 20) | (9ULL << 26) | (9ULL << 30) | (1ULL << 34) |
-                      ((u64x)(p->raw ? 1 : 0) << 35);
+            /* The page's 256 << s_HrSh square in the shadow buffer (GS pages: 64 wide; 64 or 32 high). A
+             * 32-bit buffer is read as PSMCT24, alpha from TEXA as a 16-bit page's: black is transparent
+             * (AEM), the mask bit (semi-transparency) is lost. */
+            u32 sx = px << s_HrSh, sy = py << s_HrSh;
+            e->tex0 = (u64x)(HIRES_TBP + ((sy / HR_PAGE_H) * HIRES_BW + sx / 64) * 32) | ((u64x)HIRES_BW << 14) |
+                      ((u64x)(s_HrPsm == PSM_CT32 ? 0x01 : PSM_CT16) << 20) | ((u64x)(8 + s_HrSh) << 26) |
+                      ((u64x)(8 + s_HrSh) << 30) | (1ULL << 34) | ((u64x)(p->raw ? 1 : 0) << 35);
         }
         e->key = key;
         e->gen = s_TexGen;
@@ -909,8 +923,9 @@ static u64x state_other(const Prim* p)
     base_state();
     if (s_Sh)
     {
-        scissor(s_AreaX1 * 2, s_AreaY1 * 2, s_AreaX2 * 2 + 1, s_AreaY2 * 2 + 1);
-        set(R_XYOFFSET, (u64x)(((2048 - 2 * s_OffX) << 4) & 0xFFFF) | ((u64x)(((2048 - 2 * s_OffY) << 4) & 0xFFFF) << 32));
+        scissor(s_AreaX1 << s_HrSh, s_AreaY1 << s_HrSh, ((s_AreaX2 + 1) << s_HrSh) - 1, ((s_AreaY2 + 1) << s_HrSh) - 1);
+        set(R_XYOFFSET, (u64x)(((2048 - (s_OffX << s_HrSh)) << 4) & 0xFFFF) |
+                            ((u64x)(((2048 - (s_OffY << s_HrSh)) << 4) & 0xFFFF) << 32));
         hr_mark(s_AreaX1, s_AreaY1, s_AreaX2, s_AreaY2); /* VRAM's copy of the clip area is stale from here */
     }
     else
@@ -922,7 +937,7 @@ static u64x state_other(const Prim* p)
          * (2u + f & 2 mask + 1) | 2 offset. */
         u32 mu = 0xFF & ~(s_TwMaskX * 8), fu = (s_TwOffX & s_TwMaskX) * 8;
         u32 mv = 0xFF & ~(s_TwMaskY * 8), fv = (s_TwOffY & s_TwMaskY) * 8;
-        if (p->hr)
+        if (p->hr && s_HrSh)
         {
             mu = mu * 2 + 1, fu *= 2, mv = mv * 2 + 1, fv *= 2;
         }
@@ -936,7 +951,7 @@ static u64x state_other(const Prim* p)
     }
     set(R_TEST, test);
     set(R_FBA, s_SetMask);
-    set(R_DTHE, p->dither);
+    set(R_DTHE, p->dither && !(s_Sh && s_HrPsm == PSM_CT32)); /* 32-bit: no dithering (true colour) */
 
     if (p->semi)
     {
@@ -1311,7 +1326,7 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
     {
         for (i = 0; i < nv; i++)
         {
-            uv[i] <<= 1; /* both fields: u fits its 14 bits doubled */
+            uv[i] <<= s_HrSh; /* both fields: u fits its 14 bits doubled */
         }
     }
 #ifdef SH_PORT_SCREENREAD
@@ -1341,7 +1356,7 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
     p.dither   = ((s_TexPage >> 9) & 1) && (gouraud || (textured && !raw));
     if (!textured && !gouraud && !p.dither)
     {
-        colorMask = 0xF8F8F8; /* as quantize() */
+        colorMask = HR_TRUECOLOR ? 0xFFFFFF : 0xF8F8F8; /* as quantize() */
     }
     a = (textured ? 0x80ULL << 24 : 0) | (0x3F800000ULL << 32);
     if (raw)
@@ -1501,7 +1516,10 @@ static u32 rectangle(const u32* w, s32 n)
     }
     if (!p.textured)
     {
-        quantize(&a, 1);
+        if (!HR_TRUECOLOR)
+        {
+            quantize(&a, 1);
+        }
     }
     b   = a;
     b.x = a.x + rw;
@@ -1511,7 +1529,7 @@ static u32 rectangle(const u32* w, s32 n)
     p.hr = p.textured && HR_TEX((p.tpage >> 7) & 3, p.tpage);
     if (p.hr)
     {
-        a.u *= 2, a.v *= 2, b.u *= 2, b.v *= 2;
+        a.u <<= s_HrSh, a.v <<= s_HrSh, b.u <<= s_HrSh, b.v <<= s_HrSh;
     }
 #ifdef SH_PORT_SCREENREAD
     if (p.textured)
@@ -1600,7 +1618,7 @@ static void fill_rect(s32 x, s32 y, s32 w, s32 h, u32 rgb)
         s32 x1 = x + w < HR_W ? x + w : HR_W, y1 = y + h < HR_H ? y + h : HR_H;
         s_Sh   = 1;
         base_state();
-        scissor(0, 0, HR_W * 2 - 1, HR_H * 2 - 1);
+        scissor(0, 0, (HR_W << s_HrSh) - 1, (HR_H << s_HrSh) - 1);
         set(R_TEST, (1 << 16) | (1 << 17));
         set(R_FBA, 0);
         set(R_DTHE, 0);
@@ -1955,35 +1973,38 @@ static u16 s_Readback[256 * VRAM_W] __attribute__((aligned(64)));
  * VIF1 FIFO's data in 8-quadword bursts, and on a real PS2 a transfer that isn't a whole number of
  * bursts never ends (16x1 CLUT reads, 2 quadwords, stuck every time; PCSX2 doesn't care). At most
  * sizeof(s_Readback) bytes at a time (larger rectangles are read in bands). No wrapping. */
-static void download_from(u32 tbp, u32 bw, s32 x, s32 y, s32 w, s32 h, u16* dst, s32 stride);
+static void download_from(u32 tbp, u32 bw, u32 psm, s32 x, s32 y, s32 w, s32 h, void* dst, s32 stride);
 static void download_rect(s32 x, s32 y, s32 w, s32 h, u16* dst, s32 stride)
 {
     hr_blit(0, x, y, w, h);
-    download_from(VRAM_TBP, VRAM_BW, x, y, w, h, dst, stride);
+    download_from(VRAM_TBP, VRAM_BW, PSM_CT16, x, y, w, h, dst, stride);
 }
 
-/** download_rect from any 16-bit buffer (tbp: block address, bw: width / 64). */
-static void download_from(u32 tbp, u32 bw, s32 x, s32 y, s32 w, s32 h, u16* dst, s32 stride)
+/** download_rect from any 16- or 32-bit buffer (tbp: block address, bw: width / 64, psm: its format;
+ * dst: rows of `stride` pixels in that format). */
+static void download_from(u32 tbp, u32 bw, u32 psm, s32 x, s32 y, s32 w, s32 h, void* dst, s32 stride)
 {
+    s32 bpp = psm == PSM_CT32 ? 4 : 2;
     s32 x0 = x & ~63, tw = ((x + w + 63) & ~63) - x0;
-    s32 band = (s32)(sizeof(s_Readback) / 2) / tw, row;
+    s32 band = (s32)(sizeof(s_Readback) / bpp) / tw, row;
     if (h > band)
     {
         for (row = 0; row < h; row += band)
         {
-            download_from(tbp, bw, x, y + row, w, h - row < band ? h - row : band, dst + row * stride, stride);
+            download_from(tbp, bw, psm, x, y + row, w, h - row < band ? h - row : band,
+                          (u8*)dst + row * stride * bpp, stride);
         }
         return;
     }
     {
-        u32 qwc = (u32)(tw * 2 * h / 16);
-        const u16* rb = (const u16*)((u32)s_Readback | 0x20000000); /* uncached: the DMA wrote behind the cache */
+        u32 qwc = (u32)(tw * bpp * h / 16);
+        const u8* rb = (const u8*)((u32)s_Readback | 0x20000000); /* uncached: the DMA wrote behind the cache */
         s32 spins;
         s_StReadbacks++;
         GpuGs_Flush();
         GpuGs_Sync();
         *GS_CSR = 2; /* clear FINISH, then wait for this transfer's FINISH before turning the bus around */
-        ad(R_BITBLTBUF, (u64x)tbp | ((u64x)bw << 16) | ((u64x)PSM_CT16 << 24));
+        ad(R_BITBLTBUF, (u64x)tbp | ((u64x)bw << 16) | ((u64x)psm << 24));
         ad(R_TRXPOS, (u64x)x0 | ((u64x)y << 16));
         ad(R_TRXREG, (u64x)tw | ((u64x)h << 32));
         ad(R_FINISH, 0);
@@ -2018,7 +2039,7 @@ static void download_from(u32 tbp, u32 bw, s32 x, s32 y, s32 w, s32 h, u16* dst,
         *GS_CSR    = 2; /* clear FINISH */
         for (row = 0; row < h; row++)
         {
-            memcpy(&dst[row * stride], &rb[row * tw + (x - x0)], (u32)w * 2);
+            memcpy((u8*)dst + row * stride * bpp, &rb[(row * tw + (x - x0)) * bpp], (u32)(w * bpp));
         }
     }
 }
@@ -2099,15 +2120,15 @@ static void hr_mark(s32 x0, s32 y0, s32 x1, s32 y1)
     }
 }
 
-/** Common sprite state for the scaling blits; `up`: drawing into the hires buffer. */
+/** Common sprite state for the scaling blits; `up`: drawing into the shadow buffer. */
 static void hr_blit_state(int up)
 {
     pend_flush();
     s_Epoch++;
     if (up)
     {
-        set(R_FRAME, (u64x)HIRES_FBP | ((u64x)HIRES_BW << 16) | ((u64x)PSM_CT16 << 24));
-        scissor(0, 0, HR_W * 2 - 1, HR_H * 2 - 1);
+        set(R_FRAME, (u64x)HIRES_FBP | ((u64x)HIRES_BW << 16) | ((u64x)s_HrPsm << 24));
+        scissor(0, 0, (HR_W << s_HrSh) - 1, (HR_H << s_HrSh) - 1);
     }
     else
     {
@@ -2118,7 +2139,7 @@ static void hr_blit_state(int up)
     set(R_PRMODECONT, 1);
     set(R_TEST, (1 << 16) | (1 << 17));
     set(R_FBA, 0);
-    set(R_DTHE, 0);
+    set(R_DTHE, 0); /* 32 -> 16 bits: truncated, as DuckStation's true colour VRAM reads */
     set(R_TEX1, 0);
     set(R_CLAMP, 0);
     set(R_TEXA, 0x40 | (1 << 15) | ((u64x)0x80 << 32));
@@ -2126,11 +2147,16 @@ static void hr_blit_state(int up)
     ad(R_TEXFLUSH, 0);
 }
 
-/** Scales the dirty tiles of the hires area in (x0, y0)-(x1, y1) (exclusive) down into VRAM (each
- * 2x2's top-left pixel) and marks them clean. Texel coordinates are offset by half a texel (8), so
- * the sample sits mid-texel whether the GS samples pixels at their corner or their centre. In tile
- * rows (16 VRAM rows): the texture is based at the row's page row, since UV's 14-bit fields stop at
- * texel 1023.9375 and the area's bottom edge is texel row 1024. */
+/* Texel offsets (1/16 texel) of the scaling sprites, so every sample sits inside its texel whether the
+ * GS samples a pixel at its corner or its centre: 1:1 copies +1/4; scaling up 2x +1/8 (both pixels in
+ * the texel); scaling down 2x +1/2. */
+#define HR_BIAS_UP   (s_HrSh ? 2 : 4)
+#define HR_BIAS_DOWN (s_HrSh ? 8 : 4)
+
+/** Copies the dirty tiles of the shadow area in (x0, y0)-(x1, y1) (exclusive) down into VRAM (at 2x
+ * each 2x2's top-left pixel; 32-bit colours truncated to 5 bits) and marks them clean. In tile rows
+ * (16 VRAM rows): the texture is based at the row's page row, since UV's 14-bit fields stop at texel
+ * 1023.9375 and the area's bottom edge at 2x is texel row 1024. */
 static void hr_down(s32 x0, s32 y0, s32 x1, s32 y1)
 {
     s32 r, c, started = 0;
@@ -2138,7 +2164,7 @@ static void hr_down(s32 x0, s32 y0, s32 x1, s32 y1)
     {
         u32 want = s_HrDirty[r] & ((x1 >= HR_W ? (1u << (HR_W / HR_TILE)) - 1 : (2u << ((x1 - 1) / HR_TILE)) - 1) &
                                    ~((1u << (x0 / HR_TILE)) - 1));
-        s32 ty = r * HR_TILE, base = (ty & ~31) * 2;
+        s32 ty = r * HR_TILE, base = ((ty << s_HrSh) / HR_PAGE_H) * HR_PAGE_H; /* a page row of the shadow buffer */
         if (!want)
         {
             continue;
@@ -2148,8 +2174,8 @@ static void hr_down(s32 x0, s32 y0, s32 x1, s32 y1)
             hr_blit_state(0);
             started = 1;
         }
-        set(R_TEX0, (u64x)(HIRES_TBP + (base / 64) * HIRES_BW * 32) | ((u64x)HIRES_BW << 14) | ((u64x)PSM_CT16 << 20) |
-                        (10ULL << 26) | (9ULL << 30) | (1ULL << 34) | (1ULL << 35)); /* TCC, DECAL */
+        set(R_TEX0, (u64x)(HIRES_TBP + (base / HR_PAGE_H) * HIRES_BW * 32) | ((u64x)HIRES_BW << 14) |
+                        ((u64x)s_HrPsm << 20) | (10ULL << 26) | (9ULL << 30) | (1ULL << 34) | (1ULL << 35)); /* TCC, DECAL */
         for (c = 0; c < HR_W / HR_TILE; c++)
         {
             s32 c1 = c, tx, tx1;
@@ -2165,10 +2191,11 @@ static void hr_down(s32 x0, s32 y0, s32 x1, s32 y1)
             tx1 = (c1 + 1) * HR_TILE;
             ad(R_PRIM, 6 | (1 << 4) | (1 << 8));
             ad(R_RGBAQ, 0x80808080ULL | (0x3F800000ULL << 32));
-            ad(R_UV, (u64x)((tx * 2 << 4) + 8) | ((u64x)(((ty * 2 - base) << 4) + 8) << 16));
+            ad(R_UV, (u64x)(((tx << s_HrSh) << 4) + HR_BIAS_DOWN) | ((u64x)((((ty << s_HrSh) - base) << 4) + HR_BIAS_DOWN) << 16));
             ad(R_XYZ2, (u64x)((2048 + tx) << 4) | ((u64x)((2048 + ty) << 4) << 16));
             ad(R_RGBAQ, 0x80808080ULL | (0x3F800000ULL << 32));
-            ad(R_UV, (u64x)((tx1 * 2 << 4) + 8) | ((u64x)((((ty + HR_TILE) * 2 - base) << 4) + 8) << 16));
+            ad(R_UV, (u64x)(((tx1 << s_HrSh) << 4) + HR_BIAS_DOWN) |
+                         ((u64x)(((((ty + HR_TILE) << s_HrSh) - base) << 4) + HR_BIAS_DOWN) << 16));
             ad(R_XYZ2, (u64x)((2048 + tx1) << 4) | ((u64x)((2048 + ty + HR_TILE) << 4) << 16));
             c = c1;
         }
@@ -2181,9 +2208,9 @@ static void hr_down(s32 x0, s32 y0, s32 x1, s32 y1)
     }
 }
 
-/** Scales VRAM's (x0, y0)-(x1, y1) (exclusive) up into the hires buffer (each pixel doubled; texel
- * coordinates offset by an eighth of a texel, so both 2x pixels sample mid-texel under either GS
- * sampling convention). Tiles it covers whole are clean afterwards. */
+/** Copies VRAM's (x0, y0)-(x1, y1) (exclusive) up into the shadow buffer (at 2x each pixel doubled;
+ * 32-bit: 5-bit colours widened, bit 15 to alpha's bit 7 through TEXA). Tiles it covers whole are clean
+ * afterwards. */
 static void hr_up(s32 x0, s32 y0, s32 x1, s32 y1)
 {
     s32 r;
@@ -2192,11 +2219,11 @@ static void hr_up(s32 x0, s32 y0, s32 x1, s32 y1)
                     (1ULL << 34) | (1ULL << 35)); /* 1024x512, TCC, DECAL */
     ad(R_PRIM, 6 | (1 << 4) | (1 << 8));
     ad(R_RGBAQ, 0x80808080ULL | (0x3F800000ULL << 32));
-    ad(R_UV, (u64x)((x0 << 4) + 2) | ((u64x)((y0 << 4) + 2) << 16));
-    ad(R_XYZ2, (u64x)((2048 + x0 * 2) << 4) | ((u64x)((2048 + y0 * 2) << 4) << 16));
+    ad(R_UV, (u64x)((x0 << 4) + HR_BIAS_UP) | ((u64x)((y0 << 4) + HR_BIAS_UP) << 16));
+    ad(R_XYZ2, (u64x)((2048 + (x0 << s_HrSh)) << 4) | ((u64x)((2048 + (y0 << s_HrSh)) << 4) << 16));
     ad(R_RGBAQ, 0x80808080ULL | (0x3F800000ULL << 32));
-    ad(R_UV, (u64x)((x1 << 4) + 2) | ((u64x)((y1 << 4) + 2) << 16));
-    ad(R_XYZ2, (u64x)((2048 + x1 * 2) << 4) | ((u64x)((2048 + y1 * 2) << 4) << 16));
+    ad(R_UV, (u64x)((x1 << 4) + HR_BIAS_UP) | ((u64x)((y1 << 4) + HR_BIAS_UP) << 16));
+    ad(R_XYZ2, (u64x)((2048 + (x1 << s_HrSh)) << 4) | ((u64x)((2048 + (y1 << s_HrSh)) << 4) << 16));
     ad(R_TEXFLUSH, 0);
     s_Epoch++;
     {
@@ -2209,9 +2236,9 @@ static void hr_up(s32 x0, s32 y0, s32 x1, s32 y1)
     }
 }
 
-/** The hires area's part of VRAM's rectangle (x, y, w, h): `up` scales VRAM's contents (just
- * written: uploads, fills' VRAM side, copies) up into the hires buffer; otherwise VRAM is brought up
- * to date from it before a read. */
+/** The shadow area's part of VRAM's rectangle (x, y, w, h): `up` copies VRAM's contents (just written:
+ * uploads, fills' VRAM side, copies) up into the shadow buffer; otherwise VRAM is brought up to date
+ * from it before a read. */
 static void hr_blit(int up, s32 x, s32 y, s32 w, s32 h)
 {
     s32 x1 = x + w < HR_W ? x + w : HR_W, y1 = y + h < HR_H ? y + h : HR_H;
@@ -2229,8 +2256,8 @@ static void hr_blit(int up, s32 x, s32 y, s32 w, s32 h)
     }
 }
 
-/** Turns the hires buffer on or off (display_ps2.c, on video mode changes: off before gsKit's setup,
- * which clears the bottom of GS memory). On: the area scaled up from VRAM; off: scaled down into it. */
+/** Turns the shadow buffer on or off (display_ps2.c, on video mode changes: off before gsKit's setup,
+ * which clears the bottom of GS memory). On: the area copied up from VRAM; off: its drawn tiles down. */
 void GpuGs_Hires(int on)
 {
     if (!on == !s_Hires || (on && !s_HrLayout))
@@ -2257,17 +2284,17 @@ void GpuGs_Hires(int on)
     s_StateGen++;
     s_Epoch++;
     s_RegValid[R_TEX0] = 0;
-    printf("hires: %s\n", on ? "on (2x)" : "off");
+    printf("hires: %s (%dx, %d-bit)\n", on ? "on" : "off", 1 << s_HrSh, s_HrPsm == PSM_CT32 ? 32 : 16);
 }
 
-/** The 2x option (display_ps2.c): GS memory for the hires buffer or for the 10 more texture page
- * cache slots it would take. The hires buffer is off when this is called. Every cached page goes
- * (their slots move). */
-void GpuGs_HiresLayout(int on)
+/** The Debug Options rendering settings (display_ps2.c): `mode` bit 0 2x, bit 1 32-bit; 0 no shadow
+ * buffer. Lays GS memory out for its buffer and the page cache slots left (see CACHE_SLOTS). The
+ * shadow buffer is off when this is called. Every cached page goes (their slots move). */
+void GpuGs_HiresLayout(int mode)
 {
     s32 i;
-    on = on != 0;
-    if (on == s_HrLayout)
+    mode &= 3;
+    if (mode == s_HrLayout)
     {
         return;
     }
@@ -2284,12 +2311,15 @@ void GpuGs_HiresLayout(int on)
             s_Slots[i].key            = -1;
         }
     }
-    s_HrLayout         = on;
-    s_CacheSlots       = on ? CACHE_SLOTS_HR : CACHE_SLOTS;
+    s_HrLayout         = mode;
+    s_HrSh             = mode & 1;
+    s_HrPsm            = (mode & 2) ? PSM_CT32 : PSM_CT16;
+    s_CacheSlots       = mode == 1 ? 27 : mode == 3 ? 7 : CACHE_SLOTS;
     s_TexGen++;
     s_Epoch++;
     s_RegValid[R_TEX0] = 0;
-    printf("hires: option %s\n", on ? "on" : "off");
+    printf("hires: option %dx %d-bit, %d page cache slots\n", 1 << s_HrSh, s_HrPsm == PSM_CT32 ? 32 : 16,
+           (int)s_CacheSlots);
 }
 
 int GpuGs_HiresOn(void)
@@ -2297,12 +2327,24 @@ int GpuGs_HiresOn(void)
     return s_Hires;
 }
 
-/** StoreImage from the hires buffer (frame dumps): (x, y, w, h) in its own pixels. */
-void GpuGs_StoreHires(s32 x, s32 y, s32 w, s32 h, u16* dst)
+/** The shadow buffer's scale shift and depth (bits a pixel): for display_ps2.c's mode and dumps. */
+int GpuGs_HiresShift(void)
+{
+    return (int)s_HrSh;
+}
+
+int GpuGs_HiresBits(void)
+{
+    return s_HrPsm == PSM_CT32 ? 32 : 16;
+}
+
+/** StoreImage from the shadow buffer (frame dumps): (x, y, w, h) in its own pixels, in its format
+ * (16-bit PS1 pixels, or 32-bit RGBA). */
+void GpuGs_StoreHires(s32 x, s32 y, s32 w, s32 h, void* dst)
 {
     pend_flush();
     init();
-    download_from(HIRES_TBP, HIRES_BW, x, y, w, h, dst, w);
+    download_from(HIRES_TBP, HIRES_BW, s_HrPsm, x, y, w, h, dst, w);
 }
 
 /* --- Display ----------------------------------------------------------------------------------*/
@@ -2360,8 +2402,8 @@ void GpuGs_DisplayShow(s32 x, s32 y, s32 w, s32 h, s32 interlace480, s32 blank)
     if (s_Hires)
     {
         GpuGs_Flush();
-        dispfb = (u64x)HIRES_FBP | ((u64x)HIRES_BW << 9) | ((u64x)PSM_CT16 << 15) | ((u64x)((x * 2) & 2047) << 32) |
-                 ((u64x)((y * 2) & 2047) << 43);
+        dispfb = (u64x)HIRES_FBP | ((u64x)HIRES_BW << 9) | ((u64x)s_HrPsm << 15) | ((u64x)((x << s_HrSh) & 2047) << 32) |
+                 ((u64x)((y << s_HrSh) & 2047) << 43);
     }
     else
 #ifndef SH_PORT_INTERLACE_FIELDS
