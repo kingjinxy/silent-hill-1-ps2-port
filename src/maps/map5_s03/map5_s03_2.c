@@ -555,7 +555,8 @@ void func_800D2640(void) // 0x800D2640
 
     // @bug NTSC-U release is missing code to set `EventFlag_M5S03_SeenSecondNewspaper` here,
     // causing later newspaper in `M7S01` & `M7S02` not to appear.
-#if VERSION_REGION_IS(NTSCJ) || VERSION_REGION_IS(PAL)
+    // Port: fixed as in the later releases.
+#if VERSION_REGION_IS(NTSCJ) || VERSION_REGION_IS(PAL) || defined(SH_PORT)
     Savegame_EventFlagSet(EventFlag_M5S03_SeenSecondNewspaper);
 #endif
 }

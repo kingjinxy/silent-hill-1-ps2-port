@@ -135,6 +135,11 @@ static void agent(void* arg)
             extern void Port_DemoRemote(int idx); /* src/port/demo_menu.c */
             Port_DemoRemote((int)mailbox()->arg);
         }
+        else if (cmd == CMD('O', 'P'))
+        {
+            extern void Port_OptionsRemote(int bits); /* src/port/demo_menu.c */
+            Port_OptionsRemote((int)mailbox()->arg);
+        }
         else if (cmd == CMD('N', 'G'))
         {
             extern void Port_NewGameRemote(void); /* src/port/demo_menu.c */
@@ -165,9 +170,37 @@ unsigned int Port_AgentLogAck(void)
 }
 
 /** Before a restart: no more status sends to the IOP agent from the vertical blank interrupt. */
+/** Before a restart: no more status from the vertical blank handler, and the IOP agent is told to stop
+ * writing into our memory (its log acknowledgements, commands): a status with the magic 'SH1Q'.
+ * Then a few vertical blanks for a transfer of its already under way. */
 void Port_AgentQuiesce(void)
 {
+    extern int       VSync(int mode); /* libetc_ps2.c */
+    SifDmaTransfer_t dt;
+    int              id, i;
     s_MailboxOn = 0;
+    if (!s_IopStatus)
+    {
+        return;
+    }
+    s_Status.magic = 0x51314853; /* 'SH1Q' */
+    SifWriteBackDCache(&s_Status, sizeof(s_Status));
+    dt.src  = &s_Status;
+    dt.dest = (void*)s_IopStatus;
+    dt.size = sizeof(s_Status);
+    dt.attr = 0;
+    for (i = 0; i < 60 && (id = SifSetDma(&dt, 1)) == 0; i++)
+    {
+        VSync(0);
+    }
+    for (i = 0; id != 0 && i < 60 && SifDmaStat(id) >= 0; i++)
+    {
+        VSync(0);
+    }
+    for (i = 0; i < 6; i++)
+    {
+        VSync(0);
+    }
 }
 
 /** A command from the game itself (thread context), e.g. the in-game reset combo: "OS". */
@@ -180,6 +213,8 @@ void Port_AgentRequest(const char* cmd)
     s_Request = CMD((unsigned char)cmd[0], (unsigned char)cmd[1]);
     SignalSema(s_Sema);
 }
+
+unsigned int Port_AgentSendFails; /* status sends refused in a row (libetc_ps2.c hang_watch) */
 
 /** Sends our state to the IOP agent (the ping's answer). From the interrupt: no waiting; if the SIF
  * DMA queue is full, the next one goes. */
@@ -207,12 +242,19 @@ static void send_status(unsigned int vblanks, unsigned int epc)
     st->main_wait_id = th.waitId;
     st->log_pending  = Port_LogPending(&dropped);
     st->log_dropped  = dropped;
+    /* The Konami logo hang (docs/ToFix.md): the last status before the EE stops shows what was busy. */
+    st->pad[0] = *(volatile unsigned int*)0x1000A000; /* D2_CHCR: GIF */
+    st->pad[1] = (*(volatile unsigned int*)0x1000C400 & 0xFFFF) | (*(volatile unsigned int*)0x1000C000 << 16); /* D6 | D5 CHCR */
+    {
+        extern int Port_SpuTickThreadStatus(void); /* spu_ps2.c */
+        st->pad[2] = (unsigned int)Port_SpuTickThreadStatus();
+    }
     __asm__ volatile("sync.l");
     dt.src  = &s_Status;
     dt.dest = (void*)s_IopStatus;
     dt.size = sizeof(s_Status);
     dt.attr = 0;
-    iSifSetDma(&dt, 1);
+    Port_AgentSendFails = iSifSetDma(&dt, 1) ? 0 : Port_AgentSendFails + 1;
 }
 
 /** From the vertical blank interrupt: a new command wakes the agent thread; twice a second our state
@@ -224,7 +266,7 @@ void Port_AgentVBlank(unsigned int vblanks, unsigned int epc)
     {
         return;
     }
-    if (s_IopStatus && vblanks % 30 == 0)
+    if (s_IopStatus && vblanks % 2 == 0)
     {
         send_status(vblanks, epc);
     }
@@ -282,4 +324,14 @@ void Port_AgentInit(void)
     s_IopLog    = mailbox()->pad[1];
     s_MailboxOn = 1;
     printf("port: remote control on UDP port 62968 (tools/port/ps2_ctl.py)\n");
+}
+
+/** Every IOP module load the EE asks for, with its caller (linked with --wrap=SifLoadModule,
+ * port_link.py): the warm-restart hang came right after an unexplained second rom0:MCSERV load. */
+int __real_SifLoadModule(const char* path, int arg_len, const char* args);
+int __wrap_SifLoadModule(const char* path, int arg_len, const char* args)
+{
+    int r = __real_SifLoadModule(path, arg_len, args);
+    printf("port: SifLoadModule %s from %p: %d\n", path, __builtin_return_address(0), r);
+    return r;
 }

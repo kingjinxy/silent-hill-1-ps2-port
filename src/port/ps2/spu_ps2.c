@@ -463,6 +463,19 @@ static void tick_thread(void* arg)
     }
 }
 
+/** The tick thread's kernel status (agent_ps2.c status; from the interrupt), -1 before it exists. */
+int Port_SpuTickThreadStatus(void)
+{
+    ee_thread_status_t th;
+    if (s_TickThread < 0)
+    {
+        return -1;
+    }
+    th.status = 0;
+    iReferThreadStatus(s_TickThread, &th);
+    return th.status;
+}
+
 /** Starts (rate_hz > 0) or stops the sound driver's tick. */
 void Port_SoundTimer(unsigned int rate_hz)
 {

@@ -63,7 +63,7 @@ typedef unsigned long long u64x;
  * - uploads, fills and VRAM copies into the area are made in VRAM and scaled up into it; reads of
  *   the area (readbacks for the texture/CLUT caches, StoreImage, copies from it) scale it down into
  *   VRAM first, so VRAM is only brought up to date when something reads it;
- * - the display scans the hires buffer out in 480i (display_ps2.c). */
+ * - the display scans the hires buffer out in 480i or 480p (display_ps2.c). */
 #define HIRES_ADDR 0
 #define HIRES_FBP  (HIRES_ADDR / 8192)
 #define HIRES_TBP  (HIRES_ADDR / 256)

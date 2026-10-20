@@ -304,7 +304,7 @@ DISPENV* PutDispEnv(DISPENV* env)
     if (s_DispMask)
     {
         extern int g_PortHiresOption; /* display_ps2.c: the 2x renderer */
-        g_PortHiresOption = g_GameWork.config.unused_26 & 3; /* Debug Options: Resolution, Color Depth (options.c) */
+        g_PortHiresOption = g_GameWork.config.unused_26 & 7; /* Debug Options: Resolution, Color Depth, Video Mode (options.c) */
         PROF_BEGIN("gs: Display_PresentGs")
         Display_PresentGs(env->disp.x, env->disp.y, env->disp.w, env->disp.h, env->isrgb24, env->isinter);
         PROF_END("gs: Display_PresentGs")

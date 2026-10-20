@@ -7,5 +7,6 @@
 #include <sysclib.h>
 #include <stdio.h>
 #include <thbase.h>
+#include <thsemap.h>
 #include "ministack.h"
 #endif

@@ -26,6 +26,7 @@
 #include <sysclib.h>
 #include <stdio.h>
 #include <thbase.h>
+#include <thsemap.h>
 #include "ministack.h"
 
 IRX_ID("sh1agent", 1, 0);
@@ -74,12 +75,24 @@ static u32           s_LastVBlanks;
 static u32           s_EeBox;
 static udp_socket_t* s_Socket;
 static udp_packet_t  s_Reply;
-static char          s_ReplyText[384];
+static char          s_ReplyText[768];
+static int           s_BoxSema = -1; /* s_Box and its transfer: the log thread and the command thread */
+static int           s_CmdSema = -1; /* a new command for the command thread */
+static volatile u32  s_CmdPending;   /* commands received, not yet sent to the EE (mailbox seq) */
+static u32           s_ToEeSlow;     /* transfers to the EE still going after 100 ms (each waits on) */
+static u32           s_ToEeStuck;    /* ... one is now */
 
+/** Copies the mailbox to the EE. Only from the threads below, never from the network driver's receive
+ * thread (which also receives the UDPFS disc data: waiting there stopped all network input). */
 static void to_ee(void)
 {
     SifDmaTransfer_t dt;
-    int              state, id;
+    int              state, id, polls = 0;
+    if (s_EeStatus.magic == 0x51314853) /* 'SH1Q': the EE is about to restart, nothing more into its memory */
+    {
+        return;
+    }
+    WaitSema(s_BoxSema);
     dt.src  = &s_Box;
     dt.dest = (void*)s_EeBox;
     dt.size = sizeof(s_Box);
@@ -87,8 +100,27 @@ static void to_ee(void)
     CpuSuspendIntr(&state);
     id = sceSifSetDma(&dt, 1);
     CpuResumeIntr(state);
-    while (sceSifDmaStat(id) >= 0)
+    while (id != 0 && sceSifDmaStat(id) >= 0)
     {
+        DelayThread(100); /* not a busy wait: lower-priority threads (the sound module's) still run */
+        if (++polls == 1000)
+        {
+            s_ToEeSlow++;
+            s_ToEeStuck = 1;
+        }
+    }
+    s_ToEeStuck = 0;
+    SignalSema(s_BoxSema);
+}
+
+/** Sends each received command to the EE (on_packet only queues it). */
+static void cmd_thread(void* arg)
+{
+    (void)arg;
+    for (;;)
+    {
+        WaitSema(s_CmdSema);
+        to_ee();
     }
 }
 
@@ -103,16 +135,25 @@ static int on_packet(udp_socket_t* socket, void* arg, const u8* hdr, u16 hdr_len
     (void)hdr_len;
 
     smap_fifo_read(0x2C, args, sizeof(args)); /* the payload after the command bytes */
-    s_Box.seq++;
-    s_Box.cmd  = cmd;
-    s_Box.arg  = args[0];
-    s_Box.arg2 = args[1];
-    to_ee();
+    if (cmd != ('P' | ('I' << 8))) /* a ping is answered here: the EE needn't hear of it */
+    {
+        /* No waiting here: s_Box is written as the command thread's transfer may be reading it (a
+         * command overtaking another isn't a use case). */
+        s_Box.seq++;
+        s_Box.cmd  = cmd;
+        s_Box.arg  = args[0];
+        s_Box.arg2 = args[1];
+        SignalSema(s_CmdSema);
+    }
 
     len = sprintf(s_ReplyText, "SH1 agent: command %c%c, seq %u\n", hdr[42], hdr[43], (unsigned)s_Box.seq);
     if (cmd == ('P' | ('I' << 8)))
     {
-        if (s_EeStatus.magic != 0x53314853) /* 'SH1S' */
+        if (s_EeStatus.magic == 0x51314853) /* 'SH1Q' */
+        {
+            len += sprintf(s_ReplyText + len, "EE: restarting (told us to stop writing into its memory)\n");
+        }
+        else if (s_EeStatus.magic != 0x53314853) /* 'SH1S' */
         {
             len += sprintf(s_ReplyText + len, "EE: no status received\n");
         }
@@ -125,8 +166,13 @@ static int on_packet(udp_socket_t* socket, void* arg, const u8* hdr, u16 hdr_len
                            (unsigned)s_EeStatus.frames, (unsigned)s_EeStatus.epc, (unsigned)s_EeStatus.main_status,
                            (unsigned)s_EeStatus.main_wait, (unsigned)s_EeStatus.main_wait_id,
                            (unsigned)s_EeStatus.log_pending, (unsigned)s_EeStatus.log_dropped);
+            len += sprintf(s_ReplyText + len, "EE: GIF CHCR %08x, SIF ch6 CHCR %04x ch5 %04x, sound tick thread status %d\n",
+                           (unsigned)s_EeStatus.pad[0], (unsigned)(s_EeStatus.pad[1] & 0xFFFF),
+                           (unsigned)(s_EeStatus.pad[1] >> 16), (int)s_EeStatus.pad[2]);
             s_LastVBlanks = s_EeStatus.vblanks;
         }
+        len += sprintf(s_ReplyText + len, "IOP: transfers to the EE over 100 ms: %u%s\n", (unsigned)s_ToEeSlow,
+                       s_ToEeStuck ? " (one still going)" : "");
         /* The IOP's side of the EE's transfers: DMA channel 10 (SIF1, EE to IOP) and 9 (SIF0), the
          * DMA enables (DPCR2) and the SIF control register. */
         len += sprintf(s_ReplyText + len, "IOP: ch10 CHCR %08x MADR %08x BCR %08x TADR %08x; ch9 CHCR %08x; DPCR2 %08x; SIF CTRL %08x\n",
@@ -192,12 +238,24 @@ int _start(int argc, char* argv[])
     udp_packet_init(&s_LogPkt, 0xFFFFFFFF, 18194); /* broadcast, as udptty */
     s_LogPkt.align = 0x2020;                       /* two spaces: tools/port/ps2_log.py drops them */
     {
+        iop_sema_t   sema;
         iop_thread_t th;
+        sema.attr    = 0;
+        sema.option  = 0;
+        sema.initial = 1;
+        sema.max     = 1;
+        s_BoxSema    = CreateSema(&sema);
+        sema.initial = 0;
+        sema.max     = 255;
+        s_CmdSema    = CreateSema(&sema);
         th.attr      = TH_C;
         th.option    = 0;
         th.thread    = log_thread;
         th.stacksize = 0x800;
         th.priority  = 60; /* below the sound module's threads (40-55) */
+        StartThread(CreateThread(&th), NULL);
+        th.thread    = cmd_thread;
+        th.priority  = 59;
         StartThread(CreateThread(&th), NULL);
     }
     to_ee();

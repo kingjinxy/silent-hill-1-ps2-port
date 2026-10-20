@@ -47,6 +47,7 @@ static s32 g_ExtraOptionsMenu_BulletMultMax;
  * other options:
  *   Resolution: x1, or the GS renderer's 2x mode (libgpu_port.c, gpu_gs.c HIRES_ADDR); unused_26 bit 0.
  *   Color Depth: 16-bit, or 32-bit drawing (true colour: no 5-bit quantization or dithering); bit 1.
+ *   Video Mode: how 2x screens are shown, 480i or 480p (display_ps2.c); bit 2.
  * TEMPORARY: Triangle is also one of the default Cancel buttons; on the main options screen it now
  * only opens this page (Circle and Square still cancel). To be replaced by a better way in. */
 static s32 s_PortDebugPage; /* the extra options screen shows the debug list */
@@ -60,6 +61,7 @@ static const struct
 } PORT_DEBUG_ENTRIES[] = {
     { "Resolution",  118, ExtraOptionsMenuEntry_BulletMult, 230 }, /* "x1"/"x2", as Bullet_Adjust's */
     { "Color_Depth", 124, ExtraOptionsMenuEntry_ViewCtrl,   210 }, /* "16-bit"/"32-bit", as View_Control's "Normal" */
+    { "Video_Mode",  118, ExtraOptionsMenuEntry_ViewCtrl,   214 }, /* "480i"/"480p" */
 };
 #define PORT_DEBUG_COUNT ((s32)(sizeof(PORT_DEBUG_ENTRIES) / sizeof(PORT_DEBUG_ENTRIES[0])))
 #define PORT_ENTRY_WIDTH(widths, i) (s_PortDebugPage ? PORT_DEBUG_ENTRIES[i].width : (widths)[i])
@@ -81,6 +83,10 @@ static void Port_DebugEntryChange(s32 i)
         case 1: /* Color Depth */
             g_GameWork.config.unused_26 ^= 2;
             break;
+
+        case 2: /* Video Mode */
+            g_GameWork.config.unused_26 ^= 4;
+            break;
     }
 }
 
@@ -94,6 +100,9 @@ static const char* Port_DebugEntryValue(s32 i)
 
         case 1:
             return (g_GameWork.config.unused_26 & 2) ? "32-bit" : "16-bit";
+
+        case 2:
+            return (g_GameWork.config.unused_26 & 4) ? "480p" : "480i";
     }
     return "";
 }

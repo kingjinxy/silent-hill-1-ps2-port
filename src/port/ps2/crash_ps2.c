@@ -51,6 +51,53 @@ static void stay(void)
  * core handles that as a game starting another ELF from its disc: the IOP is rebooted into the
  * emulation environment and the ELF is loaded from the image on the VM again. Returns only if that
  * fails. The TV background shows the step reached (stage_color). */
+/* The restart's shutdown steps wait for answers from the IOP (PADMAN's RPC, the sound module), and on
+ * hardware an answer was once lost: the restart, and every remote command after it, stopped there
+ * (2026-10-19, in padPortClose). Each step runs in a thread of its own and is given up on after a
+ * timeout; the restart goes on either way. */
+static volatile int  s_StepDone;
+static unsigned char s_StepStack[0x2000] __attribute__((aligned(16)));
+
+static void step_thread(void* arg)
+{
+    ((void (*)(void))arg)();
+    s_StepDone = 1;
+    ExitDeleteThread();
+}
+
+/** Runs `fn` for at most `vblanks` vertical blanks; returns 0 if it didn't finish. */
+static int run_step(void (*fn)(void), const char* name, int vblanks)
+{
+    extern void* _gp;
+    ee_thread_t th;
+    int         id, i;
+    s_StepDone          = 0;
+    th.func             = step_thread;
+    th.stack            = s_StepStack;
+    th.stack_size       = sizeof(s_StepStack);
+    th.gp_reg           = &_gp;
+    th.initial_priority = 3; /* just below the remote control agent (2), which waits here */
+    id                  = CreateThread(&th);
+    if (id < 0)
+    {
+        fn();
+        return 1;
+    }
+    StartThread(id, (void*)fn);
+    for (i = 0; i < vblanks && !s_StepDone; i++)
+    {
+        VSync(0);
+    }
+    if (!s_StepDone)
+    {
+        printf("port: restart: %s didn't finish in %d vertical blanks: going on without it\n", name, vblanks);
+        TerminateThread(id);
+        DeleteThread(id);
+        return 0;
+    }
+    return 1;
+}
+
 void Port_Restart(void)
 {
     extern void Port_SpuShutdown(void);   /* spu_ps2.c */
@@ -63,20 +110,47 @@ void Port_Restart(void)
      * IOP still writing into EE memory (PADMAN's pad data every vertical blank, a disc read, sound
      * status) writes into the new program; with a new build, into its code or data (the boot freezes
      * after deploys). And the SPU2 isn't reset by the IOP reboot: its sound data input is stopped. */
-    Port_PadShutdown();
+    run_step(Port_PadShutdown, "pad shutdown", 60);
     for (i = 0; i < 60 && sceCdSync(1); i++) /* a disc read in flight (up to a second) */
     {
         VSync(0);
     }
-    Port_SpuShutdown();
+    run_step(Port_SpuShutdown, "sound shutdown", 60);
     VSync(0); /* let the messages go out before the network modules go away */
     VSync(0);
+    {
+        /* Nothing of ours or the IOP agent's in flight when LoadExecPS2 runs (it stalled on hardware
+         * with the agent still acknowledging our log). The SIF state is logged first, while the
+         * log still goes out. */
+        extern void Port_LogStop(int vblanks); /* log_ps2.c */
+        printf("port: quiescing: SIF DMA ch6 (to IOP) CHCR %08x, ch5 (from IOP) CHCR %08x\n",
+               *(volatile unsigned int*)0x1000C400, *(volatile unsigned int*)0x1000C000);
+        for (i = 0; i < 10; i++)
+        {
+            VSync(0);
+        }
+        Port_LogStop(30);
+    }
     Port_AgentQuiesce();
     __asm__ volatile("mfc0 %0, $9" : "=r"(t0));
     do /* the EE-to-IOP SIF DMA idle (up to 100 ms) */
     {
         __asm__ volatile("mfc0 %0, $9" : "=r"(t));
     } while ((*(volatile unsigned int*)0x1000C400 & 0x100) && t - t0 < 29491200u);
+    {
+        /* The warm-restart hang (docs/ToFix.md): black, never reaching Neutrino's IOP reboot colours.
+         * Suspect: the EE's SIF DMA (channel 6, EE to IOP) still busy, the kernel then waiting on it.
+         * Logged, and shown for 2 s: orange if channel 6 is still busy, green if not. */
+        unsigned int d6 = *(volatile unsigned int*)0x1000C400, d5 = *(volatile unsigned int*)0x1000C000;
+        printf("port: before LoadExecPS2: SIF DMA ch6 (to IOP) CHCR %08x QWC %x, ch5 (from IOP) CHCR %08x QWC %x, "
+               "SIF reg SMFLAG %08x\n", d6, *(volatile unsigned int*)0x1000C420, d5, *(volatile unsigned int*)0x1000C020,
+               *(volatile unsigned int*)0x1000F230);
+        stage_color((d6 & 0x100) ? 0x0080FF : 0x00C000);
+        for (i = 0; i < 120; i++)
+        {
+            VSync(0);
+        }
+    }
     stage_color(0xC00000); /* blue: restarting */
     LoadExecPS2(RELAUNCH_ELF, 0, NULL);
     stage_color(0xC000C0); /* magenta: LoadExecPS2 returned */

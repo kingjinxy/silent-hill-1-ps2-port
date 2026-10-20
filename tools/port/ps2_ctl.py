@@ -10,6 +10,7 @@ sh1agent.irx (src/port/iop/sh1agent, UDP port 62968) and prints its answer.
     python3 tools/port/ps2_ctl.py where        # where the game was at the last 16 vertical blanks
     python3 tools/port/ps2_ctl.py demo "map3_s00 func_800D0CF8"   # play a Demo menu cutscene (name or number)
     python3 tools/port/ps2_ctl.py newgame      # start a New Game (normal difficulty), from anywhere
+    python3 tools/port/ps2_ctl.py options 3    # Debug Options rendering: bit 0 Resolution x2, bit 1 32-bit, bit 2 480p
 
 md takes an address (hex) or a symbol of the running build (build/port/sh1.elf, e.g. g_WorldMapWork or
 g_WorldMapWork+0x138) and a length (at most 64 KB per command); it waits for the game's "md" lines in
@@ -35,7 +36,7 @@ NM = os.path.join(os.environ.get("PS2DEV", os.path.expanduser("~/ps2dev")), "ee"
 
 PORT = 62968
 COMMANDS = {"ping": b"PI", "restart": b"RS", "deploy": b"RS", "osd": b"OS", "md": b"MD", "where": b"WH",
-            "demo": b"DM", "newgame": b"NG"}
+            "demo": b"DM", "newgame": b"NG", "options": b"OP"}
 
 
 def address(text):
@@ -118,6 +119,11 @@ def main():
             i = bisect.bisect_right(addrs, pc) - 1
             print("%08x  %s+0x%x" % (pc, syms[i][1], pc - syms[i][0]) if i >= 0 else "%08x" % pc)
         return 0
+    if args.command == "options":
+        answer = send(args.ip, "options", payload=struct.pack("<II", int(args.addr or "0", 0) & 7, 0), tries=1,
+                      timeout=2.0)
+        print(answer if answer is not None else "ps2_ctl: no answer from %s" % args.ip)
+        sys.exit(0 if answer is not None else 1)
     if args.command == "demo":
         sys.path.insert(0, HERE)
         import cutscene_list

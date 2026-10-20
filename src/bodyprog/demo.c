@@ -375,6 +375,10 @@ bool Demo_Update(void) // 0x8008F5D8
                 Text_Debug_Draw("]/[M:");
                 Text_Debug_Draw(Text_Debug_IntToString(2, gameWork->gameState));
                 Text_Debug_Draw("]");
+#ifdef SH_PORT
+                printf("demo: STEP ERROR at step %d: expected game state %d, now %d\n", (int)g_Demo_DemoStep,
+                       (int)g_Demo_ActivePlaybackFrame->expectedGameState, (int)gameWork->gameState);
+#endif
 
                 g_Demo_ActivePlaybackFrame = NULL;
             }

@@ -24,7 +24,7 @@
 
 static GSGLOBAL* s_Gs;
 
-static int s_Mode[3] = { -1, -1, -1 }; /* current width, lines, interlaced */
+static int s_Mode[3] = { -1, -1, -1 }; /* current width, lines, interlaced (2: 480p) */
 /* Frames to keep the output blank after a video mode change (GS renderer): gsKit's setup shows its
  * frame buffer's stale contents, and the first frames in a new mode can be half drawn. */
 #define MODE_SWITCH_BLANK_FRAMES 3
@@ -43,7 +43,8 @@ extern int  GpuGs_HiresBits(void);
 extern void GpuGs_StoreHires(int x, int y, int w, int h, void* dst);
 
 /* The Debug Options rendering settings (gpu_gs.c HIRES_ADDR), set by libgpu_port.c before each frame:
- * bit 0 Resolution x2, bit 1 Color Depth 32-bit. SH1_HIRES=1 builds force 2x on. */
+ * bit 0 Resolution x2, bit 1 Color Depth 32-bit, bit 2 Video Mode 480p (2x screens shown progressive
+ * instead of 480i). SH1_HIRES=1 builds force 2x on. */
 int g_PortHiresOption;
 
 
@@ -84,13 +85,21 @@ static int magh_for(int w)
     return 2560 / w - 1;
 }
 
+/** `interlaced`: 0 progressive (240p), 1 interlaced (480i), 2 480p (DTV timing, 640x480 frame). */
+static int init_p480; /* the current mode is 480p */
 static void init(int w, int h, int interlaced)
 {
     int          magh, dw, dh, dx, dy;
     unsigned int t0 = cycles();
+    int          p480 = interlaced == 2;
 
+    if (p480)
+    {
+        interlaced = 0;
+    }
     GpuGs_Sync();
-    if (s_Gs && SH_PORT_MODESWITCH != 0)
+    /* 480p changes the video timing (SetGsCrt): always gsKit's full setup to or from it. */
+    if (s_Gs && SH_PORT_MODESWITCH != 0 && !p480 && !init_p480)
     {
         /* Light switch: gsKit's setup stays (its frame buffer isn't used by the GS renderer). */
         s_Gs->Interlace = interlaced ? GS_INTERLACED : GS_NONINTERLACED;
@@ -121,11 +130,11 @@ static void init(int w, int h, int interlaced)
     }
 
     s_Gs                  = gsKit_init_global();
-    s_Gs->Mode            = GS_MODE_NTSC;
+    s_Gs->Mode            = p480 ? GS_MODE_DTV_480P : GS_MODE_NTSC;
     s_Gs->Interlace       = interlaced ? GS_INTERLACED : GS_NONINTERLACED;
     s_Gs->Field           = interlaced ? GS_FIELD : GS_FRAME;
     s_Gs->Width           = 640; /* framebuffer; the displayed width is set below */
-    s_Gs->Height          = interlaced ? 480 : 240;
+    s_Gs->Height          = (interlaced || p480) ? 480 : 240;
     s_Gs->PSM             = GS_PSM_CT16; /* only used by gsKit's setup (gpu_gs.c SNAP_ADDR) */
     s_Gs->DoubleBuffering = GS_SETTING_OFF;
     s_Gs->ZBuffering      = GS_SETTING_OFF;
@@ -140,7 +149,7 @@ static void init(int w, int h, int interlaced)
 
 window:
     /* PS1 width and line count, centred within gsKit's display area. */
-    magh = magh_for(w);
+    magh = p480 ? s_Gs->DW / w - 1 : magh_for(w); /* 480p: gsKit's DW is in its 27 MHz clocks */
     dw   = w * (magh + 1);
     dh   = h;
     dx   = s_Gs->StartX + s_Gs->StartXOffset + (s_Gs->DW - dw) / 2;
@@ -153,7 +162,8 @@ window:
 
     s_Mode[0] = w;
     s_Mode[1] = h;
-    s_Mode[2] = interlaced;
+    s_Mode[2] = p480 ? 2 : interlaced;
+    init_p480 = p480;
     printf("display: %dx%d%s (MAGH %d)\n", w, h, interlaced ? "i" : "p", magh);
     if (s_SetupDone)
     {
@@ -325,7 +335,7 @@ void Display_PresentGs(int x, int y, int w, int h, int rgb24, int isinter)
     if (w > 640) w = 640;
     if (h > 480) h = 480;
     {
-        /* 2x: 320-wide progressive screens drawn at 640 x 2h, shown in 480i (gpu_gs.c HIRES_ADDR). */
+        /* 2x: 320-wide progressive screens drawn at 640 x 2h, shown in 480i or 480p (gpu_gs.c HIRES_ADDR). */
         int hires;
 #ifdef SH_PORT_HIRES
         g_PortHiresOption |= 1;
@@ -333,11 +343,11 @@ void Display_PresentGs(int x, int y, int w, int h, int rgb24, int isinter)
 #ifdef SH_PORT_TRUECOLOR
         g_PortHiresOption |= 2;
 #endif
-        GpuGs_HiresLayout(g_PortHiresOption); /* no-op unless the options changed */
-        hires = g_PortHiresOption && w == 320 && h <= 256 && !interlaced && !rgb24;
-        /* 2x: 640 x 2h in 480i; 1x (32-bit only): the PS1's own mode. */
+        GpuGs_HiresLayout(g_PortHiresOption & 3); /* no-op unless the options changed */
+        hires = (g_PortHiresOption & 3) && w == 320 && h <= 256 && !interlaced && !rgb24;
+        /* 2x: 640 x 2h in 480i (or 480p, bit 2); 1x (32-bit only): the PS1's own mode. */
         int x2 = hires && (g_PortHiresOption & 1);
-        int gw = x2 ? 640 : w, gh = x2 ? h * 2 : h, gi = x2 ? 1 : interlaced;
+        int gw = x2 ? 640 : w, gh = x2 ? h * 2 : h, gi = x2 ? ((g_PortHiresOption & 4) ? 2 : 1) : interlaced;
         if (gw != s_Mode[0] || gh != s_Mode[1] || gi != s_Mode[2])
         {
             GpuGs_Hires(0); /* scaled down into VRAM before gsKit's setup clears its memory */

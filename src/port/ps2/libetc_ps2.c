@@ -76,6 +76,71 @@ static void watchdog(void* arg)
     }
 }
 
+static volatile unsigned int s_HeartbeatRuns; /* heartbeat thread passes (hang_watch) */
+static volatile unsigned int s_VSyncCalls;     /* VSync calls: the game thread's progress (hang_watch) */
+extern unsigned int Port_AgentSendFails;       /* agent_ps2.c: status sends refused in a row */
+
+/* Hang watch (the warm-restart hang, docs/ToFix.md: the EE's log and status stop, so the cause can't
+ * be seen over the network). From the vertical blank interrupt: when the game thread hasn't called
+ * VSync for 5 s, or the heartbeat thread hasn't run for 3 s, the whole TV screen shows a colour,
+ * blinking with black once a second (the interrupts still come), for the first cause found:
+ *   red:     the EE's SIF DMA to the IOP (DMAC channel 6) has been busy throughout
+ *   magenta: status sends to the IOP refused (SIF DMA queue full)
+ *   yellow:  threads don't run (the heartbeat thread stalled), SIF fine
+ *   blue:    only the game thread stopped
+ * A black screen that stays black: no vertical blank interrupts (EE dead or interrupts off).
+ * The picture comes back by itself if the game recovers (GpuGs_DisplayShow rewrites PMODE). */
+static void hang_watch(void)
+{
+    static unsigned int lastVSync, lastBeat, vsyncAge, beatAge, sifBusyAge;
+    unsigned int        rgb;
+    if (s_VSyncCalls != lastVSync)
+    {
+        lastVSync = s_VSyncCalls;
+        vsyncAge  = 0;
+    }
+    else
+    {
+        vsyncAge++;
+    }
+    if (s_HeartbeatRuns != lastBeat)
+    {
+        lastBeat = s_HeartbeatRuns;
+        beatAge  = 0;
+    }
+    else
+    {
+        beatAge++;
+    }
+    sifBusyAge = (*(volatile unsigned int*)0x1000C400 & 0x100) ? sifBusyAge + 1 : 0; /* D6_CHCR STR */
+    if (vsyncAge < 300 && beatAge < 180)
+    {
+        return;
+    }
+    if (sifBusyAge >= 120)
+    {
+        rgb = 0x0000FF;
+    }
+    else if (Port_AgentSendFails >= 4)
+    {
+        rgb = 0xFF00FF;
+    }
+    else if (beatAge >= 180)
+    {
+        rgb = 0x00FFFF;
+    }
+    else
+    {
+        rgb = 0xFF0000;
+    }
+    if ((s_VBlanks / 30) & 1)
+    {
+        rgb = 0;
+    }
+    *(volatile unsigned long long*)0x12000000 = 4;   /* PMODE: read circuits off */
+    *(volatile unsigned long long*)0x120000E0 = rgb; /* BGCOLOR (B, G, R from the top byte down) */
+}
+
 static void heartbeat(void* arg)
 {
     unsigned int beats = 0;
@@ -83,6 +148,7 @@ static void heartbeat(void* arg)
     for (;;)
     {
         WaitSema(s_HeartbeatSema);
+        s_HeartbeatRuns++;
         /* idle: share of the last second the game spent waiting for a vertical blank (EE at
          * 294.912 MHz: 2,949,120 cycles = 1%). */
         printf("heartbeat: vblank %d frame %d idle %u%%\n", s_VBlanks, Display_FrameCount(), s_WaitCycles / 2949120);
@@ -154,6 +220,7 @@ static int vblank_handler(int cause)
         s_Callback();
         g_PortInInterrupt = 0;
     }
+    hang_watch();
     iSignalSema(s_Sema);
     ExitHandler();
     return 0;
@@ -297,6 +364,7 @@ int VSync(int mode)
 {
     int n, target;
 
+    s_VSyncCalls++;
     init();
     if (mode < 0)
     {

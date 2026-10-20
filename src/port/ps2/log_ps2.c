@@ -32,11 +32,17 @@ static volatile unsigned int s_In, s_Out; /* running byte counts */
 static volatile unsigned int s_Dropped;   /* bytes dropped since the last report */
 static int                   s_Sema = -1;
 static volatile int          s_On;
+static volatile int          s_Stopped; /* Port_LogStop: output dropped, nothing more sent */
+static volatile int          s_Sending; /* the log thread is in send() */
 static unsigned char         s_Stack[8192] __attribute__((aligned(16)));
 
 int __wrap__write(int fd, const void* buf, int n)
 {
     int was;
+    if (s_Stopped && (fd == 1 || fd == 2))
+    {
+        return n;
+    }
     if (!s_On || (fd != 1 && fd != 2) || n <= 0)
     {
         return __real__write(fd, buf, n);
@@ -107,6 +113,11 @@ static void agent_send(unsigned int iop, const char* text, unsigned int n)
 static void send(const char* text, unsigned int n)
 {
     unsigned int iop = Port_AgentLogBuffer();
+    if (s_Stopped)
+    {
+        return;
+    }
+    s_Sending = 1;
     if (iop)
     {
         agent_send(iop, text, n);
@@ -115,6 +126,7 @@ static void send(const char* text, unsigned int n)
     {
         __real__write(1, text, (int)n);
     }
+    s_Sending = 0;
 }
 
 static void writer(void* arg)
@@ -182,6 +194,18 @@ unsigned int Port_LogPending(unsigned int* dropped)
 {
     *dropped = s_Dropped;
     return s_In - s_Out;
+}
+
+/** Before a restart: no more console output goes to the IOP (it's dropped), so nothing of ours is
+ * still being transferred when LoadExecPS2 runs. Waits up to `vblanks` for a send in progress. */
+void Port_LogStop(int vblanks)
+{
+    extern int VSync(int mode); /* libetc_ps2.c */
+    s_Stopped = 1;
+    while (s_Sending && vblanks-- > 0)
+    {
+        VSync(0);
+    }
 }
 
 /** Writes go straight through from now on (the crash reporter: its lines must come out even if the
