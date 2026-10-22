@@ -1,7 +1,8 @@
 #include "game.h"
 #ifdef SH_PORT
-// Test warp runs (src/port/ps2/warp_ps2.c): no logo delays.
-#define PORT_LOGO_SKIP || Port_WarpActive()
+// Test warp runs (src/port/ps2/warp_ps2.c) and frame captures from a save (capture_ps2.c): no logo delays.
+extern int Capture_Load(int* file, int* data);
+#define PORT_LOGO_SKIP || Port_WarpActive() || Capture_Load(NULL, NULL)
 #else
 #define PORT_LOGO_SKIP
 #endif

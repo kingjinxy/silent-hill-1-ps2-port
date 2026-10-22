@@ -52,6 +52,9 @@ SLOT_ELEMENT_SELECTED = 0x800A97D4          # g_SlotElementSelectedIdx[2]
 SELECTED_SAVE_SLOT = 0x800A97D6             # g_SelectedSaveSlotIdx
 SAVEGAME_ENTRY_TYPE_SAVE = 8                # SavegameEntryType_Save
 SAVE_SCREEN_LOGIC = 0x801E649C              # SaveScreen_LogicUpdate (saveload overlay)
+MAINLOOP_STATE_CALL = 0x80033088            # the main loop's game state call
+GAMESTATE_MOVIE_INTRO = 6
+STREAM_MAX_FRAME = 0x801E3F40               # STREAM.BIN max_frame: the movie stops once frame_cnt reaches it
 SCRATCH = 0x80100000       # 16-byte RECT + 1024x64x2 bytes, restored after each chunk
 
 REGS = ["zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7",
@@ -129,6 +132,13 @@ gdb.execute("set pagination off")
 # Until the captured demo starts, only Demo_Start stops the emulator (once a demo); the per-frame
 # breakpoints come after.
 if LOAD:
+    # The intro movie cut short (as cutscene_ps1.py's MovieSkip): one stop a frame until it starts.
+    movie_bp = gdb.Breakpoint("*0x%08X" % MAINLOOP_STATE_CALL, internal=True)
+    while r32(GAMESTATE) != GAMESTATE_MOVIE_INTRO:
+        gdb.execute("continue", to_string=True)
+    inf.write_memory(STREAM_MAX_FRAME, struct.pack("<I", 1))
+    movie_bp.delete()
+    print("capture: intro movie cut short", flush=True)
     # Load Game, once the title menu has selected Continue (memory card scanned) for 20 frames.
     menu_bp, waited = gdb.Breakpoint("*0x%08X" % MAIN_MENU_UPDATE, internal=True), 0
     while True:

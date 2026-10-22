@@ -204,9 +204,15 @@ void movie_main(char* file_name, s32 f_size, s32 sector) // 0x801E2B9C
         extern void Port_MovieClose(void);
         s32         shown;
 
+        extern int  Capture_Load(int* file, int* data);
+
         (void)file_name;
         frame_cnt = 0;
         max_frame = f_size;
+        if (g_GameWork.gameState == GameState_MovieIntro && Capture_Load(NULL, NULL))
+        {
+            return; // Frame captures from a save (compare_frames.py --load): the intro movie skipped.
+        }
         if (sector == 0 || !Port_MovieOpen(sector, (f_size + 2) * 10))
         {
             return;

@@ -4180,7 +4180,7 @@ u8 func_8005AA08(s_MeshHeader* meshHdr, s32 arg1, s_GteScratchData2* scratchData
             {
                 // The last triple, as the PS1 code's final iteration.
                 normals = &nrm[(triples - 1) * 3];
-                points  = &scratchData->field_21C[arg1 + triples - 1];
+                points  = (VECTOR3*)&scratchData->field_21C[arg1 + (triples - 1) * 3]; /* field_21C is per normal */
                 for (i = 0; i < 3; i++)
                 {
                     *(u32*)&scratchData->u.normal.field_3DC = *(u32*)&normals[i];

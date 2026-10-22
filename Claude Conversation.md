@@ -29142,3 +29142,61 @@ Yes, do the commit and then do option 2. When we’re testing this, make sure to
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
 
+## Claude
+
+No lines were removed from the archive. Committing:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git add -A src tools "Claude Conversation.md" && git commit -q -F - <<'EOF' Port: semi-transparent primitives un
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 3862,3990p src/bodyprog/gfx/bodyprog_80056D8C.c; grep -n "func_8005A21C(" src --include=*.c -r | grep -v 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "ReadLightMatrix\|ReadColorMatrix\|ReadRotMatrix\|ReadGeomOffset\|ReadBackColor" configs/USA/*.txt | he
+
+## Claude
+
+PsyQ's `ReadLightMatrix` is in the game (0x80097C08), so gdb can call it to dump the GTE light matrix. I'll check what the port's version fills in, so both sides record the same thing.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "ReadLightMatrix" -A16 src/port/*.c | head -30
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "ReadLightMatrix" src include lib 2>/dev/null | head; grep -rn "Gte_CtrlRead\|Gte_DataRead\|^u32 Gte_\
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 -c " import sys; sys.path.insert(0,'tools/port'); import struct_layout for o,s,p in struct_layout.layout
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "field_21C" include/bodyprog/*.h; grep -rn "VECTOR3\b" include/bodyprog/bodyprog.h | head -3; grep -rn "
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 4030,4090p src/bodyprog/gfx/bodyprog_80056D8C.c; grep -n "triples - 1\]\|+ triples\b" src/bodyprog/gfx/bo
+
+## Claude
+
+`func_8005A900` indexes per vertex and is correct, so this is the only instance. I'll fix it.
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/bodyprog/gfx/bodyprog_80056D8C.c
+
+## Claude
+
+I fixed it. Next comes verification, and you asked for the title FMV to be skipped during tests, so I'll see what plays at boot and whether a skip already exists.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "Movie\|movie\|FMV" src/bodyprog/events/title.c | head -20; grep -rn "MovieIntro\|GameState_MovieOpening
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,12p src/screens/b_konami/b_konami.c; grep -n "PORT_LOGO_SKIP" -B3 -A3 src/screens/b_konami/b_konami.c |
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "GameState_MovieIntro *=\|GameState_MovieIntroFadeIn *=\|GameState_MainMenu *=" include/game.h; grep -n 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 186,260p src/screens/stream/stream.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/screens/b_konami/b_konami.c'; s=open(p).read() s=s.replace("""// Test warp runs (src/po
+
+## Claude
+
+Now I'll build and test the fix. The capture uses a 30 fps port build to match the PS1, and DuckStation frame 120 against port frames 108–118.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1; unset SH1_FPS SH1_EXTRA_CFLAGS CAP_TRACE; (bash tools/port/ee
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import os a=open('build/port/cap/ps1_120_envwork.bin','rb').read() for n in range(108,119):   
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/harry_fixed.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
+
