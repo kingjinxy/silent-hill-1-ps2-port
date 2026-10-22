@@ -29330,3 +29330,271 @@ Both sides walked to almost the same spot: within about 150 units on x and 9 on 
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
 
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git add -A src tools "Claude Conversation.md" && git commit -q -F - <<'EOF' Port: semi-transparent primitives di
+
+## Claude
+
+In 16-bit mode the lens flare is now dithered like DuckStation's, and the rectangle stays gone. It's committed as 5c805eba0, and `build/port/sh1_ps2.iso` is a fresh 60 fps build.
+
+**How it's dithered:**
+- **The difference:** the PS1 dithers a semi-transparent primitive's own colour before blending, clamped at zero; the PS2's graphics chip (GS) dithers the blended pixel. They only disagree where texel × colour is below 4 (out of 255). There the PS1 adds nothing, but the GS can take a pixel down one level.
+- **Faint primitives:** ones whose vertex colours are all that faint, like the flashlight's black quad, are drawn undithered.
+- **The flare:** it's about 20 stacked glow sprites. These now draw with a filtered copy of their palette, where the texels too faint to add anything on the PS1 are made transparent. For additive sprites, a kept texel's faint colour channels are nudged to the one value where the dither adds exactly 0, as on the PS1.
+- **Result**, replaying DuckStation's exact frames through the port's renderer:
+
+| Version | Flare vs DuckStation |
+|---|---|
+| Plain dithering (original) | 9% darker, plus the rectangle |
+| Undithered (previous fix) | 0.9% brighter, smooth |
+| Now | 1.3% darker, dithered |
+
+This build also has the fewest differing pixels in the frame of any version so far.
+
+**Your walking test:**
+- `compare_frames.py --load 2,10 --walk` loads the save and waits 2 s. It then holds Right until Harry has turned 90° and holds Up for 1.5 s, as pad presses on both emulators, and counts capture frames from the walk's end.
+- Both sides ended up within a few pixels of each other.
+- With the old dithering, the replayed walk frames show a dark checkered block around Harry; with the new code they don't.
+- The port side of a capture takes a few seconds now that it skips the logos and FMV.
+
+**Open questions:**
+1. **Performance on the PS2.** The first time a flare palette is used, its filtered copy has to be read back from the GS. After that, a new sprite colour only re-filters the copy and uploads 16 entries. That's a handful of small uploads per frame while the flare is visible, but I haven't measured it on hardware. Should I run the profiling build in this room on the console?
+2. **The leftover 1.3%** comes from untextured glow polygons that fade to black at their corners, which the palette trick can't reach. Exact emulation there would mean splitting those polygons. I'd leave it unless you can see it. Do you want me to pursue it?
+
+## User
+
+Let’s table both of those. For now, let’s check for pixel accuracy in the title screen gameplay demos between DuckStation and PCSX2. Prompt me for any questions.
+
+## Claude
+
+I'll compare the attract demos on both emulators, using DuckStation's software renderer and PCSX2's software GS as before. The port build will run at 30 fps so demo playback steps exactly like the PS1. For each frame, compare_frames separates game-side differences (different GPU commands) from renderer differences (same commands, different pixels).
+
+I'll start with demos 1 and 2 at demo steps 100, 300, 600 and 900.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1; unset SH1_FPS; (bash tools/port/ee_compile_check.sh > build/p
+
+## Claude
+
+The demo 1 and 2 captures are running in the background. Each demo runs on both emulators, and I'll report back when they finish.
+
+One thing to know: for this comparison I'm using a **30 fps** port build so demo playback matches the PS1 step for step. The console default is 60 fps; I'll switch back after.
+
+Once these finish, I'll check how many attract demos the title screen cycles through and cover the rest the same way.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/b90pnzh38.output; S=/tmp/claude-1000/-home-alex-Docu
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; awk '/^frame 100/,/^frame 300/' $S/demo2.txt | c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() old="""        if (keep && (t & 0x8000) && !((filt
+
+## Claude
+
+That condition came out garbled, and it also can't tell subtract (mode 2) from add (mode 1). I'll store the blend mode in the filter key properly and rewrite the check.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() s=s.replace("        if ((t & 0x8000) && t != 0x80
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/flare_bad.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() s=s.replace("""            keep = keep || all;    
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git checkout src/port/ps2/gpu_gs.c; git status --short | head
+
+- tool `AskUserQuestion`: 
+
+## Claude
+
+I'll start with the game divergences, covering every attract demo. First, how many demos the title cycles through:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "g_Demo_DemoId\b" src/bodyprog/*.c | head; sed -n 25,95p src/bodyprog/demo.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d
+
+## Claude
+
+While those run, I'll look at how demo 1's game-state differences develop from step 100 to step 900.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; awk '/^frame/{print} /g_SysWork/{f=1;next} /g_Ga
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "field_44;" include/*.h include/bodyprog/*.h | head; grep -n -B4 -A30 "typedef struct _SubCharacter_44\|
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "/\* 0x44 \*/.*field_44" include | head; grep -rn -A25 "typedef struct _CharaCollision\|typedef struct 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -B30 "} s_SubCharacter_44;" include/bodyprog/chara/chara.h | grep -E "0x|typedef|}" ; grep -rn "field_44
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "field_44.field_48\b\|->field_44.field_48\|field_44.field_E\b\|field_44.field_12\b" src --include=*.c |
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 100,160p src/bodyprog/bodyprog_combat_8008A058.c
+
+## Claude
+
+The angle comes from whatever NPC calls `func_8008A0E4`, so the NPC's AI is producing a different aim. To find where it diverges I'll capture demo 1 every 20 steps between 300 and 600. That has to wait for the demo 3–5 run, since both use the same capture folder and emulator instances.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bjuxscuxy.output; S=/tmp/claude-1000/-home-alex-Docu
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "\brand()\|Rng_\w*(void)\|srand(" src/port/*.c src/port/ps2/*.c src/bodyprog/math/*.c 2>/dev/null | hea
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat src/main/rng.c; grep -rn "\brand()" src --include=*.c | grep -v "^src/port" | head
+
+## Claude
+
+The port's RNG is the same simple linear generator as the PS1's, so it isn't that. I'll look at demo 3 at step 100, where 43 packets already differ while the game state still matches.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; awk '/^frame 100/,/^frame 300/' $S/demo3.txt | g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "g_RngSeed\b" configs/USA/*.txt | head -2; grep -n "def normalize" -A14 tools/port/compare_frames.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/compare_frames.py'; s=open(p).read() old=s[s.index("def normalize(words):"):s.in
+
+## Claude
+
+Now the port side of the state capture: a `state=A:B` token, records appended to `ps2_state.bin`, written from PutDispEnv during the chosen demo.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/capture_ps2.c'; s=open(p).read() s=s.replace("""static int   s_Walk, s_WalkEnd
+
+## Claude
+
+Now the DuckStation side: once the chosen demo starts, break only at PutDispEnv and record the same fields until the step passes the end of the range.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gdb/capture_ps1.py'; s=open(p).read() s=s.replace('''WALK = os.environ.get("CAP_
+
+## Claude
+
+The state comparison also needs its own path in `main()`: capture both sides, then compare step by step, instead of the normal frame report. I'll also remove the stray line I just added.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/compare_frames.py'; s=open(p).read() s=s.replace('''    if args.state:         o
+
+## Claude
+
+Steps already show off-by-one vblank counters (load timing), which would bury the first real difference, so I'll ignore those three counters. Then I'll build and run demo 3 across steps 100–300.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's/path.startswith(("field_2514", "field_254C"))/path.startswith(("field_2514", "field_254C", "gameStateC
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import sys,struct; sys.path.insert(0,'tools/port'); import struct_layout L={p:(o,s) for o,s,p 
+
+## Claude
+
+`npcs[0]` is an **Air Screamer** (character 2). I'll find where its code calls `func_8008A0E4` and how it computes the angle argument.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "func_8008A0E4" src | head; grep -rn "func_8008A0E4(" src/maps/characters/air_screamer*.c src/maps/*/a
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; wc -l src/maps/characters/air_screamer.c; grep -n "field_44\|func_8008A0E4\|8008A0E4\|Chara_Attack\|_Attack(" sr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 13040,13130p src/maps/characters/air_screamer.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "func_80080478(VECTOR3\|s32 func_80080478\|func_800805BC(VECTOR3\|void func_800805BC" src --include=*.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "func_80080478" src --include=*.c include | grep -v "= func_80080478\|func_80080478(&\|func_80080478(ve
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 9040,9200p src/bodyprog/player_control.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls build/port/*.elf | head -3; mips64r5900el-ps2-elf-objdump --version >/dev/null 2>&1 && echo have; OBJ=$(find 
+
+## Claude
+
+That's the PS1 build's object, where the registers line up as intended. I need the port's EE object.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; OBJ=$(find build/port -name "player_control*.o" | head -1); echo $OBJ; mips64r5900el-ps2-elf-objdump -d $OBJ | a
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mips64r5900el-ps2-elf-objdump -d build/port/sh1.elf --start-address=0x$(mips64r5900el-ps2-elf-nm build/port/sh1.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln '"r="\|: "=r"' src --include=*.c | head; grep -rn '__asm__ volatile(' src --include=*.c | grep -v "^sr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 20,40p src/main/memcpy.c; sed -n 9280,9330p src/bodyprog/player_control.c; sed -n 225,280p src/bodyprog/v
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/bodyprog/player_control.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/player_control.c'; s=open(p).read() old="""        : "r="(x), "r="(y), "r="(z)
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gdb/capture_ps1.py'; s=open(p).read() old="""            if not (r32(SYS_FLAGS) 
+
+## Claude
+
+Now all five demos over their full length, in the background:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1; unset SH1_FPS; (python3 tools/port/port_link.py > build/port/
+
+## Claude
+
+I found and fixed the first real game divergence.
+
+**The bug:** `func_80080540` in [player_control.c](src/bodyprog/player_control.c) adds up three squared values. It's used to compute the pitch half of an aim angle. It was decompiled as inline MIPS assembly that only works because of how the PS1's compiler happened to assign registers. Compiled for the PS2's EE, the disassembly shows it threw away x² and squared an uninitialised register instead of z.
+
+So Air Screamers aimed their attacks with the wrong pitch, which first shows up at **step 181 of demo 3**. That probably also explains the NPC-aim differences in demo 1 and Harry's desync in demo 4. The port now computes the same value in plain C. With the fix, demo 3 matches the PS1's game state exactly over steps 100–300. The rest of the game's inline assembly is either correctly declared or already has a port version.
+
+**Comparison tooling added:**
+- `compare_frames.py --state A:B` records the full game state and the RNG seed at every demo step on both emulators, and prints the first steps where they differ, field by field. DuckStation only stops once per frame for this, so it's fast.
+- The packet comparison now ignores the unused top byte of gouraud colour words. It was reporting false differences.
+
+The full-length state comparison of all 5 demos is running now. When it finishes I'll know whether any other divergence is left, and then I'll commit.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bnsalvo81.output
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/capture_ps2.c'; s=open(p).read() s=s.replace("void Capture_State(int step, uns
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's/"gameStateCounter", "gameStateStepCounter", "sysStateCounter"))/"gameStateCounter", "gameStateStepCoun
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "anim.time *= \|anim.time *+= \|\.time *= Q12(\|anim\.time = " src/bodyprog/player_control.c src/maps/ch
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 3020,3080p src/bodyprog/player_control.c
+
+## Claude
+
+These animation times come from `D_800C44F0[D_800AF220]`, so `D_800AF220` looks like an aim-direction index (up, level, down). I'll find where it's set.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "D_800AF220 *=\|D_800AF220 =" src/bodyprog/*.c src/maps/characters/*.c | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 2755,2815p src/bodyprog/player_control.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for n in D_800AF220 D_800C44F0 g_Player_IsAttacking g_Player_AttackAnimIdx g_Player_EquippedWeaponInfo playerExt
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/capture_ps2.c'; s=open(p).read() s=s.replace("""static FILE* s_StateFile;""","
+
+## Claude
+
+`capture_ps2.c` may be compiled as C89, so I'll avoid the declaration inside the `for`. Then I'll run demo 4 over steps 870–885 with the player-control globals.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/capture_ps2.c'; s=open(p).read() s=s.replace("""        for (int i = 0; i < s_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/compare_frames.py'; s=open(p).read() s=s.replace("""        if len(p) == 4:     
+
+## Claude
+
+The capture-file reader also uses a 512-byte buffer, and 43 `dump=` tokens are longer than that. I'll raise it to 4 KB.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i '48s/char  buf\[512\], \*tok;/static char buf[4096];\n    char*       tok;/' src/port/ps2/capture_ps2.c; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "DeltaTime\w*\s*=" configs/USA/sym.*.txt | head; grep -rn "g_DeltaTime\w*\s*=[^=]" src/bodyprog/sys/*.c 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 360,430p src/bodyprog/sys/game_main.c; grep -rn "g_DeltaTimeRaw\|g_DeltaTimeCpy" src --include=*.c | grep
+
+## Claude
+
+Delta time comes from the hardware's horizontal-blank counter (`GsGetVcount`). How the demo playback steadies that matters here, so I'll read the demo branch of the main loop just above.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 300,362p src/bodyprog/sys/game_main.c; grep -n "Demo_PresentIntervalUpdate" -A14 src/bodyprog/demo.c | he
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 255,300p src/bodyprog/sys/game_main.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 tools/port/compare_frames.py --demo 4 --state 876:884 --globals "g_DeltaTimeR
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "def patch_settings" -A40 tools/port/gdb/warp_sweep.py | head -50
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "OVERRIDES" -A12 tools/port/gdb/warp_sweep.py | head -16
+
+## Claude
+
+The capture tool doesn't touch DuckStation's disc speed settings, so I'll check what the user's own settings have.
+
+- tool `Bash`: grep -n -i "speedup\|ReadSpeed\|SeekSpeed\|CDROM\]" -A0 ~/.local/share/duckstation/settings.ini | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
+

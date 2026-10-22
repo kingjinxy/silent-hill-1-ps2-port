@@ -53,6 +53,8 @@ extern int  Capture_Pending(void);
 extern int  Capture_Demo(void);
 extern int  Capture_Mode(void);
 extern int  Capture_Load(int* file, int* data);
+extern void Capture_State(int step, unsigned int seed, int deltaTime, const void* state, int stateSize, const void* state2, int state2Size);
+extern u32  g_RngSeed; /* main/rng.c */
 extern void Capture_Replay(int frame);
 extern int  Capture_LoadStep(int vblank);
 
@@ -305,6 +307,12 @@ DISPENV* PutDispEnv(DISPENV* env)
                         (int)sizeof(g_SysWork), &g_GameWork, (int)sizeof(g_GameWork), g_DeltaTime);
     }
     s_CaptureFrameStep = -2;
+    if (s_CaptureDemoCount == Capture_Demo())
+    {
+        /* Out of the demo (its end): a step past any range ends the state capture. */
+        Capture_State((g_SysWork.sysFlags & SysFlag_DemoActive) ? g_Demo_DemoStep : 0x7FFFFFFF, g_RngSeed, g_DeltaTime, &g_SysWork,
+                      (int)sizeof(g_SysWork), &g_GameWork, (int)sizeof(g_GameWork));
+    }
     {
         static s32 frames;
         Capture_Replay(++frames); /* compare_frames.py --replay */

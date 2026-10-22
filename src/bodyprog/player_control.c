@@ -9087,6 +9087,13 @@ q19_12 Rng_RandQ12(void) // 0x80080514
 
 s32 func_80080540(q19_12 x, q19_12 y, q19_12 z) // 0x80080540
 {
+#ifdef SH_PORT
+    // Port: the sum of the three squares, each bits 12-43 of its 64-bit product, as the PS1 asm
+    // below computes it. The asm only works with the PS1 compiler's registers (%0 in $4, $3 and $4
+    // unclobbered): built for the EE it lost x * x and squared an unset register for z (Air
+    // Screamers aimed their attacks differently, the attract demos desynced).
+    return (s32)((s64)x * x >> 12) + (s32)((s64)y * y >> 12) + (s32)((s64)z * z >> 12);
+#else
     s32 v0;
 
     __asm__ volatile(
@@ -9115,6 +9122,7 @@ s32 func_80080540(q19_12 x, q19_12 y, q19_12 z) // 0x80080540
         : "r"(x), "r"(y), "r"(z));
 
     return v0 + y + z;
+#endif
 }
 
 s32 Math_PreservedSignSubtract(s32 val, s32 subtractor) // 0x80080594

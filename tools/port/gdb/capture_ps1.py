@@ -20,6 +20,11 @@ DEMO = int(os.environ.get("CAP_DEMO", "1"))
 # CAP_LOAD=F,D: the save is loaded instead (Load Game, then file F's Data D on card 1 confirmed), and
 # frames are vertical blanks of gameplay (g_SysWork.gameStateCounter in GameState_InGame), each
 # captured at the first frame reaching it, as the port's capture_ps2.c.
+STATE = [int(x) for x in os.environ["CAP_STATE"].split(":")] if os.environ.get("CAP_STATE") else None
+# CAP_STATE=A:B: only the game state of demo steps A-B (step, RNG seed, g_DeltaTime, g_SysWork, g_GameWork at each
+# PutDispEnv) into ps1_state.bin, as capture_ps2.c's Capture_State.
+DUMPS = [tuple(int(v, 16) for v in d.split(":")) for d in os.environ.get("CAP_DUMP", "").split(",") if d]
+RNG_SEED = 0x80022C90                       # g_RngSeed
 WALK = os.environ.get("CAP_WALK") == "1"  # with CAP_LOAD: turn 90 degrees right and walk 1.5 s first (as joy.c)
 LOAD = [int(x) for x in os.environ["CAP_LOAD"].split(",")] if os.environ.get("CAP_LOAD") else None
 
@@ -218,6 +223,25 @@ else:
             demo_count += 1
             print("capture: demo %d started" % demo_count, flush=True)
     start_bp.delete()
+if STATE:
+    gdb.Breakpoint("*0x%08X" % PUTDISPENV, internal=True)
+    with open(os.path.join(OUT, "ps1_state.bin"), "wb") as f:
+        while True:
+            gdb.execute("continue", to_string=True)
+            if not (r32(SYS_FLAGS) & DEMO_ACTIVE):
+                if f.tell():
+                    break  # the demo ended
+                continue
+            step = r32(STEP)
+            if step > STATE[1]:
+                break
+            if step >= STATE[0]:
+                f.write(struct.pack("<iIi", step, r32(RNG_SEED), struct.unpack("<i", bytes(inf.read_memory(DELTA_TIME, 4)))[0]) + bytes(inf.read_memory(SYSWORK, SYSWORK_SIZE)) +
+                        bytes(inf.read_memory(GAMEWORK, GAMEWORK_SIZE)) +
+                        b"".join(bytes(inf.read_memory(a, n)) for a, n in DUMPS))
+    print("capture: all frames done", flush=True)
+    gdb.execute("kill")
+    raise SystemExit
 for addr in (DRAWOTAG, PUTDRAWENV, PUTDISPENV):
     gdb.Breakpoint("*0x%08X" % addr, internal=True)
 

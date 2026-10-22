@@ -36,12 +36,17 @@ static int   s_Mode = -1; /* rendering option bits forced, -1 none */
 static int   s_LoadSave;  /* load a save instead of a demo */
 static int   s_LoadFile, s_LoadData; /* its save: File N, Data N as the Load screen numbers them */
 static int   s_Replay[MAX_FRAMES], s_ReplayCount; /* DuckStation frames to replay */
+static int   s_StateA = -1, s_StateB = -1; /* `state=A:B`: game state of demo steps A-B (Capture_State) */
+static FILE* s_StateFile;
+static unsigned int s_DumpAddr[64], s_DumpSize[64]; /* `dump=ADDR:SIZE` (hex): globals appended to each state record */
+static int          s_DumpCount;
 static int   s_Walk, s_WalkEnd = -1; /* `walk`: frames counted from the end of joy.c's walk */
 
 
 static void load(void)
 {
-    char  buf[512], *tok;
+    static char buf[4096];
+    char*       tok;
     FILE* f = fopen("host:capture.txt", "r");
     int   n;
     s_Loaded = 0;
@@ -63,6 +68,15 @@ static void load(void)
             s_LoadSave = 1;
             sscanf(tok + 5, "%d:%d", &s_LoadFile, &s_LoadData);
         }
+        else if (!strncmp(tok, "dump=", 5) && s_DumpCount < 64)
+        {
+            sscanf(tok + 5, "%x:%x", &s_DumpAddr[s_DumpCount], &s_DumpSize[s_DumpCount]);
+            s_DumpCount++;
+        }
+        else if (!strncmp(tok, "state=", 6))
+        {
+            sscanf(tok + 6, "%d:%d", &s_StateA, &s_StateB);
+        }
         else if (!strcmp(tok, "walk"))
         {
             s_Walk = 1;
@@ -83,7 +97,7 @@ static void load(void)
             s_Frames[s_Count++] = atoi(tok);
         }
     }
-    s_Loaded = s_Count > 0 || s_ReplayCount > 0;
+    s_Loaded = s_Count > 0 || s_ReplayCount > 0 || s_StateA >= 0;
     if (s_Loaded)
     {
         printf("capture: %d frames listed, %s %d, mode %d\n", s_Count, s_LoadSave ? "load" : "demo", s_Demo, s_Mode);
@@ -126,6 +140,45 @@ int Capture_Load(int* file, int* data)
         *data = s_LoadData;
     }
     return s_Loaded > 0 && s_LoadSave;
+}
+
+/** At PutDispEnv during the captured demo: with `state=A:B`, appends step, RNG seed, g_DeltaTime, g_SysWork and
+ * g_GameWork to host:cap/ps2_state.bin for demo steps A-B (finding where the game first diverges). */
+void Capture_State(int step, unsigned int seed, int deltaTime, const void* state, int stateSize, const void* state2, int state2Size)
+{
+    static int done;
+    if (s_Loaded <= 0 || s_StateA < 0 || done || step < s_StateA)
+    {
+        return;
+    }
+    if (step > s_StateB)
+    {
+        if (s_StateFile)
+        {
+            fclose(s_StateFile);
+            s_StateFile = NULL;
+        }
+        done = 1;
+        printf("capture: all frames done\n");
+        return;
+    }
+    if (!s_StateFile)
+    {
+        s_StateFile = fopen("host:cap/ps2_state.bin", "wb");
+    }
+    if (s_StateFile)
+    {
+        fwrite(&step, 4, 1, s_StateFile);
+        fwrite(&seed, 4, 1, s_StateFile);
+        fwrite(&deltaTime, 4, 1, s_StateFile);
+        fwrite(state, 1, (size_t)stateSize, s_StateFile);
+        fwrite(state2, 1, (size_t)state2Size, s_StateFile);
+        int i;
+        for (i = 0; i < s_DumpCount; i++)
+        {
+            fwrite((const void*)(unsigned long)s_DumpAddr[i], 1, s_DumpSize[i], s_StateFile);
+        }
+    }
 }
 
 /** Whether the capture walks first (joy.c), and its end (gameplay vertical blank). */

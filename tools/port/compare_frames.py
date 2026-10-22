@@ -47,7 +47,7 @@ import struct_layout  # noqa: E402  (field names for the game state diff)
 def capture_ps2(frames, demo, mode, cont, walk=False):
     open(os.path.join(REPO, "build", "port", "capture.txt"), "w").write(
         ",".join(map(str, frames)) + " demo=%d" % demo + (" mode=%d" % mode if mode is not None else "") +
-        (" load=%s" % cont.replace(",", ":") if cont else "") + (" walk" if walk else "") + "\n")
+        (" load=%s" % cont.replace(",", ":") if cont else "") + (" walk" if walk else "") + (" state=%s" % STATE_RANGE if STATE_RANGE else "") + "".join(" dump=%x:%x" % (g[2], g[3]) for g in GLOBALS) + "\n")
     try:
         out = subprocess.run([sys.executable, os.path.join(HERE, "pcsx2_run.py"), "--seconds", "300",
                               "--until", "capture: all frames done", ISO], capture_output=True, text=True).stdout
@@ -92,7 +92,8 @@ def capture_ps1(frames, demo, cont, walk=False):
         if not warp_sweep.wait_port(2345, 30):
             sys.exit("DuckStation's GDB server didn't start")
         time.sleep(1)
-        env = dict(os.environ, CAP_FRAMES=",".join(map(str, frames)), CAP_OUT=CAP, CAP_DEMO=str(demo), CAP_LOAD=cont or "", CAP_WALK="1" if walk else "0")
+        env = dict(os.environ, CAP_FRAMES=",".join(map(str, frames)), CAP_OUT=CAP, CAP_DEMO=str(demo), CAP_LOAD=cont or "", CAP_WALK="1" if walk else "0", CAP_STATE=STATE_RANGE or "",
+                   CAP_DUMP=",".join("%x:%x" % (g[1], g[3]) for g in GLOBALS))
         out = subprocess.run(["gdb-multiarch", "-q", "-batch", "-ex", "set architecture mips:3000",
                               "-ex", "target remote localhost:2345", "-x", os.path.join(HERE, "gdb", "capture_ps1.py")],
                              env=env, capture_output=True, text=True, timeout=1800, stdin=subprocess.DEVNULL)
@@ -141,15 +142,20 @@ def write_png(path, rows):
 
 def normalize(words):
     """A GP0 packet with the bits the GPU ignores cleared: for textured polygons, the upper half of
-    the UV words after the second (the first holds the CLUT, the second the texture page)."""
+    the UV words after the second (the first holds the CLUT, the second the texture page); for
+    gouraud polygons, the top byte of the colour words after the first (the command byte's place)."""
     cmd = words[0] >> 24
-    if 0x20 <= cmd < 0x40 and cmd & 0x04:
-        gouraud, nv = cmd & 0x10, 4 if cmd & 0x08 else 3
+    if 0x20 <= cmd < 0x40:
+        gouraud, textured, nv = cmd & 0x10, cmd & 0x04, 4 if cmd & 0x08 else 3
         w = list(words)
-        for i in range(2, nv):
-            k = (2 + i * 3) if gouraud else (2 + i * 2)
-            if k < len(w):
-                w[k] &= 0xFFFF
+        stride = (2 + (1 if textured else 0)) if gouraud else (1 + (1 if textured else 0))
+        for i in range(nv):
+            if textured and i >= 2:
+                k = (2 + i * 3) if gouraud else (2 + i * 2)
+                if k < len(w):
+                    w[k] &= 0xFFFF
+            if gouraud and i >= 1 and i * stride < len(w):
+                w[i * stride] &= 0xFFFFFF
         return tuple(w)
     return tuple(words)
 
@@ -222,6 +228,95 @@ def compare(n, side2="ps2"):
 
 
 LAYOUTS = {}
+STATE_RANGE = None  # --state A:B
+GLOBALS = []        # --globals: (name, PS1 address, port address, size)
+
+
+def resolve_globals(spec):
+    """name[:size],...: PS1 addresses from configs/USA/sym.*.txt (or a D_xxxxxxxx name's own), the port's
+    and the size from sh1.elf's symbols."""
+    import glob
+    import re
+    syms = {}
+    for f in glob.glob(os.path.join(REPO, "configs", "USA", "sym.*.txt")):
+        for line in open(f):
+            m = re.match(r"\s*(\w+)\s*=\s*0x([0-9A-Fa-f]+);", line)
+            if m:
+                syms.setdefault(m.group(1), int(m.group(2), 16))
+    nm = subprocess.run(["mips64r5900el-ps2-elf-nm", "-S", os.path.join(REPO, "build", "port", "sh1.elf")],
+                        capture_output=True, text=True).stdout
+    port = {}
+    for line in nm.splitlines():
+        p = line.split()
+        if len(p) == 4:
+            port[p[3]] = (int(p[0], 16), int(p[1], 16))
+        elif len(p) == 3:
+            port.setdefault(p[2], (int(p[0], 16), 4))  # no size: give one (name:size)
+    out = []
+    for item in spec.split(","):
+        name, _, size = item.partition(":")
+        ps1 = syms.get(name) or (int(name[2:], 16) if re.match(r"D_8[0-9A-F]{7}$", name) else None)
+        if ps1 is None or name not in port:
+            sys.exit("--globals: %s not found (PS1 %s, port %s)" % (name, ps1, name in port))
+        out.append((name, ps1, port[name][0], int(size, 0) if size else port[name][1]))
+    return out
+
+
+def compare_states(args):
+    """--state: both sides' game state at every demo step of the range; the first steps where they
+    differ, field by field (pointers skipped, as compare())."""
+    os.makedirs(CAP, exist_ok=True)
+    if not args.skip_ps2:
+        capture_ps2([], args.demo, args.mode, args.cont, args.walk)
+    if not args.skip_ps1:
+        capture_ps1([0], args.demo, args.cont, args.walk)
+    sys_l, game_l = struct_layout.layout("s_SysWork"), struct_layout.layout("s_GameWork")
+    extra = sum(g[3] for g in GLOBALS)
+    rec = 12 + 0x2768 + 0x5D8 + extra
+
+    def read(side):
+        d, out = open(os.path.join(CAP, "%s_state.bin" % side), "rb").read(), {}
+        for pos in range(0, len(d) - rec + 1, rec):
+            step, seed, dt = struct.unpack_from("<iIi", d, pos)
+            out.setdefault(step, ((seed, dt), d[pos + 12:pos + 12 + 0x2768], d[pos + 12 + 0x2768:pos + rec - extra],
+                                  d[pos + rec - extra:pos + rec]))
+        return out
+
+    a, b = read("ps1"), read("ps2")
+    shown = 0
+    for step in sorted(set(a) & set(b)):
+        fields = []
+        if a[step][0][0] != b[step][0][0]:
+            fields.append("RNG seed: %08X vs %08X" % (a[step][0][0], b[step][0][0]))
+        off = 0
+        for name, _, _, size in GLOBALS:
+            ga, gb = a[step][3][off:off + size], b[step][3][off:off + size]
+            if ga != gb:
+                fields.append("%s: %s vs %s" % (name, ga.hex(), gb.hex()))
+            off += size
+        if a[step][0][1] != b[step][0][1]:
+            fields.append("g_DeltaTime: %d vs %d" % (a[step][0][1], b[step][0][1]))
+        for layout, wa, wb, name in ((sys_l, a[step][1], b[step][1], "g_SysWork"), (game_l, a[step][2], b[step][2], "g_GameWork")):
+            for off, sz, path in layout:
+                if off + sz > len(wa) or wa[off:off + sz] == wb[off:off + sz] or path.startswith(("field_2514", "field_254C", "gameStateCounter", "gameStateStepCounter", "sysStateCounter", "savegame.gameplayTimer", "controllers[0].pulseTicks", "controllers[1].pulseTicks")):
+                    continue
+                if sz == 4:
+                    va, vb = struct.unpack_from("<I", wa, off)[0], struct.unpack_from("<I", wb, off)[0]
+                    if va >> 24 == 0x80 and vb >> 24 == 0 and vb != 0:
+                        continue
+                    fields.append("%s.%s: %d vs %d" % (name, path, struct.unpack_from("<i", wa, off)[0], struct.unpack_from("<i", wb, off)[0]))
+                elif sz == 2:
+                    fields.append("%s.%s: %d vs %d" % (name, path, struct.unpack_from("<h", wa, off)[0], struct.unpack_from("<h", wb, off)[0]))
+                else:
+                    fields.append("%s.%s: %s vs %s" % (name, path, wa[off:off + sz].hex(), wb[off:off + sz].hex()))
+        if fields:
+            print("step %d: %d fields differ" % (step, len(fields)))
+            for f in fields[:25]:
+                print("    " + f)
+            shown += 1
+            if shown >= 3:
+                break
+    print("state: %d steps compared (PS1 %d, PS2 %d)" % (len(set(a) & set(b)), len(a), len(b)))
 
 
 def main():
@@ -231,11 +326,20 @@ def main():
     ap.add_argument("--skip-ps2", action="store_true", help="reuse the PS2 capture")
     ap.add_argument("--demo", type=int, default=1, help="which attract demo (1: the first played)")
     ap.add_argument("--load", dest="cont", metavar="F,D", help="load file F's Data D on card 1 instead of a demo")
+    ap.add_argument("--state", metavar="A:B", help="only the game state at every demo step A-B (ps1/ps2_state.bin), "
+                    "compared step by step: where the game first diverges")
+    ap.add_argument("--globals", help="with --state: also these globals, name[:size],... (symbol names)")
     ap.add_argument("--walk", action="store_true", help="with --load: turn 90 degrees right and walk 1.5 s first; frames count from its end")
     ap.add_argument("--replay", action="store_true", help="replay the DuckStation captures through the port's renderer")
     ap.add_argument("--mode", type=int, help="the port's rendering option bits (1 2x, 2 32-bit, 4 480p)")
     args = ap.parse_args()
+    global STATE_RANGE, GLOBALS
+    STATE_RANGE = args.state
+    GLOBALS = resolve_globals(args.globals) if args.globals else []
     frames = sorted(int(f) for f in args.frames.split(","))
+    if args.state:
+        compare_states(args)
+        return
     os.makedirs(CAP, exist_ok=True)
     if args.replay:
         replay_ps2(frames)
