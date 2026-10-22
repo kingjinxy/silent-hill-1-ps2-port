@@ -1,4 +1,5 @@
-# libgte/libkmath equivalence test: PS1 originals (DuckStation) vs recompiled versions (PCSX2).
+# libgte/libkmath equivalence test: PS1 originals (DuckStation) vs the port's versions (PCSX2): recompiled
+# libgte/libgs, C libkmath.
 # `make` builds both; `python3 run.py` runs both and prints the comparison.
 ROOT := ../../..
 GTE_TEST := ../gte_test
@@ -47,17 +48,25 @@ ps1_results.o: ps1_results.bin
 	$(CC_EE) -c ps1_results.s -o $@
 
 # The recompiled code as an archive (like tools/port/port_link.py), so only what's used is linked.
-librecomp_ee.a: $(RECOMP_C) $(wildcard $(RECOMP)/bridge_*.c) $(RECOMP)/libkmath.c
+librecomp_ee.a: $(RECOMP_C) $(wildcard $(RECOMP)/bridge_*.c)
 	rm -rf ee_objs $@; mkdir -p ee_objs
-	for f in $(RECOMP_C) $(wildcard $(RECOMP)/bridge_*.c) $(RECOMP)/libkmath.c; do \
+	for f in $(RECOMP_C) $(wildcard $(RECOMP)/bridge_*.c); do \
 		b=ee_objs/$$(basename $$f .c); \
 		$(CC_EE) $(CFLAGS_EE) -nostdinc -c $$f -o $$b.o && $(CC_EE) -c -G0 $${f%.c}.data.s -o $$b.data.o || exit 1; \
 	done
 	$(PS2DEV)/ee/bin/mips64r5900el-ps2-elf-ar rcs $@ ee_objs/*.o
 
-lib_test_ee.elf: lib_test.c lib_tests.h ps1_results.o librecomp_ee.a
+# libkmath: the port's C version (src/port/libkmath_port.c), built as the game's port C is.
+KMATH_C := $(ROOT)/src/port/libkmath_port.c $(ROOT)/src/port/libkmath_table.c
+libkmath_port.o: $(KMATH_C)
+	$(CC_EE) -O2 -G0 -std=gnu89 -nostdinc -I$(ROOT)/include -I$(ROOT)/include/psyq -I$(ROOT)/include/decomp -Wa,-I$(ROOT)/include -D_LANGUAGE_C -DVER_USA -DSH_PORT \
+		-DNON_MATCHING -c $(ROOT)/src/port/libkmath_port.c -o libkmath_port.o
+	$(CC_EE) -O2 -G0 -std=gnu89 -nostdinc -I$(ROOT)/include -I$(ROOT)/include/psyq -I$(ROOT)/include/decomp -Wa,-I$(ROOT)/include -D_LANGUAGE_C -DVER_USA -DSH_PORT \
+		-DNON_MATCHING -c $(ROOT)/src/port/libkmath_table.c -o libkmath_table.o
+
+lib_test_ee.elf: lib_test.c lib_tests.h ps1_results.o librecomp_ee.a libkmath_port.o
 	$(CC_EE) $(CFLAGS_EE) -T$(PS2SDK)/ee/startup/linkfile -L$(PS2SDK)/ee/lib -Wl,-zmax-page-size=128 -o $@ \
-		lib_test.c ps1_results.o $(ROOT)/src/port/gte.c $(ROOT)/src/port/libgte_port.c $(ROOT)/src/port/recomp_rt.c \
+		lib_test.c ps1_results.o libkmath_port.o libkmath_table.o $(ROOT)/src/port/gte.c $(ROOT)/src/port/libgte_port.c $(ROOT)/src/port/recomp_rt.c \
 		-Wl,--start-group librecomp_ee.a -Wl,--end-group
 
 clean:

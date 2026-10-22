@@ -60,8 +60,8 @@ def ld_objects(ld_script):
     return objs
 
 
-# Hand-written asm in src/: PS1 startup (replaced by ps2sdk's crt0) and Konami's math library (has
-# GTE instructions; needs a C version). Left out; libkmath's symbols are reported as their own group.
+# Hand-written asm in src/, left out: PS1 startup (replaced by ps2sdk's crt0) and Konami's math library
+# (in C for the port: src/port/libkmath_port.c).
 HAND_ASM = {"build/USA/src/main/libsn/snmain.s.o": "snmain", "build/USA/src/bodyprog/libkmath/libkmath.s.o": "libkmath"}
 
 
