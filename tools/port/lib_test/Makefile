@@ -11,6 +11,7 @@ CC_EE := $(PS2DEV)/ee/bin/mips64r5900el-ps2-elf-gcc
 CFLAGS_EE := -O2 -G0 -std=gnu89 -fno-builtin -I$(ROOT)/include -I$(PS2SDK)/ee/include -I$(PS2SDK)/common/include
 LIBGTE_OBJS := $(wildcard $(ROOT)/lib/libgte/*.o)
 LIBGS_OBJS := $(wildcard $(ROOT)/lib/libgs/*.o)
+LIBGPU_OBJS := $(wildcard $(ROOT)/lib/libgpu/*.o)
 LIBKMATH := $(ROOT)/build/USA/src/bodyprog/libkmath/libkmath.s.o
 RECOMP := $(ROOT)/build/port/recomp
 # GsTMDfast* (g3/g4/gt3/gt4) need libgs and real model data: tested with libgs instead.
@@ -35,8 +36,11 @@ libgte.a: $(LIBGTE_OBJS)
 libgs.a: $(LIBGS_OBJS)
 	rm -f $@; mipsel-linux-gnu-ar rcs $@ $(LIBGS_OBJS)
 
-lib_test_ps1.elf: crt0.o lib_test_ps1.o libgte.a libgs.a
-	$(CC_PS1) $(CFLAGS_PS1) -static -no-pie -T $(GTE_TEST)/link.ld -Wl,--no-warn-rwx-segments -o $@ crt0.o lib_test_ps1.o $(LIBKMATH) -Wl,--start-group libgs.a libgte.a -Wl,--end-group -lgcc
+libgpu.a: $(LIBGPU_OBJS)
+	rm -f $@; mipsel-linux-gnu-ar rcs $@ $(LIBGPU_OBJS)
+
+lib_test_ps1.elf: crt0.o lib_test_ps1.o libgte.a libgs.a libgpu.a
+	$(CC_PS1) $(CFLAGS_PS1) -static -no-pie -T $(GTE_TEST)/link.ld -Wl,--no-warn-rwx-segments -o $@ crt0.o lib_test_ps1.o $(LIBKMATH) -Wl,--start-group libgs.a libgte.a libgpu.a -Wl,--end-group -lgcc
 
 lib_test_ps1.exe: lib_test_ps1.elf
 	mipsel-linux-gnu-objcopy -O binary -j .text -j .rodata -j .data $< lib_test_ps1.bin
@@ -57,7 +61,7 @@ librecomp_ee.a: $(RECOMP_C) $(wildcard $(RECOMP)/bridge_*.c)
 	$(PS2DEV)/ee/bin/mips64r5900el-ps2-elf-ar rcs $@ ee_objs/*.o
 
 # The port's C libraries (src/port/libkmath_*.c, libgte_*.c), built as the game's port C is.
-PORT_LIB_C := libkmath_port libkmath_table libgte_port libgte_tables
+PORT_LIB_C := libkmath_port libkmath_table libgte_port libgte_tables libgpu_packets
 PORT_LIB_O := $(addsuffix .o,$(PORT_LIB_C))
 $(PORT_LIB_O): %.o: $(ROOT)/src/port/%.c
 	$(CC_EE) -O2 -G0 -std=gnu89 -nostdinc -I$(ROOT)/include -I$(ROOT)/include/psyq -I$(ROOT)/include/decomp -Wa,-I$(ROOT)/include \

@@ -20,7 +20,12 @@ NormalColorDpq NormalColorDpq3 NormalColorCol NormalColorCol3 ColorDpq ColorCol 
 LoadAverageShort12 LoadAverageShort0 LoadAverageByte InvSquareRoot VectorNormalS VectorNormalSS MatrixNormal
 Math_Sin Math_Cos Math_RotMatrixZ Math_RotMatrixXyz Math_RotMatrixZxy Math_RotMatrixZxyNeg Math_RotMatrixXyzGte
 Math_RotMatrixZxyNegGte
-GsSetFlatLight GsSetLightMatrix GsSetLsMatrix GsSetProjection GsSetAmbient""".split()
+GsSetFlatLight GsSetLightMatrix GsSetLsMatrix GsSetProjection GsSetAmbient
+TermPrim SetPolyG3 SetPolyF4 SetPolyFT4 SetPolyG4 SetTile SetDrawTPage SetDrawMove GetGraphDebug
+SetTexWindow SetDrawArea SetDrawOffset SetPriority SetDrawStp SetDrawMode SetDrawEnv""".split()
+
+# Not here: AddPrim stores the primitive's address in the ordering table, and the arena's address
+# differs between the two machines.
 
 # Integer arguments limited to >= 0: SquareRoot0/12 index their table with a value derived from the
 # input; negative inputs read outside the table (undefined, memory-layout dependent on both sides).
@@ -30,7 +35,7 @@ NONNEG = {"SquareRoot0", "SquareRoot12", "InvSquareRoot"}
 # light vector to SquareRoot0; random vectors overflow it to a negative value (see NONNEG).
 REALISTIC = {"GsSetFlatLight"}
 
-HEADERS = ["include/psyq/libgs.h", "include/psyq/libgte.h", "include/bodyprog/math/math.h", "tools/port/recomp_protos.h"]
+HEADERS = ["include/psyq/libgs.h", "include/psyq/libgte.h", "include/psyq/libgpu.h", "include/gpu.h", "include/bodyprog/math/math.h", "tools/port/recomp_protos.h"]
 
 
 def params(name):

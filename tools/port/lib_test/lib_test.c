@@ -85,6 +85,14 @@ static void read_regs(unsigned int* out)
 Result lib_test_results[NUM_TESTS];
 
 int printf(const char* fmt, ...) { (void)fmt; return 0; } /* libgte's error messages */
+/* libgpu's sys.o (linked for its packet builders) also refers to these; the tests never call them. */
+void* memcpy(void* d, const void* s, unsigned int n) { char* o = d; const char* i = s; while (n--) *o++ = *i++; return d; }
+int  ResetCallback(void) { return 0; }
+int  GPU_cw(unsigned int c) { (void)c; return 0; }
+int  DMACallback(int dma, void (*f)(void)) { (void)dma; (void)f; return 0; }
+int  GetVideoMode(void) { return 0; }
+int  SetIntrMask(int m) { (void)m; return 0; }
+int  VSync(int m) { (void)m; return 0; }
 
 __attribute__((noinline)) void lib_test_done(void) { for (;;) { } }
 
