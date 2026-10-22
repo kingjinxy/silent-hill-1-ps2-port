@@ -415,6 +415,32 @@ void Capture_Replay(int frame)
         }
         GpuGs_Flush();
         GpuGs_Sync();
+        {
+            /* With the 2x/32-bit shadow buffer on (mode=): its whole 320x512 area as drawn, at its own
+             * scale and depth, after a header (scale shift, bits a pixel). */
+            extern int  GpuGs_HiresOn(void);
+            extern int  GpuGs_HiresShift(void);
+            extern int  GpuGs_HiresBits(void);
+            extern void GpuGs_StoreHires(int x, int y, int w, int h, void* dst);
+            if (GpuGs_HiresOn())
+            {
+                int sh = GpuGs_HiresShift(), bpp = GpuGs_HiresBits() / 8, w = 320 << sh, hgt = 512 << sh, hdr[2];
+                static unsigned char band[640 * 32 * 4] __attribute__((aligned(64)));
+                sprintf(name, "host:cap/ps2r_%d_hires.bin", s_Replay[i]);
+                if ((f = fopen(name, "wb")))
+                {
+                    hdr[0] = sh;
+                    hdr[1] = bpp * 8;
+                    fwrite(hdr, 4, 2, f);
+                    for (row = 0; row < hgt; row += 32)
+                    {
+                        GpuGs_StoreHires(0, row, w, 32, band);
+                        fwrite(band, (size_t)(w * bpp), 32, f);
+                    }
+                    fclose(f);
+                }
+            }
+        }
         sprintf(name, "host:cap/ps2r_%d_vram.bin", s_Replay[i]);
         if ((f = fopen(name, "wb")))
         {

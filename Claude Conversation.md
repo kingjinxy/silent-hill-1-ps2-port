@@ -29991,3 +29991,196 @@ I'll check what's uncommitted and whether the docs already cover today's tools a
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='Planning Doc.md'; s=open(p).read() s=s.replace("""- [ ] Renderer rounding: display pixels m
 
+## Claude
+
+The code changes were already committed. The docs are now updated too, in commit 41954e710:
+- **[Running Walkthrough.md](Running%20Walkthrough.md):** a new dated section on the new comparison tools and each bug found and fixed.
+- **[Planning Doc.md](Planning%20Doc.md):** the flashlight, renderer-rounding and attract-demo items are ticked off, and the accepted gouraud rounding is added as an open item.
+- **[docs/ToFix.md](docs/ToFix.md):** what's left on the renderer side (gouraud rounding, hardware performance of the new blend and palette paths), plus a new Testing section. It covers the brightness-0 save and why demos need the PS1's load timing to stay in sync.
+
+**Suggested next steps:**
+1. **Measure the new renderer paths on the console.** The palette filtering, the second mask-bit pass and the three-draw blend path have only been tested in PCSX2. A profiling build in the Infirmary (heavy flare) and through the attract demos would show whether they cost frames.
+2. **Run the same comparison on more of the game.** So far I've compared the attract demos and the Infirmary. The Demo menu's in-game cutscenes and a few saves across different maps (fog, darkness, the Otherworld) would cover effects not yet seen, such as other blend modes, lines and feedback effects.
+3. **Compare the 2× and 32-bit options.** The new exact paths are switched off in those modes. A replay comparison against DuckStation's high-resolution and true-colour output would show how far they drift.
+4. **The open bugs in docs/ToFix.md.** The warm-restart stall on hardware and the map6_s02 cutscene soft-lock are the ones that affect real play most.
+5. **Untextured gouraud, exactly.** This is a smaller, contained win if you want to push pixel accuracy further. The constant-texel method is exact, but it covers only part of the remaining gouraud difference.
+
+## User
+
+Let’s run the same comparisons with the 2x resolution in PCSX2 and DuckStation to make sure that the lighting and shading doesn’t break at higher resolutions.
+
+## Claude
+
+One thing needs your decision first. DuckStation's software renderer, which your settings use as the reference, only renders at native resolution. Its 2× upscaling only works with its hardware renderers (Vulkan or OpenGL), which differ from the PS1 in their own ways, such as rounding and optional dithering.
+
+- tool `AskUserQuestion`: 
+
+- tool `Bash`: echo "XDG_SESSION_TYPE=$XDG_SESSION_TYPE WAYLAND_DISPLAY=$WAYLAND_DISPLAY DISPLAY=$DISPLAY"; for t in import xwd grim gnome-screenshot spectacle scrot xdotool w
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "capture: replay %d (%d words)" -B14 src/port/ps2/capture_ps2.c | head -30; grep -n "def replay_ps2" -A4
+
+## Claude
+
+The replay will dump the shadow buffer in 32-row bands to `ps2r_N_hires.bin` before reading VRAM back. A small header gives the scale and depth. `compare_frames.py --replay` passes `--mode` through.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/capture_ps2.c'; s=open(p).read() old="""        GpuGs_Flush();         GpuGs_S
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/compare_hires.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 tools/port/compare_hires.py 10
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad && python3 -c " from PIL import Image, ImageEnha
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/hv_120_m1.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/hv_10_m3.png
+
+- tool `Bash`: for t in convert magick xwdtopnm; do command -v $t && echo have $t; done; python3 -c "import PIL; print(PIL.__version__)"; grep -n -i "^\[Main\]\|StartFullscree
+
+- tool `Bash`: sed -n '/^\[Display\]/,/^\[/p' ~/.local/share/duckstation/settings.ini | head -40; sed -n '/^\[GPU\]/,/^\[/p' ~/.local/share/duckstation/settings.ini | head -40
+
+- tool `Bash`: sed -n '/^\[GPU\]/,/^\[/p' ~/.local/share/duckstation/settings.ini | sed -n 40,70p; grep -n "IntegerScaling\|CropMode\|ShowOSD\|ShowStatus\|ShowFPS" ~/.local/sh
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "def patch_duckstation" -A12 tools/port/compare_frames.py; grep -n "def capture_ps1" -A8 tools/port/comp
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/compare_frames.py'; s=open(p).read() old=s[s.index("def patch_duckstation():"):s
+
+## Claude
+
+Now a first trial: the walking frame with DuckStation at 2× 16-bit.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; timeout 600 python3 tools/port/compare_frames.py --load 2,10 --walk --frames 10 --ds-
+
+## Claude
+
+DuckStation ran and your settings were restored, but `xwd` wrote an empty file. I'll test `xwd -root` on its own to see the error.
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad && xwd -root -silent -out test.xwd; echo "exit $
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gdb/capture_ps1.py'; s=open(p).read() old='''        subprocess.run(["xwd", "-ro
+
+## Claude
+
+The file is still empty, so either no window matched or the capture failed again. I'll start DuckStation under X11 by itself and look at the window tree directly.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/cap/ds2x_10.xwd; (QT_QPA_PLATFORM=xcb setsid ~/Downloads/DuckStation-x64.AppImage -batch -fastb
+
+## Claude
+
+The window's title is the game's ("Silent Hill"), not "DuckStation", and the picture is drawn into a child widget of class `duckstation-qt`. I'll test capturing that widget directly.
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad && for id in 0xe00016 0xe00013 0xe00007; do xwd 
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad && python3 -c " import struct from PIL import Im
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/t_widget.png
+
+## Claude
+
+The capture works: that's DuckStation's actual display, the Konami logo. But the window tree still shows DuckStation running, so the kill didn't take. I'll check for the process again.
+
+- tool `Bash`: W=$(xwininfo -root -tree | awk '/duckstation-qt/ && /Silent Hill|DuckStation/ {print $1; exit}'); echo "win $W"; [ -n "$W" ] && { PID=$(xprop -id $W _NET_WM_PID
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gdb/capture_ps1.py'; s=open(p).read() a=s.index("        # XWayland won't read t
+
+## Claude
+
+No capture this time, so no window matched. In fullscreen, the render widget is probably a top-level window titled "Silent Hill" rather than "duckstation-qt". I'll match by window class alone.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gdb/capture_ps1.py'; s=open(p).read() old='''            r"(0x[0-9a-f]+) \\"duck
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/build/port/cap/ds2x_10.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+## Claude
+
+The full set of 2× comparisons is running in the background. It runs 3 scenes, each against DuckStation at both 2× 16-bit and 2× true colour, plus the software reference. I'll report when it's done.
+
+**Results so far, against the PS1-exact software reference (port at 2×, each 2×2 block averaged):**
+
+| Scene | 2× 16-bit (mode 1) | 2× 32-bit (mode 3) |
+|---|---|---|
+| Walking frame | brightness 0.995, 92% exact | +0.6 to +0.9 levels, blacks lifted |
+| Infirmary flare | brightness 0.997, 86% exact | +0.6 to +1.1 levels |
+| Demo 1, step 100 | brightness 0.995, 80% exact | +0.2 to +1.2 levels |
+
+**2× 16-bit holds up.** Lighting, shading, Harry and the flare look like the 1× reference, just sharper. The remaining differences are edges and one-level rounding.
+
+**2× 32-bit is visibly lighter**: dark areas become grey and the walls look washed out. Faint additive layers probably add up in true colour where the PS1's 5-bit colour discards them. The DuckStation true-colour comparison now running will show whether it does the same, or whether it's specific to the port.
+
+**Tooling added:**
+- `compare_frames.py --replay --mode N` dumps the port's 2× shadow buffer.
+- `tools/port/compare_hires.py` compares it against DuckStation at 1× or against a 2× screenshot.
+- `--ds-hw 16|32` captures DuckStation's OpenGL 2× screen at the exact frame. It runs under X11, fullscreen, with the screen grabbed by `xwd`, and your DuckStation settings are restored afterwards.
+
+## User
+
+Does the 2x mode have scaled dithering? I’m wondering what this would look like compared to DuckStation or PCSX2’s scaled dithering
+
+## Claude
+
+I'll check the 2× path in `gpu_gs.c` for any adjustment of the dither matrix or its coordinates.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "R_DTHE\|R_DIMX\|dimx()" src/port/ps2/gpu_gs.c | head
+
+## Claude
+
+Yes. The port's 2× mode effectively uses **scaled** dithering:
+- **2× 16-bit:** the GS applies the PS1's 4×4 dither matrix per pixel of the 2× buffer ([gpu_gs.c:1097](src/port/ps2/gpu_gs.c#L1097)). Each dither cell is one 2× pixel, so the pattern is half the size of the PS1's and much less visible. That's what DuckStation calls **Scaled** dithering.
+- **2× 32-bit:** no dithering at all, as in DuckStation's true-colour mode.
+- **Unscaled** (the PS1's chunky 2×2-pixel cells at 2×) isn't possible with the GS dither unit: its matrix is indexed by x & 3, y & 3, so it can't repeat every 8 pixels. Getting that look would need another technique, such as drawing the pattern through a texture.
+
+That means my running comparison has a mismatch. I configured DuckStation's 2× 16-bit run with **Unscaled** dithering, its current setting, but the port does Scaled. In that comparison, the per-pixel dither differences will partly be the two methods disagreeing. The 2×2 block averages and brightness figures are mostly unaffected, but an image comparison will show different dither textures.
+
+PCSX2's dithering options (Scaled, Unscaled, Off) only apply when it upscales PS2 games with its hardware renderer. Our test runs use its software renderer at native resolution, where the port's own GS dithering is reproduced exactly. So the like-for-like reference is DuckStation.
+
+When the current run finishes, I can re-capture the three scenes with DuckStation set to **Scaled**, the same method as the port, and also make a side-by-side image of:
+- DuckStation Unscaled at 2×;
+- DuckStation Scaled at 2×;
+- the port at 2× 16-bit.
+
+That will show what each looks like on the same frame. Should I go ahead with both?
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/brjesa0dp.output
+
+## Claude
+
+The 2× comparisons against DuckStation's hardware renderer are done, and they answer the 32-bit question.
+
+**2× 32-bit against DuckStation 2× TrueColor: the lifted blacks are correct.**
+
+| Scene | Brightness (port ÷ DuckStation) | Exact matches |
+|---|---|---|
+| Walking frame | 0.992 | 90% |
+| Infirmary flare | 0.978 | 85% |
+| Demo 1 | 0.998 | 86% |
+
+The per-dither-cell bias is flat at about −0.01 to −0.06. So the greyer look in 32-bit mode is how true colour renders this game: DuckStation's TrueColor does the same. It isn't a port bug.
+
+**2× 16-bit against DuckStation 2× Unscaled:** brightness 0.97–0.98, 67–86% exact. The per-cell bias swings up and down with the dither matrix, which is the Scaled-versus-Unscaled mismatch I mentioned. Against the PS1-exact 1× reference, the same port frames are 0.995–0.997.
+
+**One caveat about these runs:** for the walking and Infirmary scenes, DuckStation's OpenGL run drew slightly different GPU commands from its software run at the same frame. Load timing shifts the frame a little, so those two scenes compare nearly, not exactly, the same moment. Demo 1 is exact, since its commands match, and its figures agree with the other two.
+
+**So far:** lighting and shading hold up at 2× in both colour depths, and the only visible difference is the dither method. My earlier question is still open: should I re-capture with DuckStation set to Scaled (like-for-like with the port) and make the side-by-side of DuckStation Unscaled, DuckStation Scaled and the port at 2× 16-bit?
+
+## User
+
+Yes
+
+## Claude
+
+I'll add a `--ds-hw 16s` choice (DuckStation dithering set to Scaled). I'll use demo 1 at step 100 as the main frame, since its GPU commands are identical across DuckStation's renderers.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/compare_frames.py'; s=open(p).read() s=s.replace('''"DitheringMode": "TrueColor"
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/dither_compare.png
+
+- tool `SendUserFile`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
+

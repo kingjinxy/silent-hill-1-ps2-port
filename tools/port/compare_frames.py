@@ -56,20 +56,57 @@ def capture_ps2(frames, demo, mode, cont, walk=False):
     print("\n".join(l.split("] ", 1)[-1] for l in out.splitlines() if "capture:" in l or l.startswith("pcsx2_run:")))
 
 
+DS_HW = None  # --ds-hw: DuckStation's OpenGL renderer at 2x ("16" or "32"-bit colour), its screen captured
+
+
 def patch_duckstation():
-    """warp_sweep's settings plus the software renderer (added to [GPU] if missing)."""
+    """warp_sweep's settings plus the software renderer (added to [GPU] if missing). With --ds-hw: the
+    OpenGL renderer at 2x instead, shown fullscreen at an integer scale with the borders cropped and no
+    on-screen display, for its screen to be captured (gdb/capture_ps1.py, CAP_SHOT)."""
     backup = warp_sweep.patch_settings()
+    want = {"Renderer": "Software"}
+    if DS_HW:
+        want = {"Renderer": "OpenGL", "ResolutionScale": "2", "UseThread": "false",
+                "DitheringMode": {"32": "TrueColor", "16s": "Scaled"}.get(DS_HW, "Unscaled"),
+                "Scaling": "NearestInteger", "AspectRatio": "PAR 1:1", "CropMode": "Borders", "ShowFPS": "false",
+                "ShowOSDMessages": "false", "ShowStatusIndicators": "false", "StartFullscreen": "true"}
     lines = open(warp_sweep.SETTINGS).read().splitlines(True)
-    if any(l.split("=", 1)[0].strip() == "Renderer" for l in lines):
-        lines = ["Renderer = Software\n" if l.split("=", 1)[0].strip() == "Renderer" else l for l in lines]
-    else:
-        lines = [l + ("Renderer = Software\n" if l.strip() == "[GPU]" else "") for l in lines]
-    open(warp_sweep.SETTINGS, "w").writelines(lines)
+    seen = set()
+    out = []
+    for l in lines:
+        key = l.split("=", 1)[0].strip()
+        if key in want:
+            l = "%s = %s\n" % (key, want[key])
+            seen.add(key)
+        out.append(l)
+        if l.strip() == "[GPU]":
+            out += ["%s = %s\n" % (k, v) for k, v in want.items() if k in ("Renderer",) and not any(
+                x.split("=", 1)[0].strip() == k for x in lines)]
+    open(warp_sweep.SETTINGS, "w").writelines(out)
     return backup
 
 
-def replay_ps2(frames):
-    open(os.path.join(REPO, "build", "port", "capture.txt"), "w").write(" ".join("replay=%d" % f for f in frames) + "\n")
+def xwd_to_png(src, dst):
+    """The 640x448 picture from an xwd capture of DuckStation's fullscreen window (centred, integer scale)."""
+    from PIL import Image
+    d = open(src, "rb").read()
+    hdr = struct.unpack_from(">25I", d, 0)
+    size, w, h, bpp, bpl, ncolors = hdr[0], hdr[4], hdr[5], hdr[11], hdr[12], hdr[19]
+    data = d[size + 12 * ncolors:]
+    m = min(w // 640, h // 448)
+    ox, oy = (w - 640 * m) // 2, (h - 448 * m) // 2
+    im = Image.new("RGB", (640, 448))
+    px = im.load()
+    for y in range(448):
+        for x in range(640):
+            o = (oy + y * m + m // 2) * bpl + (ox + x * m + m // 2) * (bpp // 8)
+            px[x, y] = (data[o + 2], data[o + 1], data[o])
+    im.save(dst)
+
+
+def replay_ps2(frames, mode=None):
+    open(os.path.join(REPO, "build", "port", "capture.txt"), "w").write(
+        " ".join("replay=%d" % f for f in frames) + (" mode=%d" % mode if mode is not None else "") + "\n")
     try:
         out = subprocess.run([sys.executable, os.path.join(HERE, "pcsx2_run.py"), "--seconds", "120",
                               "--until", "capture: all frames done", ISO], capture_output=True, text=True).stdout
@@ -87,12 +124,13 @@ def capture_ps1(frames, demo, cont, walk=False):
     backup = patch_duckstation()
     ds = None
     try:
-        ds = subprocess.Popen([DUCKSTATION, "-batch", "-fastboot", "-nofullscreen", "--", CUE], stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, start_new_session=True)
+        ds = subprocess.Popen([DUCKSTATION, "-batch", "-fastboot"] + ([] if DS_HW else ["-nofullscreen"]) + ["--", CUE],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, start_new_session=True,
+                              env=dict(os.environ, QT_QPA_PLATFORM="xcb") if DS_HW else None)
         if not warp_sweep.wait_port(2345, 30):
             sys.exit("DuckStation's GDB server didn't start")
         time.sleep(1)
-        env = dict(os.environ, CAP_FRAMES=",".join(map(str, frames)), CAP_OUT=CAP, CAP_DEMO=str(demo), CAP_LOAD=cont or "", CAP_WALK="1" if walk else "0", CAP_STATE=STATE_RANGE or "",
+        env = dict(os.environ, CAP_SHOT="1" if DS_HW else "0", CAP_FRAMES=",".join(map(str, frames)), CAP_OUT=CAP, CAP_DEMO=str(demo), CAP_LOAD=cont or "", CAP_WALK="1" if walk else "0", CAP_STATE=STATE_RANGE or "",
                    CAP_DUMP=",".join("%x:%x" % (g[1], g[3]) for g in GLOBALS))
         out = subprocess.run(["gdb-multiarch", "-q", "-batch", "-ex", "set architecture mips:3000",
                               "-ex", "target remote localhost:2345", "-x", os.path.join(HERE, "gdb", "capture_ps1.py")],
@@ -345,10 +383,14 @@ def main():
                     "as many frames as the PS1's did (its load timing; captures DuckStation first)")
     ap.add_argument("--globals", help="with --state: also these globals, name[:size],... (symbol names)")
     ap.add_argument("--walk", action="store_true", help="with --load: turn 90 degrees right and walk 1.5 s first; frames count from its end")
+    ap.add_argument("--ds-hw", choices=("16", "16s", "32"), help="DuckStation's OpenGL renderer at 2x (16-bit with unscaled or "
+                    "scaled dithering, or true colour) "
+                    "instead of its software renderer; its screen is captured to ds2x_N.png (tools/port/compare_hires.py --ds2x)")
     ap.add_argument("--replay", action="store_true", help="replay the DuckStation captures through the port's renderer")
     ap.add_argument("--mode", type=int, help="the port's rendering option bits (1 2x, 2 32-bit, 4 480p)")
     args = ap.parse_args()
-    global STATE_RANGE, GLOBALS
+    global STATE_RANGE, GLOBALS, DS_HW
+    DS_HW = args.ds_hw
     STATE_RANGE = args.state
     GLOBALS = resolve_globals(args.globals) if args.globals else []
     frames = sorted(int(f) for f in args.frames.split(","))
@@ -357,9 +399,16 @@ def main():
         return
     os.makedirs(CAP, exist_ok=True)
     if args.replay:
-        replay_ps2(frames)
+        replay_ps2(frames, args.mode)
     elif not args.skip_ps2:
         capture_ps2(frames, args.demo, args.mode, args.cont, args.walk)
+    if args.ds_hw:
+        capture_ps1(frames, args.demo, args.cont, args.walk)
+        for n in frames:
+            if os.path.exists(os.path.join(CAP, "ds2x_%d.xwd" % n)):
+                xwd_to_png(os.path.join(CAP, "ds2x_%d.xwd" % n), os.path.join(CAP, "ds2x_%d.png" % n))
+                print("ds2x_%d.png" % n)
+        return
     if not args.skip_ps1 and not args.replay:
         capture_ps1(frames, args.demo, args.cont, args.walk)
     LAYOUTS["g_SysWork"] = struct_layout.layout("s_SysWork")

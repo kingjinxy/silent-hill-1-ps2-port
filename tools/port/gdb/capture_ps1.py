@@ -25,7 +25,8 @@ STATE = [int(x) for x in os.environ["CAP_STATE"].split(":")] if os.environ.get("
 # PutDispEnv) into ps1_state.bin, as capture_ps2.c's Capture_State.
 DUMPS = [tuple(int(v, 16) for v in d.split(":")) for d in os.environ.get("CAP_DUMP", "").split(",") if d]
 RNG_SEED = 0x80022C90                       # g_RngSeed
-WALK = os.environ.get("CAP_WALK") == "1"  # with CAP_LOAD: turn 90 degrees right and walk 1.5 s first (as joy.c)
+WALK = os.environ.get("CAP_WALK") == "1"
+SHOT = os.environ.get("CAP_SHOT") == "1"  # after each captured frame, xwd of the screen once it's shown  # with CAP_LOAD: turn 90 degrees right and walk 1.5 s first (as joy.c)
 LOAD = [int(x) for x in os.environ["CAP_LOAD"].split(",")] if os.environ.get("CAP_LOAD") else None
 
 STEP = 0x800C4894          # g_Demo_DemoStep
@@ -245,9 +246,29 @@ if STATE:
 for addr in (DRAWOTAG, PUTDRAWENV, PUTDISPENV):
     gdb.Breakpoint("*0x%08X" % addr, internal=True)
 
-while len(done) < len(FRAMES):
+shot_pending = None
+while len(done) < len(FRAMES) or shot_pending is not None:
     gdb.execute("continue", to_string=True)
     pc = reg("pc")
+    if shot_pending is not None and pc == DRAWOTAG:
+        # The next frame's drawing: the captured one has been presented (no GPU thread).
+        import subprocess
+        import time
+        time.sleep(1.0)
+        # XWayland won't read the root window: DuckStation's windows (class duckstation-qt), largest
+        # first, until one can be read (the render widget can; some containers can't).
+        import re
+        tree = subprocess.run(["xwininfo", "-root", "-tree"], capture_output=True, text=True).stdout
+        wins = sorted(((int(m.group(2)) * int(m.group(3)), m.group(1)) for m in re.finditer(
+            r"(0x[0-9a-f]+) (?:\"[^\"]*\"|\(has no name\)): \(\"[^\"]*\" \"duckstation-qt\"\)\s+(\d+)x(\d+)", tree)),
+            reverse=True)
+        out = os.path.join(OUT, "ds2x_%d.xwd" % shot_pending)
+        for _, wid in wins:
+            if subprocess.run(["xwd", "-id", wid, "-silent", "-out", out], capture_output=True).returncode == 0 and \
+                    os.path.getsize(out) > 100:
+                break
+        print("capture: screen of frame %d" % shot_pending, flush=True)
+        shot_pending = None
     step = demo_step()
 
     if open_frame is not None and pending_env is not None and pc in (DRAWOTAG, PUTDRAWENV, PUTDISPENV):
@@ -272,6 +293,8 @@ while len(done) < len(FRAMES):
         open(os.path.join(OUT, "ps1_%d_syswork.bin" % open_frame), "wb").write(bytes(inf.read_memory(SYSWORK, SYSWORK_SIZE)))
         print("capture: frame %d (%d packets)" % (open_frame, len(packets)), flush=True)
         done.add(open_frame)
+        if SHOT:
+            shot_pending = open_frame
         open_frame, packets = None, []
         continue
 
