@@ -43,6 +43,9 @@ Known issues, tabled for now (collected 2026-10-19, mostly from the console cuts
 - **Gouraud colour rounding (accepted 2026-10-22).**
   - The PS1 interpolates colours from half a unit up (rounds them); the GS truncates. One level (of 32) darker on ~10% of gouraud pixels, mostly the ground fog (textured gouraud, additive). Not visible by eye.
   - Tried: vertex colours as 2c + 1 halved by the blend (exact for untextured gouraud, close for textured), but the GS clamps the modulated colour to 255 before the blend, so only colours up to 63 qualify: ~50 pixels a frame gained, not kept. Exact options left: untextured gouraud through a constant texel; textured gouraud only by rasterising off the GS (VU1/EE).
+- **2x has only scaled dithering.**
+  - The GS applies the 4x4 dither matrix per 2x pixel (DuckStation's "Scaled"); the PS1's coarse look at 2x ("Unscaled", 2x2-pixel cells) would need the pattern drawn through a texture.
+- **2x 32-bit looks lighter than the PS1** (blacks lifted ~1 level): faint additive layers keep their fractions in true colour. DuckStation's TrueColor does the same, so it's expected, not a bug.
 - **Exact blending (modes 0, 2, 3) not measured on hardware.**
   - Each such polygon costs three draws (opaque texels, the scratch area, the composite). Rare in the game frames captured so far (~70 subtract-mode polygons, no average or quarter-add); measure if a scene uses them heavily.
   - Not used with the 2x or 32-bit shadow buffer, for fog pairs, or past a 256x128 box: those keep the 1-2 level differences.

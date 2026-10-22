@@ -30184,3 +30184,29 @@ I'll add a `--ds-hw 16s` choice (DuckStation dithering set to Scaled). I'll use 
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
 
+## Claude
+
+I've sent the side-by-side image. It shows demo 1 at step 100, with Harry in the fog: DuckStation 2× Unscaled, DuckStation 2× Scaled, and the port at 2× 16-bit. The top row is a 4× zoom; the bottom row shows the whole frames.
+
+**What it shows:**
+- **DuckStation Unscaled:** the PS1's dither pattern at its original size, with each cell 2×2 pixels at 2× resolution. You get the coarse checkerboard over the fog, as on a real PS1, just sharper.
+- **DuckStation Scaled:** the pattern at the 2× pixel size, so it's half as coarse and reads more like fine noise.
+- **The port at 2× 16-bit:** the same fine pattern as DuckStation Scaled. Against Scaled, the port's per-cell bias is flat, a uniform −0.27 levels in every dither cell. Against Unscaled, the same bias swung from −0.9 to +0.4 with the pattern. Exact matches are 83% against Scaled and 67% against Unscaled.
+
+The small uniform darkness is the accepted gouraud rounding showing on the fog, which is heavy in this frame. The lighting and shading match.
+
+**On Unscaled:** the GS dither unit can only produce Scaled at 2×. Its 4×4 matrix is indexed per pixel and can't repeat every 8 pixels. A PS1-style coarse pattern at 2× would need another technique, such as drawing the dither through a texture. If you'd like that look as an option alongside Scaled, I can work out how it could be done and what it would cost.
+
+**Committed** as 47a7f34f7:
+- `--replay --mode N` dumps the 2× buffer;
+- `--ds-hw 16|16s|32` captures DuckStation's 2× screen;
+- `tools/port/compare_hires.py` compares the two.
+
+`build/port/sh1_ps2.iso` is the 60 fps console build.
+
+## User
+
+Update the docs
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='Running Walkthrough.md'; s=open(p).read() s+=""" ## 2x resolution against DuckStation (2026
+

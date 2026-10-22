@@ -1476,3 +1476,15 @@ Bugs found and fixed:
 - **Blend modes 0, 2, 3**: the source is drawn into a scratch area (the last page cache slot) dithered as the PS1, then composited, which makes the GS's 8-bit blend the PS1's 5-bit one; quads triangle by triangle. Synthetic test 4894 -> 1461.
 
 Left: gouraud colour rounding (accepted; docs/ToFix.md). Replays now differ from DuckStation by ~1-2% of pixels, scattered single-level differences with no dither-pattern bias.
+
+## 2x resolution against DuckStation (2026-10-22)
+
+Tools:
+- `compare_frames.py --replay --mode N` replays DuckStation's packets with the Debug Options rendering bits set and also dumps the shadow buffer (`ps2r_N_hires.bin`).
+- `compare_frames.py --ds-hw 16|16s|32` runs DuckStation's OpenGL renderer at 2x (unscaled dithering, scaled dithering, or true colour), fullscreen at an integer scale under XWayland (`QT_QPA_PLATFORM=xcb`), and captures its render widget with `xwd -id` right after the frame is shown (`ds2x_N.png`; `xwd -root` is refused by XWayland). DuckStation's settings are restored after.
+- `tools/port/compare_hires.py N [--ds2x shot.png]`: the port's 2x image against DuckStation's 1x frame (2x2 blocks averaged) or a 2x screenshot: brightness ratio, differences in levels, mean bias per dither cell, a side-by-side image.
+
+Results (demo 1 step 100, the Infirmary flare, the walk test):
+- **2x 16-bit**: against the PS1 reference (software, 1x) brightness 0.995-0.997, 80-92% of channels exact. Its dithering is DuckStation's "Scaled" (the GS applies the 4x4 matrix per 2x pixel): against DuckStation Scaled the bias is flat over the dither cells (-0.27 levels, the gouraud rounding on the fog), against Unscaled it follows the matrix. "Unscaled" (2x2-pixel cells) isn't possible with the GS dither unit (its matrix repeats every 4 pixels).
+- **2x 32-bit**: brighter than the PS1 reference (blacks lifted, +0.6 to +1 level) because faint additive layers keep their fractions in true colour; against DuckStation's TrueColor 2x it matches (brightness 0.98-1.0, 85-90% exact).
+- DuckStation's OpenGL and software runs can draw slightly different frames at the same point after a save load (timing); demo frames are identical.
