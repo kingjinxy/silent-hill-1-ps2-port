@@ -16,10 +16,24 @@
 #include "screens/options.h"
 #include "screens/stream/stream.h"
 
+#if VERSION_REGION_IS(NTSCJ)
+INCLUDE_RODATA("screens/options/nonmatchings/options", D_801E2600);
+#endif
+
+// Japanese releases draw the main and extra option menus 20 pixels higher.
+#if VERSION_REGION_IS(NTSCJ)
+    #define MENU_SHIFT_Y -20
+#else
+    #define MENU_SHIFT_Y 0
+#endif
+
 #define LINE_CURSOR_TIMER_MAX          8
 #define LAYER_24                       24
-#define LAYER_40                       40
+#define LAYER_32                       32
 #define LAYER_36                       36
+#define LAYER_40                       40
+#define LAYER_44                       44
+#define LAYER_48                       48
 #define LAYER_8148                     8148
 #define OPTIONS_ENTRY_STRING_LAYER_IDX 8 // TODO: Leftover from JAP builds or required for all?
 
@@ -116,6 +130,34 @@ void GameState_Options_Update(void) // 0x801E2D44
 {
     s32 unlockedOptFlags;
     s32 i;
+#if VERSION_REGION_IS(NTSCJ)
+    char* mainOptionsDescs[10] =
+    {
+        "オプションモードを終了します　　　　　　",
+        "画面の明るさを調節します　　　　　　　　",
+        "操作方法を変更します　　　　　　　　　　",
+        "画面の表示位置を調節します　　　　　　　",
+        "　アナログコントローラの振動設定：　　　",
+        "　　　　オートロードの設定：　　　　　　",
+        "　　サウンドの設定：　　　　　　　　　　",
+        "ＢＧＭのボリュームを調節します　　　　　",
+        "ＳＥのボリュームを調節します　　　　　　",
+        "オンオフステレオモノラル　　　　　　　　"
+    };
+    char* extraOptions[10] =
+    {
+        "武器の構えタイプ：　　　　　　　　　　　",
+        "血しぶきの色：　　　　　　　　　　　　　",
+        "サーチビュー操作：　　　　　　　　　　　",
+        "後退時の旋回：　　　　　　　　　　　　　",
+        "歩行／走行の操作：　　　　　　　　　　　",
+        "武器の自動照準：　　　　　　　　　　　　",
+        "サーチビュー効果：　　　　　　　　　　　",
+        "弾薬量設定：　　×１×２×３×４×５×６",
+        "切り替え押し続け×１×２×３×５オフオン",
+        "リバースノーマル緑紫黒白前方視点自己視点"
+    };
+#endif
 
     if (g_GameWork.gameStatePrev == GameState_InGame)
     {
@@ -135,7 +177,11 @@ void GameState_Options_Update(void) // 0x801E2D44
 
             if (g_GameWork.gameStatePrev != GameState_InGame)
             {
+#if VERSION_REGION_IS(NTSCJ)
+                VSync(SyncMode_Wait3);
+#else
                 VSync(SyncMode_Wait8);
+#endif
             }
 
             g_GameWork.background2dColor.r = 0;
@@ -193,6 +239,16 @@ void GameState_Options_Update(void) // 0x801E2D44
 #endif
 
             Game_StateStepSet(0, OptionsMenuState_MainOptions);
+
+#if VERSION_REGION_IS(NTSCJ)
+            func_80037124();
+
+            D_800C3920 = 20;
+            for (i = 0; i < 10; i++)
+            {
+                func_8004C918(mainOptionsDescs[i], i, 1, 14);
+            }
+#endif
             break;
 
         case OptionsMenuState_LeaveScreenPos:
@@ -258,6 +314,14 @@ void GameState_Options_Update(void) // 0x801E2D44
                 Game_StateStepSet(0, OptionsMenuState_ExtraOptions);
                 ScreenFade_Start(false, true, false);
                 g_Options_SelectionHighlightTimer = 0;
+
+#if VERSION_REGION_IS(NTSCJ)
+                D_800C3920 = 20;
+                for (i = 0; i < 10; i++)
+                {
+                    func_8004C918(extraOptions[i], i, 1, 14);
+                }
+#endif
             }
             break;
 
@@ -294,8 +358,13 @@ void Options_ExtraOptionsMenu_Control(void) // 0x801E318C
 {
     Options_ExtraOptionsMenu_EntryStringsDraw();
     Options_ExtraOptionsMenu_ConfigDraw();
+
+#if VERSION_REGION_IS(NTSCJ)
+    func_801E749C();
+#endif
+
     Options_ExtraOptionsMenu_SelectionHighlightDraw();
-    Options_Menu_VignetteDraw();
+    Options_Menu_BackgroundDraw();
     Screen_BackgroundImgDraw(&g_ItemInspectionImg);
 
     if (g_GameWork.gameStateSteps[0] != OptionsMenuState_ExtraOptions)
@@ -509,8 +578,16 @@ void Options_MainOptionsMenu_Control(void) // 0x801E3770
     // Draw graphics.
     Options_MainOptionsMenu_EntryStringsDraw();
     Options_MainOptionsMenu_ConfigDraw();
+
+#if VERSION_REGION_IS(NTSCJ)
+    #define BRIGHTNESS_IMG_FILE FILE_TIM_OP_BRT_TIM
+    func_801E794C();
+#else
+    #define BRIGHTNESS_IMG_FILE FILE_TIM_OP_BRT_E_TIM
+#endif
+    
     Options_MainOptionsMenu_SelectionHighlightDraw();
-    Options_Menu_VignetteDraw();
+    Options_Menu_BackgroundDraw();
     Screen_BackgroundImgDraw(&g_ItemInspectionImg);
     Options_MainOptionsMenu_BgmVolumeBarDraw();
     Options_MainOptionsMenu_SfxVolumeBarDraw();
@@ -603,11 +680,11 @@ void Options_MainOptionsMenu_Control(void) // 0x801E3770
                 Sd_SfxPlay(Sfx_MenuConfirm, Q8(0.0f), Q8(0.25f));
                 if (g_GameWork.gameStatePrev == GameState_MainMenu)
                 {
-                    Fs_QueueStartReadTim(FILE_TIM_OP_BRT_E_TIM, IMAGE_BUFFER_3, &g_BrightnessScreenImg0);
+                    Fs_QueueStartReadTim(BRIGHTNESS_IMG_FILE, IMAGE_BUFFER_3, &g_BrightnessScreenImg0);
                 }
                 else
                 {
-                    Fs_QueueStartReadTim(FILE_TIM_OP_BRT_E_TIM, IMAGE_BUFFER_3, &g_BrightnessScreenImg1);
+                    Fs_QueueStartReadTim(BRIGHTNESS_IMG_FILE, IMAGE_BUFFER_3, &g_BrightnessScreenImg1);
                 }
 
                 ScreenFade_Start(true, false, false);
@@ -752,6 +829,7 @@ void Options_MainOptionsMenu_Control(void) // 0x801E3770
         g_MainOptionsMenu_SelectedEntry   = MainOptionsMenuEntry_Exit;
     }
 
+    #undef BRIGHTNESS_IMG_FILE
     #undef SOUND_VOL_STEP
     #undef OPTIONS_MAIN_CANCEL
 }
@@ -818,11 +896,11 @@ void Options_MainOptionsMenu_VolumeBarDraw(bool isSfx, u8 vol) // 0x801E3FB8
             }
 
             xOffset = 24 + (i * 6);
-            offset  = -69;
+            offset  = -69 - MENU_SHIFT_Y;
 
             x0Offset = j + 24;
             x0       = (x0Offset + (i * 6)) & 0xFFFF;
-            yOffset  = j + 56;
+            yOffset  = j + (56 + MENU_SHIFT_Y);
 
             setXY0Fast(poly, x0,                           (isSfx * STR_OFFSET_Y) + yOffset);
             setXY1Fast(poly, x0,                           (isSfx * STR_OFFSET_Y) - (j + offset));
@@ -841,7 +919,7 @@ void Options_MainOptionsMenu_VolumeBarDraw(bool isSfx, u8 vol) // 0x801E3FB8
 void Options_ExtraOptionsMenu_EntryStringsDraw(void) // 0x801E416C
 {
     #define LINE_BASE_X   (SCREEN_WIDTH / 5)
-    #define LINE_BASE_Y   64
+    #define LINE_BASE_Y   (64 + MENU_SHIFT_Y)
     #define LINE_OFFSET_X 16
     #define LINE_OFFSET_Y 16
 
@@ -849,7 +927,11 @@ void Options_ExtraOptionsMenu_EntryStringsDraw(void) // 0x801E416C
     static DVECTOR selectionHighlightFromUnused;
     static DVECTOR selectionHighlightToUnused;
 
+#if VERSION_REGION_IS(NTSCJ)
+    const DVECTOR STR_POS = { 86, 12 };
+#else
     const DVECTOR STR_POS = { 86, 20 };
+#endif
 
     const char* EXTRA_OPTIONS_STR = "EXTRA_OPTION_\x01\x01\x01\x01\x01S";
 
@@ -911,7 +993,7 @@ void Options_ExtraOptionsMenu_EntryStringsDraw(void) // 0x801E416C
 void Options_MainOptionsMenu_EntryStringsDraw(void) // 0x801E42EC
 {
     #define LINE_BASE_X   64
-    #define LINE_BASE_Y   56
+    #define LINE_BASE_Y   (56 + MENU_SHIFT_Y)
     #define LINE_OFFSET_X 16
     #define LINE_OFFSET_Y 16
 
@@ -919,14 +1001,22 @@ void Options_MainOptionsMenu_EntryStringsDraw(void) // 0x801E42EC
     static DVECTOR selectionHighlightFromUnused;
     static DVECTOR selectionHighlightToUnused;
 
+#if VERSION_REGION_IS(NTSCJ)
+    DVECTOR strPos = { 121, 12 };
+#else
     DVECTOR strPos = { 121, 20 };
+#endif
 
     const char* OPTIONS_STR = "OPTION_\x01\x01\x01\x01\x01S";
 
     const char* ENTRY_STRS[] = {
         "Exit",
         "Brightness_Level",
+#if VERSION_REGION_IS(NTSCJ)
+        "Key_Config",
+#else
         "Controller_Config",
+#endif
         "Screen_Position",
         "Vibration",
         "Auto_Load",
@@ -975,7 +1065,7 @@ void Options_ExtraOptionsMenu_SelectionHighlightDraw(void) // 0x801E4450
     #define LINE_OFFSET_X      16
     #define LINE_OFFSET_Y      16
     #define HIGHLIGHT_OFFSET_X -121
-    #define HIGHLIGHT_OFFSET_Y 50
+    #define HIGHLIGHT_OFFSET_Y (50 - MENU_SHIFT_Y)
 
     s32            i;
     s32            j;
@@ -991,20 +1081,38 @@ void Options_ExtraOptionsMenu_SelectionHighlightDraw(void) // 0x801E4450
     };
 
     // 12x12 quad.
+#if VERSION_REGION_IS(NTSCJ)
+    const DVECTOR FRONT_BULLET_QUAD[] = {
+        { -120, -67 },
+        { -120, -55 },
+        { -108, -67 },
+        { -108, -55 }
+    };
+#else
     const DVECTOR FRONT_BULLET_QUAD[] = {
         { -120, -47 },
         { -120, -35 },
         { -108, -47 },
         { -108, -35 }
     };
+#endif
 
     // 14x14 quad.
+#if VERSION_REGION_IS(NTSCJ)
+    const DVECTOR BACK_BULLET_QUAD[] = {
+        { -121, -68 },
+        { -121, -54 },
+        { -107, -68 },
+        { -107, -54 }
+    };
+#else
     const DVECTOR BACK_BULLET_QUAD[] = {
         { -121, -48 },
         { -121, -34 },
         { -107, -48 },
         { -107, -34 }
     };
+#endif
 
     // Set active selection highlight position references.
     if (g_Options_SelectionHighlightTimer == 0)
@@ -1076,7 +1184,7 @@ void Options_MainOptionsMenu_SelectionHighlightDraw(void) // 0x801E472C
 {
     #define LINE_OFFSET_Y      16
     #define HIGHLIGHT_OFFSET_X -121
-    #define HIGHLIGHT_OFFSET_Y 58
+    #define HIGHLIGHT_OFFSET_Y (58 - MENU_SHIFT_Y)
 
     s32            i;
     s32            j;
@@ -1087,25 +1195,49 @@ void Options_MainOptionsMenu_SelectionHighlightDraw(void) // 0x801E472C
     static DVECTOR selectionHighlightFrom;
     static DVECTOR selectionHighlightTo;
 
+#if VERSION_REGION_IS(NTSCJ)
+    const u8 SELECTION_HIGHLIGHT_WIDTHS[] = {
+        59, 169, 119, 156, 104, 112, 75, 129, 112
+    };
+#else
     const u8 SELECTION_HIGHLIGHT_WIDTHS[] = {
         59, 169, 174, 156, 104, 112, 75, 129, 112
     };
+#endif
 
     // 12x12 quad.
+#if VERSION_REGION_IS(NTSCJ)
+    const DVECTOR BULLET_QUAD_VERTS_FRONT[] = {
+        { -120, -75 },
+        { -120, -63 },
+        { -108, -75 },
+        { -108, -63 }
+    };
+#else
     const DVECTOR BULLET_QUAD_VERTS_FRONT[] = {
         { -120, -55 },
         { -120, -43 },
         { -108, -55 },
         { -108, -43 }
     };
+#endif
 
     // 14x14 quad.
+#if VERSION_REGION_IS(NTSCJ)
+    const DVECTOR BULLET_QUAD_VERTS_BACK[] = {
+        { -121, -76 },
+        { -121, -62 },
+        { -107, -76 },
+        { -107, -62 }
+    };
+#else
     const DVECTOR BULLET_QUAD_VERTS_BACK[] = {
         { -121, -56 },
         { -121, -42 },
         { -107, -56 },
         { -107, -42 }
     };
+#endif
 
     // Set active selection highlight position references.
     if (g_Options_SelectionHighlightTimer == 0)
@@ -1161,7 +1293,7 @@ void Options_MainOptionsMenu_SelectionHighlightDraw(void) // 0x801E472C
     #undef HIGHLIGHT_OFFSET_Y
 }
 
-void Options_Menu_VignetteDraw(void) // 0x801E49F0
+void Options_Menu_BackgroundDraw(void) // 0x801E49F0
 {
     s32      y0;
     s32      y1;
@@ -1204,9 +1336,29 @@ void Options_Menu_VignetteDraw(void) // 0x801E49F0
 
 void Options_ExtraOptionsMenu_ConfigDraw(void) // 0x801E4B2C
 {
-    #define STR_BASE_Y   64
+    #define STR_BASE_Y   (64 + MENU_SHIFT_Y)
     #define STR_OFFSET_Y 16
 
+#if VERSION_REGION_IS(NTSCJ)
+    const s_Triangle2d FRONT_ARROWS[] = {
+        { { 38,  -62 }, { 46,  -70 }, { 46,  -54 } },
+        { { 120, -62 }, { 112, -70 }, { 112, -54 } },
+        { { 38,  -46 }, { 46,  -54 }, { 46,  -38 } },
+        { { 120, -46 }, { 112, -54 }, { 112, -38 } },
+        { { 35,  -30 }, { 43,  -38 }, { 43,  -22  } },
+        { { 123, -30 }, { 115, -38 }, { 115, -22  } },
+        { { 35,   -14  }, { 43,  -22  }, { 43,   -6 } },
+        { { 123,  -14  }, { 115, -22  }, { 115,  -6 } },
+        { { 35,   2 }, { 43,   -6 }, { 43,   10 } },
+        { { 123,  2 }, { 115,  -6 }, { 115,  10 } },
+        { { 51,   18 }, { 59,   10 }, { 59,   26 } },
+        { { 107,  18 }, { 99,   10 }, { 99,   26 } },
+        { { 24,   34 }, { 32,   26 }, { 32,   42 } },
+        { { 131,  34 }, { 123,  26 }, { 123,  42 } },
+        { { 57,   50 }, { 65,   42 }, { 65,   58 } },
+        { { 104,  50 }, { 96,   42 }, { 96,   58 } }
+    };
+#else
     const s_Triangle2d FRONT_ARROWS[] = {
         { { 38,  -42 }, { 46,  -50 }, { 46,  -34 } },
         { { 120, -42 }, { 112, -50 }, { 112, -34 } },
@@ -1225,7 +1377,28 @@ void Options_ExtraOptionsMenu_ConfigDraw(void) // 0x801E4B2C
         { { 57,   70 }, { 65,   62 }, { 65,   78 } },
         { { 104,  70 }, { 96,   62 }, { 96,   78 } }
     };
+#endif
 
+#if VERSION_REGION_IS(NTSCJ)
+    const s_Triangle2d BACK_ARROWS[] = {
+        { { 37,  -62 }, { 47,  -72 }, { 47,  -52 } },
+        { { 121, -62 }, { 111, -72 }, { 111, -52 } },
+        { { 37,  -46 }, { 47,  -56 }, { 47,  -36 } },
+        { { 121, -46 }, { 111, -56 }, { 111, -36 } },
+        { { 34,  -30 }, { 44,  -40 }, { 44,   -20  } },
+        { { 124, -30 }, { 114, -40 }, { 114,  -20  } },
+        { { 34,   -14  }, { 44,  -24  }, { 44,   -4 } },
+        { { 124,  -14  }, { 114, -24  }, { 114,  -4 } },
+        { { 34,   2 }, { 44,   -8 }, { 44,   12 } },
+        { { 124,  2 }, { 114,  -8 }, { 114,  12 } },
+        { { 50,   18 }, { 60,   8 }, { 60,   28 } },
+        { { 108,  18 }, { 98,   8 }, { 98,   28 } },
+        { { 23,   34 }, { 33,   24 }, { 33,   44 } },
+        { { 132,  34 }, { 122,  24 }, { 122,  44 } },
+        { { 56,   50 }, { 66,   40 }, { 66,   60 } },
+        { { 105,  50 }, { 95,   40 }, { 95,   60 } }
+    };
+#else
     const s_Triangle2d BACK_ARROWS[] = {
         { { 37,  -42 }, { 47,  -52 }, { 47,  -32 } },
         { { 121, -42 }, { 111, -52 }, { 111, -32 } },
@@ -1244,6 +1417,7 @@ void Options_ExtraOptionsMenu_ConfigDraw(void) // 0x801E4B2C
         { { 56,   70 }, { 66,   60 }, { 66,   80 } },
         { { 105,  70 }, { 95,   60 }, { 95,   80 } }
     };
+#endif
 
     // TODO: Can this be split?
     const char* CONFIG_STRS[] = {
@@ -1411,6 +1585,20 @@ void Options_ExtraOptionsMenu_ConfigDraw(void) // 0x801E4B2C
 
 void Options_MainOptionsMenu_ConfigDraw(void) // 0x801E4FFC
 {
+#if VERSION_REGION_IS(NTSCJ)
+    const s_Triangle2d FRONT_ARROWS[] = {
+        { { 40,  -6 }, { 48,  -14  }, { 48,  2 } },
+        { { 96,  -6 }, { 88,  -14  }, { 88,  2 } },
+        { { 40,  10 }, { 48,  2 }, { 48,  18 } },
+        { { 96,  10 }, { 88,  2 }, { 88,  18 } },
+        { { 19,  26 }, { 27,  18 }, { 27,  34 } },
+        { { 124, 26 }, { 116, 18 }, { 116, 34 } },
+        { { 12,  42 }, { 20,  34 }, { 20,  50 } },
+        { { 131, 42 }, { 123, 34 }, { 123, 50 } },
+        { { 12,  58 }, { 20,  50 }, { 20,  66 } },
+        { { 131, 58 }, { 123, 50 }, { 123, 66 } }
+    };
+#else
     const s_Triangle2d FRONT_ARROWS[] = {
         { { 40,  14 }, { 48,  6  }, { 48,  22 } },
         { { 96,  14 }, { 88,  6  }, { 88,  22 } },
@@ -1423,7 +1611,22 @@ void Options_MainOptionsMenu_ConfigDraw(void) // 0x801E4FFC
         { { 12,  78 }, { 20,  70 }, { 20,  86 } },
         { { 131, 78 }, { 123, 70 }, { 123, 86 } }
     };
+#endif
 
+#if VERSION_REGION_IS(NTSCJ)
+    const s_Triangle2d BACK_ARROWS[] = {
+        { { 39,  -6 }, { 49,  -16  }, { 49,  4 } },
+        { { 97,  -6 }, { 87,  -16  }, { 87,  4 } },
+        { { 39,  10 }, { 49,  0 }, { 49,  20 } },
+        { { 97,  10 }, { 87,  0 }, { 87,  20 } },
+        { { 18,  26 }, { 28,  16 }, { 28,  36 } },
+        { { 125, 26 }, { 115, 16 }, { 115, 36 } },
+        { { 11,  42 }, { 21,  32 }, { 21,  52 } },
+        { { 132, 42 }, { 122, 32 }, { 122, 52 } },
+        { { 11,  58 }, { 21,  48 }, { 21,  68 } },
+        { { 132, 58 }, { 122, 48 }, { 122, 68 } }
+    };
+#else
     const s_Triangle2d BACK_ARROWS[] = {
         { { 39,  14 }, { 49,  4  }, { 49,  24 } },
         { { 97,  14 }, { 87,  4  }, { 87,  24 } },
@@ -1436,6 +1639,7 @@ void Options_MainOptionsMenu_ConfigDraw(void) // 0x801E4FFC
         { { 11,  78 }, { 21,  68 }, { 21,  88 } },
         { { 132, 78 }, { 122, 68 }, { 122, 88 } }
     };
+#endif
 
     const char* CONFIG_STRS[] =
     {
@@ -1477,7 +1681,7 @@ void Options_MainOptionsMenu_ConfigDraw(void) // 0x801E4FFC
         {
             case 0:
                 strPosX = !g_GameWork.config.vibrationEnabled ? 214 : 216;
-                Gfx_StringPositionSet(strPosX, 120);
+                Gfx_StringPositionSet(strPosX, 120 + MENU_SHIFT_Y);
 
                 strIdx = !g_GameWork.config.vibrationEnabled;
                 Gfx_StringDraw(CONFIG_STRS[strIdx], 10);
@@ -1485,7 +1689,7 @@ void Options_MainOptionsMenu_ConfigDraw(void) // 0x801E4FFC
 
             case 1:
                 strPosX = !g_GameWork.config.autoLoad ? 214 : 216;
-                Gfx_StringPositionSet(strPosX, 136);
+                Gfx_StringPositionSet(strPosX, 136 + MENU_SHIFT_Y);
 
                 strIdx = !g_GameWork.config.autoLoad;
                 Gfx_StringDraw(CONFIG_STRS[strIdx], 10);
@@ -1493,7 +1697,7 @@ void Options_MainOptionsMenu_ConfigDraw(void) // 0x801E4FFC
 
             case 2:
                 strPosX = g_GameWork.config.soundType ? 194 : 206;
-                Gfx_StringPositionSet(strPosX, 152);
+                Gfx_StringPositionSet(strPosX, 152 + MENU_SHIFT_Y);
 
                 strIdx = g_GameWork.config.soundType + 2;
                 Gfx_StringDraw(CONFIG_STRS[strIdx], 10);
@@ -2083,9 +2287,9 @@ void Options_Selection_ArrowDraw(const s_Triangle2d* arrow, bool isFlashing, boo
     if (isFlashing)
     {
         // Base color is blue. `* 0x700` Shifts green component into place.
-        *((u32*)&arrowPoly->r0) = (colorEnd   * 0x700) + COLOR_RGBC(0, 0, 255, PRIM_POLY | RECT_SIZE_8);
-        *((u32*)&arrowPoly->r1) = (colorStart * 0x700) + COLOR_RGBC(0, 0, 255, PRIM_POLY | RECT_SIZE_8);
-        *((u32*)&arrowPoly->r2) = (colorStart * 0x700) + COLOR_RGBC(0, 0, 255, PRIM_POLY | RECT_SIZE_8);
+        setRGBC0Word(arrowPoly, (colorEnd   * 0x700) + COLOR_RGBC(0, 0, 255, PRIM_POLY | RECT_SIZE_8));
+        setRGBC1Word(arrowPoly, (colorStart * 0x700) + COLOR_RGBC(0, 0, 255, PRIM_POLY | RECT_SIZE_8));
+        setRGBC2Word(arrowPoly, (colorStart * 0x700) + COLOR_RGBC(0, 0, 255, PRIM_POLY | RECT_SIZE_8));
     }
     // Set solid cyan color.
     else
@@ -2187,6 +2391,267 @@ void Options_Selection_BulletPointDraw(const s_Quad2d* quad, bool isBorder, bool
 
     #undef TRI_COUNT
 }
+
+// ========================================
+// JAPANESE SCREEN DRAW FUNCTIONS
+// ========================================
+
+#if VERSION_REGION_IS(NTSCJ)
+void func_801E6F1C(RECT* rect)
+{
+    DVECTOR outline[6] =
+    {
+        { rect->x,               rect->y                },
+        { rect->x + rect->w - 8, rect->y                },
+        { rect->x + rect->w,     rect->y + 8            },
+        { rect->x + rect->w,     rect->y + rect->h      },
+        { rect->x + 8,           rect->y + rect->h      },
+        { rect->x,               rect->y + rect->h - 8  }
+    };
+    s_Triangle2d corners[2] =
+    {
+        {
+            { rect->x + rect->w,     rect->y     },
+            { rect->x + rect->w - 8, rect->y     },
+            { rect->x + rect->w,     rect->y + 8 }
+        },
+        {
+            { rect->x,     rect->y + rect->h     },
+            { rect->x + 8, rect->y + rect->h     },
+            { rect->x,     rect->y + rect->h - 8 }
+        }
+    };
+    GsOT*    ot;
+    POLY_F3* tri;
+    POLY_F4* quad;
+    LINE_G2* line;
+    s32      i;
+
+    ot = &g_OrderingTable2[g_ActiveBufferIdx];
+
+    // Draw corner triangles.
+    for (i = 0; i < 2; i++)
+    {
+        tri = (POLY_F3*)GsOUT_PACKET_P;
+        setPolyF3(tri);
+        setSemiTrans(tri, true);
+        setRGB0(tri, 0x30, 0x30, 0x30);
+        setXY3(tri, corners[i].vertex0.vx, corners[i].vertex0.vy,
+                    corners[i].vertex1.vx, corners[i].vertex1.vy,
+                    corners[i].vertex2.vx, corners[i].vertex2.vy);
+        addPrim((u8*)ot->org + LAYER_44, tri);
+        GsOUT_PACKET_P = (u8*)tri + sizeof(POLY_F3);
+    }
+
+    Gfx_Primitive2dTextureSet(0, 0, 11, 2);
+
+    // Draw background.
+    quad = (POLY_F4*)GsOUT_PACKET_P;
+    setPolyF4(quad);
+    setSemiTrans(quad, true);
+    setRGB0(quad, 0x30, 0x30, 0x30);
+    setXY4(quad, rect->x,           rect->y,
+                 rect->x,           rect->y + rect->h,
+                 rect->x + rect->w, rect->y,
+                 rect->x + rect->w, rect->y + rect->h);
+    addPrim((u8*)ot->org + LAYER_48, quad);
+    GsOUT_PACKET_P = (u8*)quad + sizeof(POLY_F4);
+
+    Gfx_Primitive2dTextureSet(0, 0, 12, 1);
+
+    // Draw outline.
+    for (i = 0; i < 6; i++)
+    {
+        line = (LINE_G2*)GsOUT_PACKET_P;
+        setLineG2(line);
+
+        if (i & 1)
+        {
+            setRGB0(line, 160, 128, 64);
+            setRGB1(line, 176, 176, 176);
+        }
+        else
+        {
+            setRGB0(line, 176, 176, 176);
+            setRGB1(line, 160, 128, 64);
+        }
+
+        setXY2(line, outline[i].vx, outline[i].vy, outline[(i + 1) % 6].vx, outline[(i + 1) % 6].vy);
+        addPrim((u8*)ot->org + LAYER_32, line);
+        GsOUT_PACKET_P = (u8*)line + sizeof(LINE_G2);
+    }
+}
+
+void func_801E749C(void)
+{
+    s16   entryPosX[8] = { -78, -60, -78, -66, -78, -60, -78, -48 };
+    GsOT* ot;
+    SPRT* prim;
+    RECT  rect;
+
+    prim = (SPRT*)GsOUT_PACKET_P;
+    ot   = &g_OrderingTable2[g_ActiveBufferIdx];
+
+    setSprt(prim);
+    setRGBC0(prim, 128, 128, 128, 0x64);
+    setWHFast(prim, g_ExtraOptionsMenu_SelectedEntry == 7 ? 72 : 120, 16);
+    setXY0Fast(prim, entryPosX[g_ExtraOptionsMenu_SelectedEntry], 78);
+    setUV0AndClut(prim, 0x00, (g_ExtraOptionsMenu_SelectedEntry / 5) != 0 ? 0xE0 : 0x10, 0x130, 0x1FE);
+
+    addPrim((u8*)ot->org + LAYER_32, prim);
+    GsOUT_PACKET_P = (u8*)prim + sizeof(SPRT);
+
+    Gfx_Primitive2dTextureSet((g_ExtraOptionsMenu_SelectedEntry % 5) << 6, ((g_ExtraOptionsMenu_SelectedEntry / 5) != 0) << 8, 8, 0);
+
+    prim = (SPRT*)GsOUT_PACKET_P;
+    setSprt(prim);
+    setRGBC0(prim, 128, 128, 128, 0x64);
+
+    switch (g_ExtraOptionsMenu_SelectedEntry)
+    {
+        case 0:
+            setWHFast(prim, 48, 16);
+            setXY0Fast(prim, 30, 78);
+            setUV0AndClut(prim, g_GameWork.config.extraWeaponCtrl != 0 ? 0x30 : 0, 0xE0, 0x130, 0x1FE);
+            break;
+
+        case 1:
+            setWHFast(prim, g_ExtraOptionsMenu_SelectedBloodColorEntry == 0 ? 48 : 12, 16);
+            setXY0Fast(prim, 24, 78);
+            setUV0AndClutSum(prim, g_ExtraOptionsMenu_SelectedBloodColorEntry == 0 ? 0x30 : 0x60 + ((g_ExtraOptionsMenu_SelectedBloodColorEntry - 1) * 12), 0xE0, 0x7F93);
+            break;
+
+        case 2:
+            setWHFast(prim, 48, 16);
+            setXY0Fast(prim, 30, 78);
+            setUV0AndClut(prim, g_GameWork.config.extraViewCtrl != 0 ? 0 : 0x30, 0xE0, 0x130, 0x1FE);
+            break;
+
+        case 3:
+            setWHFast(prim, 48, 16);
+            setXY0Fast(prim, 18, 78);
+            setUV0AndClut(prim, g_GameWork.config.extraRetreatTurn != 0 ? 0 : 0x30, 0xE0, 0x130, 0x1FE);
+            break;
+
+        case 4:
+            setWHFast(prim, 48, 16);
+            setXY0Fast(prim, 30, 78);
+            setUV0AndClut(prim, g_GameWork.config.extraWalkRunCtrl != 0 ? 0 : 0x30, 0xE0, 0x130, 0x1FE);
+            break;
+
+        case 5:
+            setWHFast(prim, 24, 16);
+            setXY0Fast(prim, 36, 78);
+            setUV0AndClut(prim, g_GameWork.config.extraAutoAiming != 0 ? 0xC0 : 0xD8, 0xE0, 0x130, 0x1FE);
+            break;
+
+        case 6:
+            setWHFast(prim, 48, 16);
+            setXY0Fast(prim, 30, 78);
+            setUV0AndClut(prim, g_GameWork.config.extraViewMode != 0 ? 0xC0 : 0x90, 0xE0, 0x130, 0x1FE);
+            break;
+
+        case 7:
+            setWHFast(prim, 24, 16);
+            setXY0Fast(prim, 24, 78);
+            setUV0AndClutSum(prim, 0x60 + (g_GameWork.config.extraBulletAdjust * 24), 0xE0, 0x7F93);
+            break;
+    }
+
+    addPrim((u8*)ot->org + LAYER_32, prim);
+    GsOUT_PACKET_P = (u8*)prim + sizeof(SPRT);
+
+    switch (g_ExtraOptionsMenu_SelectedEntry)
+    {
+        case 0:
+        case 5:
+            Gfx_Primitive2dTextureSet(192, 256, 8, 0);
+            break;
+
+        case 1:
+        case 2:
+        case 3:
+        case 4:
+        case 6:
+            Gfx_Primitive2dTextureSet(256, 256, 8, 0);
+            break;
+
+        case 7:
+            Gfx_Primitive2dTextureSet(128, 256, 8, 0);
+            break;
+    }
+
+    setRECT(&rect, -136, 72, 272, 28);
+    func_801E6F1C(&rect);
+
+    setRECT(&rect, -136, -80, 272, 148);
+    func_801E6F1C(&rect);
+}
+
+void func_801E794C(void)
+{
+    s16   entryPosX[9] = { -84, -72, -60, -78, -120, -120, -96, -90, -84 };
+    GsOT* ot;
+    SPRT* prim;
+    RECT  rect;
+
+    prim = (SPRT*)GsOUT_PACKET_P;
+    ot   = &g_OrderingTable2[g_ActiveBufferIdx];
+
+    setSprt(prim);
+    setRGBC0(prim, 128, 128, 128, 0x64);
+    setWHFast(prim, 240, 16);
+    setXY0Fast(prim, entryPosX[g_MainOptionsMenu_SelectedEntry], 78);
+    setUV0AndClut(prim, 0x00, (g_MainOptionsMenu_SelectedEntry / 5) != 0 ? 0xE0 : 0x10, 0x130, 0x1FE);
+
+    addPrim((u8*)ot->org + LAYER_32, prim);
+    GsOUT_PACKET_P = (u8*)prim + sizeof(SPRT);
+
+    Gfx_Primitive2dTextureSet((g_MainOptionsMenu_SelectedEntry % 5) << 6, ((g_MainOptionsMenu_SelectedEntry / 5) != 0) << 8, 8, 0);
+
+    if (g_MainOptionsMenu_SelectedEntry < 7)
+    {
+        if (g_MainOptionsMenu_SelectedEntry >= 4)
+        {
+            prim = (SPRT*)GsOUT_PACKET_P;
+            setSprt(prim);
+            setRGBC0(prim, 128, 128, 128, 0x64);
+
+            switch (g_MainOptionsMenu_SelectedEntry)
+            {
+                case 6:
+                    setWHFast(prim, 48, 16);
+                    setXY0Fast(prim, 24, 78);
+                    setUV0AndClut(prim, g_GameWork.config.soundType != 0 ? 0x60 : 0x30, 0xE0, 0x130, 0x1FE);
+                    break;
+
+                case 5:
+                    setWHFast(prim, 24, 16);
+                    setXY0Fast(prim, 48, 78);
+                    setUV0AndClut(prim, g_GameWork.config.autoLoad == 0 ? 0x18 : 0, 0xE0, 0x130, 0x1FE);
+                    break;
+
+                case 4:
+                    setWHFast(prim, 24, 16);
+                    setXY0Fast(prim, 84, 78);
+                    setUV0AndClut(prim, g_GameWork.config.vibrationEnabled == 0 ? 0x18 : 0, 0xE0, 0x130, 0x1FE);
+                    break;
+            }
+
+            addPrim((u8*)ot->org + LAYER_32, prim);
+            GsOUT_PACKET_P = (u8*)prim + sizeof(SPRT);
+
+            Gfx_Primitive2dTextureSet(256, 256, 8, 0);
+        }
+    }
+
+    setRECT(&rect, -136, 72, 272, 28);
+    func_801E6F1C(&rect);
+
+    setRECT(&rect, -136, -80, 272, 148);
+    func_801E6F1C(&rect);
+}
+#endif
 
 // ========================================
 // CONTROLS OPTION SCREEN

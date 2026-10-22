@@ -81,7 +81,7 @@ void GameBoot_LoadScreen_PlayerRun(void) // 0x80035BE0
         Gfx_LoadScreenMapEffectsUpdate(0, 0);
 
         model->anim.flags                           |= AnimFlag_Visible;
-        g_SysWork.playerWork.extra.disabledAnimBones = 0;
+        g_SysWork.playerWork.extra.disabledAnimBoneFlags = 0;
         model->anim.flags                           |= AnimFlag_Unlocked | AnimFlag_Visible;
         model->anim.time                             = Q12(26.0f);
         g_SysWork.playerWork.player.position.vy      = Q12(0.2f);
@@ -92,7 +92,7 @@ void GameBoot_LoadScreen_PlayerRun(void) // 0x80035BE0
         g_SysWork.sysState++;
     }
 
-    Anim_PlaybackLoop(model, (s_Skeleton*)FS_BUFFER_0, boneCoords, &D_800A998C);
+    Anim_PlayLoop(model, (s_Skeleton*)FS_BUFFER_0, boneCoords, &D_800A998C);
     vcMoveAndSetCamera(true, false, false, false, false, false, false, false);
     Gfx_EffectsUpdate();
     WorldGfx_CharaDraw(Chara_Harry, boneCoords, 1, g_SysWork.playerWork.player.timer_C6, 0);

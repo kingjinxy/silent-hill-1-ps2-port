@@ -47,6 +47,8 @@ JAP0_STREAM = [
 JAP0_BODYPROG = [
     [0x12E, b'\xE8\xFF'],
     [0x9AB, b'\x2C'],
+    [0x3709, b'\x2C\x28\x20'],
+    [0x3CFA, b'\x0D\x0A'],
     [0x871EE, b'\x24\x33'],
     [0x8FFE7, b'\x32'],
     [0x935FC, b'\xAF\x28\xFF\xAD'],
@@ -72,6 +74,8 @@ JAP1_STREAM = [
 JAP1_BODYPROG = [
     [0x12F, b'\xFE'],
     [0x9B7, b'\x20'],
+    [0x3715, b'\xBA\x82\xC9'],
+    [0x3D06, b'\x05\x80'],
     [0x9010A, b'\x00\x17\xA6\x17\xA9\x17'],
     [0x93724, b'\xFF\x0F\xFF\x03'],
     [0x9A80C, b'\x1D\x00\x04\xA2'],
@@ -107,6 +111,8 @@ JAP2_STREAM = [
 
 JAP2_BODYPROG = [
     [0x12F, b'\x0A'],
+    [0x3715, b'\x20\x80\x02'],
+    [0x3D06, b'\x03\x08'],
     [0x87312, b'\x02'],
     [0x93724, b'\xE4\xD3\x00\x0C'],
     [0x9A80C, b'\x01\x28'],
@@ -136,7 +142,177 @@ JAP2_BODYPROG = [
     [0xA65F4, b'\x09\x30\x78\x33']
 ]
 
+# Garbage bytes to patch into map overlays, per version: { version: { map: [[offset, bytes], ...] } }
+MAP_PATCHES = {
+    "JAP2": {
+        "map6_s05": [
+            [0x1339, b'\x20']
+        ],
+        "map6_s01": [
+            [0x245E, b'\x00\x00']
+        ],
+        "map5_s01": [
+            [0x34D5, b'\xA6\x03\x08']
+        ],
+        "map4_s06": [
+            [0x1325, b'\x10\xC3']
+        ],
+        "map4_s05": [
+            [0x16F9, b'\x20\x89\xBA']
+        ],
+        "map4_s00": [
+            [0x1325, b'\x90\x01']
+        ],
+        "map1_s04": [
+            [0x13AD, b'\x10\x43']
+        ],
+        "map3_s06": [
+            [0x1CA5, b'\x4A\x30\x28']
+        ],
+        "map2_s03": [
+            [0x1356, b'\xB0\xAF']
+        ]
+    },
+    "JAP1": {
+        "map6_s05": [
+            [0x1339, b'\x20']
+        ],
+        "map6_s01": [
+            [0x245E, b'\x00\x00']
+        ],
+        "map5_s01": [
+            [0x34D5, b'\xA8\x03\x08']
+        ],
+        "map4_s06": [
+            [0x1325, b'\x28\x20\x20']
+        ],
+        "map4_s05": [
+            [0x16F9, b'\x20\x89\xBA']
+        ],
+        "map4_s00": [
+            [0x1325, b'\x90\x01']
+        ],
+        "map3_s06": [
+            [0x1CA5, b'\x4A\x30\x28']
+        ],
+        "map2_s03": [
+            [0x1356, b'\xB0\xAF']
+        ],
+        "map1_s04": [
+            [0x13AD, b'\x10\x43']
+        ]
+    },
+    "JAP0": {
+        "map1_s04": [
+            [0x13AD, b'\x10\x43\x00']
+        ],
+        "map2_s03": [
+            [0x1356, b'\xB0\xAF']
+        ],
+        "map3_s06": [
+            [0x1CA5, b'\x4A\x30\x28']
+        ],
+        "map4_s00": [
+            [0x1325, b'\x90\x01\x00']
+        ],
+        "map4_s05": [
+            [0x16F9, b'\x20\x89\xBA']
+        ],
+        "map4_s06": [
+            [0x1325, b'\x61\x6D\x65']
+        ],
+        "map5_s01": [
+            [0x34D5, b'\x0F\x63\x24']
+        ],
+        "map6_s01": [
+            [0x245E, b'\x00\x00']
+        ],
+        "map6_s05": [
+            [0x1339, b'\x20']
+        ]
+    }
+}
+
+# Garbage bytes to patch into screen overlays, per version: { version: { screen: [[offset, bytes], ...] } }
+SCREEN_PATCHES = {
+    "JAP0": {
+        "options": [
+            [0xB62, b'\x68\x98']
+        ]
+    },
+    "JAP1": {
+        "options": [
+            [0xB62, b'\x68\x98']
+        ]
+    },
+    "JAP2": {
+        "options": [
+            [0xB62, b'\x68\x98']
+        ]
+    }
+}
+
+SCREEN_BIN_NAMES = {
+    "options": "OPTION",
+    "credits": "STF_ROLL"
+}
+
+def apply_screen_patches(target):
+    name = target.split("/")[-1]
+    for version, screens in SCREEN_PATCHES.items():
+        if name not in screens:
+            continue
+        path = f"build/{version}/out/VIN/{SCREEN_BIN_NAMES[name]}.BIN"
+        if not os.path.isfile(path):
+            continue
+        with open(path, "r+b") as file:
+            for offset, data in screens[name]:
+                file.seek(offset)
+                file.write(data)
+
+def apply_map_patches(target):
+    name = target.split("/")[-1]
+    for version, maps in MAP_PATCHES.items():
+        if name not in maps:
+            continue
+        path = f"build/{version}/out/VIN/{name.upper()}.BIN"
+        if not os.path.isfile(path):
+            continue
+        with open(path, "r+b") as file:
+            for offset, data in maps[name]:
+                file.seek(offset)
+                file.write(data)
+
+# TS seems to have trimmed the main EXE down by truncating some bytes from .bss.
+# Since those are zero-filled it wouldn't cause an issue for the game, but means we have to trim it too.
+# We can use the size from original EXE header (+ 0x800 header size) to tell us what the expected size should be.
+# TODO: Our `libgpu/sys.o` lib object was edited to trim the .bss for USA, that can be undone to closer match original lib.
+MAIN_EXE_PATHS = [
+    "build/USA/out/SLUS_007.07",
+    "build/EUR/out/SLES_015.14",
+    "build/JAP0/out/SLPM_861.92",
+    "build/JAP1/out/SLPM_861.92",
+    "build/JAP2/out/SLPM_861.92",
+]
+
+def trim_main_exes():
+    for path in MAIN_EXE_PATHS:
+        if not os.path.isfile(path):
+            continue
+        with open(path, "r+b") as file:
+            file.seek(0x1C)
+            size = 0x800 + int.from_bytes(file.read(4), "little")
+            file.seek(0, os.SEEK_END)
+            if file.tell() > size:
+                file.truncate(size)
+
 if __name__ == "__main__":
+    if sys.argv[1] == "main":
+        trim_main_exes()
+    if sys.argv[1].startswith("maps/"):
+        apply_map_patches(sys.argv[1])
+    if sys.argv[1].startswith("screens/"):
+        apply_screen_patches(sys.argv[1])
     match sys.argv[1]:
         case "screens/stream" | "build/USA/out/VIN/STREAM.BIN" | "build/JAP0/out/VIN/STREAM.BIN" | "build/JAP1/out/VIN/STREAM.BIN" | "build/JAP2/out/VIN/STREAM.BIN":
             usaPath = "build/USA/out/VIN/STREAM.BIN"

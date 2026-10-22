@@ -2,9 +2,11 @@
 #define _BODYPROG_BODYPROG_H
 
 #include "game.h"
+#include "bodyprog/bodyprog_80089090.h"
 #include "bodyprog/sound/sfx.h"
+#include "bodyprog/chara/anim.h"
 #include "bodyprog/collision/collision.h"
-#include "bodyprog/chara/chara_model.h"
+#include "bodyprog/chara/model.h"
 #include "bodyprog/chara/spawn.h"
 #include "bodyprog/events/bgm_update.h"
 #include "bodyprog/events/events_util.h"
@@ -856,8 +858,6 @@ extern s8 D_800C15B4;
 
 extern s16 D_800C16A4;
 
-extern s16 D_800C391E;
-
 extern s8 D_800C39A0;
 
 /** Functions from `bodyprog_8003AB28` access `g_WorldEnvWork` as constant, but some functions from `bodyprog_80055028` write to it.
@@ -1305,13 +1305,26 @@ void WorldMap_Draw(s_IpdHeader* ipdHdr, q19_12 posX, q19_12 posZ, GsOT* ot, s32 
  */
 bool WorldMap_SubcellVisibleCheck(s_IpdModelBuffer* modelBuf, q7_8 subcellX, q7_8 subcellZ, q23_8 posX, q23_8 posZ);
 
-void Anim_BoneInit(s_AnmHeader* anmHdr, GsCOORDINATE2* boneCoords);
+// TODO: Move to `bodyprog/chara/anim.h`.
+// ========================================
 
-void Anim_BoneUpdate(s_AnmHeader* anmHdr, GsCOORDINATE2* boneCoords, s32 keyframe0, s32 keyframe1, q19_12 alpha);
+void Anim_BonesInit(s_AnmHeader* anmHdr, GsCOORDINATE2* boneCoords);
 
-s_AnimInfo* func_80044918(s_ModelAnim* anim);
+void Anim_BonesUpdate(s_AnmHeader* anmHdr, GsCOORDINATE2* boneCoords, s32 keyframe0, s32 keyframe1, q19_12 alpha);
 
-void func_80044950(s_SubCharacter* chara, s_AnmHeader* anmHdr, GsCOORDINATE2* coords);
+/** @brief Gets the active animation info of a model, accounting for overflow map animations.
+ *
+ * @param anim Model animation data.
+ */
+s_AnimInfo* Anim_InfoGet(s_ModelAnim* anim);
+
+/** @brief Plays a character's animation using the callback function of its active animation.
+ *
+ * @param chara Character to update.
+ * @param anmHdr Character animation data.
+ * @param boneCoords Character model bone coords.
+ */
+void Anim_CharaUpdate(s_SubCharacter* chara, s_AnmHeader* anmHdr, GsCOORDINATE2* coords);
 
 /** @brief Gets the duration of an animation. A duration can be constant or variable.
  *
@@ -1321,7 +1334,7 @@ void func_80044950(s_SubCharacter* chara, s_AnmHeader* anmHdr, GsCOORDINATE2* co
  */
 q19_12 Anim_DurationGet(s_Model* unused, s_AnimInfo* animInfo);
 
-/** * @brief Plays an animation once and clamps to the end keyframe, triggering a status transition to the linked
+/** @brief Plays an animation once and clamps to the end keyframe, triggering a status transition to the linked
  * animation upon completion.
  *
  * @note Used for one-shot actions such as stopping and attacking.
@@ -1331,9 +1344,9 @@ q19_12 Anim_DurationGet(s_Model* unused, s_AnimInfo* animInfo);
  * @param boneCoords Character model bone coords.
  * @param animInfo Active character animation info.
  */
-void Anim_PlaybackOnce(s_Model* model, s_AnmHeader* anmHdr, GsCOORDINATE2* boneCoords, s_AnimInfo* animInfo);
+void Anim_PlayOnce(s_Model* model, s_AnmHeader* anmHdr, GsCOORDINATE2* boneCoords, s_AnimInfo* animInfo);
 
-/** * @brief Loops an animation continuously, wrapping the time around to the start and end keyframes without
+/** @brief Loops an animation continuously, wrapping the time around to the start and end keyframes without
  * triggering a status transition.
  *
  * @note Used for looped actions such as running and walking.
@@ -1343,9 +1356,9 @@ void Anim_PlaybackOnce(s_Model* model, s_AnmHeader* anmHdr, GsCOORDINATE2* boneC
  * @param boneCoords Character model bone coords.
  * @param animInfo Character animation info.
  */
-void Anim_PlaybackLoop(s_Model* model, s_AnmHeader* anmHdr, GsCOORDINATE2* boneCoords, s_AnimInfo* animInfo);
+void Anim_PlayLoop(s_Model* model, s_AnmHeader* anmHdr, GsCOORDINATE2* boneCoords, s_AnimInfo* animInfo);
 
-/** * @brief Linearly interpolates between the current pose into a new target animation, triggering a status transition
+/** @brief Linearly interpolates between the current pose into a new target animation, triggering a status transition
  * to the linked animation when complete.
  *
  * @note Used as the entry transition for almost every new animation status.
@@ -1357,7 +1370,7 @@ void Anim_PlaybackLoop(s_Model* model, s_AnmHeader* anmHdr, GsCOORDINATE2* boneC
  */
 void Anim_BlendLinear(s_Model* model, s_AnmHeader* anmHdr, GsCOORDINATE2* boneCoords, s_AnimInfo* animInfo);
 
-/** * @brief Smoothly blends between the current pose into a new target animation using a sine-based ease-out
+/** @brief Smoothly blends between the current pose into a new target animation using a sine-based ease-out
  * without triggering a status transition.
  *
  * @unused?
@@ -1369,47 +1382,10 @@ void Anim_BlendLinear(s_Model* model, s_AnmHeader* anmHdr, GsCOORDINATE2* boneCo
  */
 void Anim_BlendEaseOut(s_Model* model, s_AnmHeader* anmHdr, GsCOORDINATE2* boneCoords, s_AnimInfo* animInfo);
 
-/** Something related to player weapon position. Takes coords to arm bones. */
-void func_80044F14(GsCOORDINATE2* coord, q3_12 rotZ, q3_12 rotX, q19_12 rotY);
+// =========================
 
-s8 Bone_ModelIdxGet(s8* ptr, bool arg1);
-
-/** Skeleton setup? Assigns bones pointer for the skeleton and resets fields. */
-void Skeleton_Init(s_Skeleton* skel, s_BoneNode* boneHierarchy, u8 boneCount);
-
-/** Clears skeleton bone flags/mask. Called by `Skeleton_Init`. */
-void func_80045014(s_Skeleton* skel);
-
-/** Anim func. Used in tandem with skeleton bone traversal. */
-void func_8004506C(s_Skeleton* skel, s_LmHeader* lmHdr);
-
-/** Anim func. */
-void func_80045108(s_Skeleton* skel, s_LmHeader* lmHdr, s8* arg2, bool cond);
-
-/** Anim func. */
-void Skeleton_BoneModelAssign(s_Skeleton* skel, s_LmHeader* lmHdr, s8* arg2);
-
-/** Anim func. Param names are rough. */
-void func_80045258(s_BoneNode** boneOrd, s_BoneNode* boneHierarchy, s32 boneIdx, s_LmHeader* lmHdr);
-
-/** Anim func. */
-void func_800452EC(s_Skeleton* skel);
-
-/** Anim func. Traverses skeleton bones for something. */
-void func_80045360(s_Skeleton* skel, s8* arg1);
-
-/** Anim func. Traverses skeleton bones to set flags/mask.
- * `cond` may actually be another `s_Skeleton` pointer.
- */
-void func_800453E8(s_Skeleton* skel, bool cond);
-
-/** Does something with skeleton bones. `arg0` is a struct pointer. */
-void func_80045468(s_Skeleton* skel, s32* arg1, bool cond);
-
-void func_80045534(s_Skeleton* skel, GsOT* ot, s32 otShift, GsCOORDINATE2* boneCoords, q3_12 arg4, u16 clutY, s_FsImageDesc* images);
-
-/** `arg0` is probably a bit flag. */
-void func_8004C564(u8 arg0, s8 weaponAttack);
+/** `flags` might not be a bitfield. */
+void func_8004C564(u8 flags, s8 weaponAttack);
 
 // TODO: Can probably create status enums for the below funcs' return values to avoid magic,
 // but other funcs using similar return patterns should be identified first if they exist.
@@ -1576,14 +1552,14 @@ void Lm_MaterialRefCountDec(s_LmHeader* lmHdr);
 
 s32 LmHeader_ModelCountGet(s_LmHeader* lmHdr);
 
-void Bone_ModelAssign(s_Bone* bone, s_LmHeader* lmHdr, s32 modelHdrIdx);
+void Bone_ModelAssign(s_Bone* bone, s_LmHeader* lmHdr, s32 modelIdx);
 
 bool Lm_ModelFind(s_WorldObjectModel* model, s_LmHeader* lmHdr, s_WorldObjectMetadata* metadata);
 
 void StringCopy(char* prevStr, char* newStr);
 
 /** @brief Draws a 2D fog overlay quad. */
-void Gfx_FogOverlayQuadDraw(s16 arg0, s16 arg1, s16 arg2, s16 arg3, s32 arg4, s32 arg5, GsOT* ot, s32 arg7);
+void Gfx_FogOverlayQuadDraw(s16 x0, s16 y0, s16 x1, s16 y1, s32 arg4, s32 arg5, GsOT* ot, s32 otShift);
 
 /** Crucial 3D drawing function. */
 void func_80057090(s_ModelInfo* modelInfo, GsOT* otTag, s32 otShift, MATRIX* viewMat, MATRIX* worldMat, u16 clutY);
@@ -1695,59 +1671,6 @@ u32 func_800364BC(void);
 
 void Gfx_CursorDraw(s32 x0, s16 y0, s32 x1, s16 y1, s16 u, s16 v, s16 width, s32 height, s32 tint,
                     u32 clutX, s16 clutY, s32 tPage);
-
-/** Might retrun `bool`. */
-void func_80089090(s32 arg0);
-
-// Related to libkpad.
-void func_800890B8(void);
-
-s32 func_80089128(void);
-
-void func_800892A4(s32 idx);
-
-void func_800892DC(s32 idx, u8 arg1);
-
-void func_80089314(s32 arg0);
-
-void func_800893D0(q19_12 arg0);
-
-void func_8008944C(void);
-
-void func_80089470(void);
-
-void func_80089494(void);
-
-void func_800894B8(s32 arg0);
-
-void func_800894DC(void);
-
-void func_80089500(void);
-
-/** Handles initial gamepad init. */
-bool func_80089524(s_SysWork_2514* arg0, s32 padInfoMode);
-
-s32 func_800895E4(s_SysWork_2514* arg0, s_8002AC04* arg1, u8 arg2);
-
-bool func_80089644(s_SysWork_2514* arg0, s_func_8009ECCC* arg1, s32 arg2, u32 arg3);
-
-bool func_80089A30(s_SysWork_2514* arg0, s_func_8009ECCC* arg1, s_8002AC04* arg2, u32* arg3);
-
-bool func_80089BB8(s_SysWork_2514* arg0, s_func_8009ECCC* arg1, s_8002AC04* arg2, u32* arg3);
-
-bool func_80089DF0(s_SysWork_2514* arg0, s_func_8009ECCC* arg1, s_8002AC04* arg2, u32* arg3);
-
-bool func_8008973C(s_SysWork_2514* arg0, s_func_8009ECCC* arg1, s_8002AC04* ptr, u32* arg3);
-
-void func_80089840(s_SysWork_2514* arg0);
-
-void func_8008989C(s_SysWork_2514* arg0, u16 arg1, s32 (*arg2)(u16, s32));
-
-void func_8008992C(s_SysWork_2514* arg0, u16 arg1, s32 (*arg2)(u16, s32));
-
-void func_800899BC(s_SysWork_2514* arg0, s32 arg1);
-
-bool func_80089D0C(s_SysWork_2514* arg0, s_func_8009ECCC* arg1, s_8002AC04* arg2, u32* arg3);
 
 // Q12 square root?
 u32 func_8008A058(s32 arg0);
@@ -1917,7 +1840,7 @@ void PaperMap_DrawScaled(u16 scrollX, u16 scrollY, q4_12 scale);
 
 void Player_FlexRotationYReset(void);
 
-void func_8004BBF4(VbRVIEW* arg0, GsCOORDINATE2* arg1, SVECTOR* arg2);
+void func_8004BBF4(VbRVIEW* camView, GsCOORDINATE2* camCoord, SVECTOR* camRot);
 
 void Settings_ScreenAndVolUpdate(void);
 

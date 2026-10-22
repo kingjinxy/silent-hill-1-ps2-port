@@ -2000,7 +2000,7 @@ void Stalker_Control_13(s_SubCharacter* stalker)
 
         if (stalker->health != NO_VALUE)
         {
-            func_8005F6B0(&g_SysWork.npcs[1], &(VECTOR3){ Q12(140.39f), Q12(-0.55f), Q12(22.76f) }, 3, 3);
+            func_8005F6B0(&g_SysWork.npcs[1], &Q12_VECTOR3(140.39f, -0.55f, 22.76f), 3, 3);
 
             stalker->health     = NO_VALUE;
             stalkerProps.flags |= StalkerFlag_14;
@@ -2096,7 +2096,7 @@ void sharedFunc_800D6970_0_s00(s_SubCharacter* stalker, s_AnmHeader* animHdr, Gs
             {
                 STALKER_ANIM_INFOS[stalker->model.anim.status].duration.constant = Q12(24.0f);
             }
-#if VERSION_EQUAL_OR_NEWER(USA) // TODO: Check which versions have this.
+#if VERSION_EQUAL_OR_NEWER(USA)
             else if (ANIM_TIME_RANGE_CHECK(stalker->model.anim.time, 59, 65))
             {
                 STALKER_ANIM_INFOS[stalker->model.anim.status].duration.constant = Q12(32.0f);

@@ -5,6 +5,10 @@
 #include "maps/particle.h"
 #include "maps/characters/player.h"
 
+#include "../src/maps/particle.c"
+
+#include "../src/maps/characters/player.c"
+
 #include "../src/maps/map_util.c" // 0x800CC7A4
 
 #include "maps/shared/Map_RoomBgmInit_6_s04.h" // 0x800CC8F8
@@ -18,5 +22,10 @@ void GameBoot_LoadScreen_StageString(void) {}
 
 const char* MAP_MESSAGES[] = {
 #include "maps/shared/map_msg_common.h"
-    "	NO_STAGE! ~E "
+#if VERSION_REGION_IS(NTSC)
+    "\tNO_STAGE! ~E "
+#elif VERSION_REGION_IS(NTSCJ)
+    "\tこのステージは存在しません ~E "
+#endif
 };
+

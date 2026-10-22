@@ -13,9 +13,19 @@
 #include "bodyprog/sound/sound_system.h"
 #include "main/rng.h"
 #include "maps/map6/map6_s02.h"
+#include "maps/particle.h"
+#include "maps/characters/player.h"
 #ifdef SH_PORT
 #include "port/prof.h"
 #endif
+
+#include "../src/maps/unk_draw_m1s03.c"
+
+#include "../src/maps/particle.c"
+
+#include "../src/maps/characters/player.c"
+
+#include "../src/maps/characters/alessa.c"
 
 #include "../src/maps/chara_util.c" // 0x800CDEB0
 
@@ -110,6 +120,7 @@ void func_800CF0B0(void) {}
 
 const char* MAP_MESSAGES[] = {
     #include "maps/shared/map_msg_common.h"
+#if VERSION_REGION_IS(NTSC)
     /* 15 */ "~J0(1.0)\t...! ~E ",
     /* 16 */ "~J0(1.0)\tWait! ~E ",
     /* 17 */ "~J0(1.7)\tDamn! ~N\n\t\t\tI_was_too_late? ~E ",
@@ -120,6 +131,18 @@ const char* MAP_MESSAGES[] = {
     /* 22 */ "~J0(2.8)\tShort,_black_hair... ~E ",
     /* 23 */ "~J0(1.0)\tWhat? ~E ",
     /* 24 */ "~J0(2.5)\tThat_light!? ~E "
+#elif VERSION_REGION_IS(NTSCJ)
+    /* 15 */ "~J0(1.0)\tこれは…… ~E ",
+    /* 16 */ "~J0(1.0)\t待て！ ~E ",
+    /* 17 */ "~J0(1.7)\tくそっ…… ~N\n\t\t\t間に合わなかったか ~E ",
+    /* 18 */ "~J0(1.5)\tちょっと失礼 ",
+    /* 19 */ "~J0(0.6)\tえーと…… ",
+    /* 20 */ "~J0(1.5)\t_ ",
+    /* 21 */ "~J0(3.6)\tここらへんで女の子を見なかったかな？ ~E ",
+    /* 22 */ "~J0(2.8)\t短い黒髪で…… ~E ",
+    /* 23 */ "~J0(1.0)\t何だ？ ~E ",
+    /* 24 */ "~J0(2.5)\tあの光は！？ ~E"
+#endif
 };
 
 void func_800CF0B8(void) // 0x800CF0B8
@@ -571,7 +594,7 @@ void func_800CFC34(void) // 0x800CFC34
     if (g_Cutscene_Timer >= Q12(0.0f))
     {
         // TODO: Remove null chars from "HERO" once later rodata is added.
-        Dms_CharacterTransformGet(&g_SysWork.playerWork.player.position, &g_SysWork.playerWork.player.rotation, "HERO\0\0\0\0", g_Cutscene_Timer, FS_BUFFER_13);
+        Dms_CharacterTransformGet(&g_SysWork.playerWork.player.position, &g_SysWork.playerWork.player.rotation, "HERO", g_Cutscene_Timer, FS_BUFFER_13);
         vcChangeProjectionValue(Dms_CameraTargetsGet(&g_Cutscene_CameraPositionTarget, &g_Cutscene_CameraLookAtTarget, NULL, g_Cutscene_Timer, FS_BUFFER_13));
         vcUserCamTarget(&g_Cutscene_CameraPositionTarget, NULL, true);
         vcUserWatchTarget(&g_Cutscene_CameraLookAtTarget, NULL, true);
@@ -624,11 +647,11 @@ void func_800D0500(void) // 0x800D0500
             // TODO: Some kind of `Q12_ANGLE_ABS`?
             if ((D_800D3C98 - Q12_TRUNC(D_800D3C98)) > Q12_ANGLE(180.0f))
             {
-                Screen_BackgroundImgDrawAlt(&D_800D3B44[1]);
+                Screen_BackgroundImgDrawBlackFadeIn(&D_800D3B44[1]);
             }
             else
             {
-                Screen_BackgroundImgDrawAlt(&D_800D3B44[0]);
+                Screen_BackgroundImgDrawBlackFadeIn(&D_800D3B44[0]);
             }
 
             D_800D3C9C = MAX(0, D_800D3C9C - 3);
@@ -641,11 +664,11 @@ void func_800D0500(void) // 0x800D0500
             D_800D3C98 += g_DeltaTime;
             if ((D_800D3C98 - Q12_TRUNC(D_800D3C98)) > Q12_ANGLE(180.0f))
             {
-                Screen_BackgroundImgDrawAlt(&D_800D3B44[1]);
+                Screen_BackgroundImgDrawBlackFadeIn(&D_800D3B44[1]);
             }
             else
             {
-                Screen_BackgroundImgDrawAlt(&D_800D3B44[0]);
+                Screen_BackgroundImgDrawBlackFadeIn(&D_800D3B44[0]);
             }
 
             D_800D3C9C = MIN(D_800D3C9C + 3, 255);
@@ -696,7 +719,7 @@ void func_800D0500(void) // 0x800D0500
             }
 
             Gfx_MapMsg_Draw(18);
-            Screen_BackgroundImgDrawAlt(&D_800D3B44[2]);
+            Screen_BackgroundImgDrawBlackFadeIn(&D_800D3B44[2]);
             break;
 
         case 12:
@@ -719,7 +742,7 @@ void func_800D0500(void) // 0x800D0500
                 Event_ScreenFadeCmd(ScreenFadeCmd_Auto, true, 0, Q12(2.0f), false);
             }
 
-            Screen_BackgroundImgDrawAlt(&D_800D3B44[3]);
+            Screen_BackgroundImgDrawBlackFadeIn(&D_800D3B44[3]);
 
             D_800D3C98 += g_DeltaTime;
             if (D_800D3C98 % Q12(0.2f) > Q12(0.1f))
@@ -772,7 +795,7 @@ void func_800D0500(void) // 0x800D0500
             {
                 Event_ScreenFadeCmd(ScreenFadeCmd_Auto, true, 0, Q12(2.0f), false);
             }
-            Screen_BackgroundImgDrawAlt(D_800D3B44);
+            Screen_BackgroundImgDrawBlackFadeIn(D_800D3B44);
             break;
 
         case 22:
@@ -785,7 +808,7 @@ void func_800D0500(void) // 0x800D0500
             SysWork_StateStepIncrement(0);
 
         case 24:
-            Screen_BackgroundImgDrawAlt(&D_800D3B44[1]);
+            Screen_BackgroundImgDrawBlackFadeIn(&D_800D3B44[1]);
             switch (FP_FROM(D_800D3C98, Q12_SHIFT))
             {
                 case 0:
@@ -840,7 +863,7 @@ void func_800D0500(void) // 0x800D0500
             break;
 
         default:
-            Screen_BackgroundImgDrawAlt(&D_800D3B44[1]);
+            Screen_BackgroundImgDrawBlackFadeIn(&D_800D3B44[1]);
 
             if (D_800D3C9E >= 0)
             {
@@ -1115,11 +1138,23 @@ void Map_WorldObjectsUpdate(void) // 0x800D1718
             func_800D2170(true);
             D_800D4E6D = 1;
         }
+#if VERSION_EQUAL_OR_NEWER(JAP2) // @bugfix?
+        else if (D_800D4E6D == 1)
+        {
+            D_800D4E6D++;
+        }
+        else if (D_800D4E6D == 2)
+        {
+            D_800D4E6D++;
+            D_800C4414 |= 1 << 5;
+        }
+#else
         else if (D_800D4E6D == 1)
         {
             D_800D4E6D++;
             D_800C4414 |= 1 << 5;
         }
+#endif
 
         D_800D4E70 += Q12_MULT_PRECISE(Rng_GenerateUInt(0, 4095), g_DeltaTime);
 
@@ -1868,6 +1903,6 @@ void func_800D32D0(void) // 0x800D32D0
     }
 }
 
-INCLUDE_RODATA("maps/map6_s02/nonmatchings/map6_s02_2", D_800CAB90);
+MATCH_CONST s_FsImageDesc D_800CAB90 = { { 0, 25 }, 0, 0, 224, 12 };
 
-INCLUDE_RODATA("maps/map6_s02/nonmatchings/map6_s02_2", D_800CAB98);
+MATCH_CONST RECT D_800CAB98 = { 832, 256, 64, 256 };

@@ -6,12 +6,12 @@
 #include "types.h"
 #include "libkpad.h"
 
-#include "bodyprog/anim.h"
+#include "bodyprog/chara/anim.h"
 #include "bodyprog/chara/chara.h"
+#include "bodyprog/chara/model.h"
 #include "bodyprog/events/bgm_update.h"
 #include "bodyprog/formats/anm.h"
 #include "bodyprog/items.h"
-#include "bodyprog/model.h"
 #include "bodyprog/savegame.h"
 #include "bodyprog/sys/joy.h"
 #include "maps/characters/harry.h"
@@ -22,7 +22,11 @@
 
 #define SCREEN_WIDTH                   320
 #define SCREEN_HEIGHT                  240
+#if VERSION_REGION_IS(PAL)
+#define FRAMEBUFFER_HEIGHT_PROGRESSIVE 255
+#else
 #define FRAMEBUFFER_HEIGHT_PROGRESSIVE 224
+#endif
 #define FRAMEBUFFER_HEIGHT_INTERLACED  (FRAMEBUFFER_HEIGHT_PROGRESSIVE * 2)
 #define ORDERING_TABLE_SIZE            2048
 
@@ -52,7 +56,7 @@
     ((weaponAttack) % 10)
 
 /** @brief Creates a bitmask with a contiguous range of bits set.
- * For use with `s_PlayerExtra::disabledAnimBones`.
+ * For use with `s_PlayerExtra::disabledAnimBoneFlags`.
  *
  * Generates an `unsigned int` mask with all bits in the range `[fromInclusive, toInclusive]` set.
  *
@@ -333,12 +337,12 @@ STATIC_ASSERT_SIZEOF(s_GameWork, 1496);
 /** @brief Extra player character info. */
 typedef struct _PlayerExtra
 {
-    /* 0x0  */ s_Model     model;             /** Manages upper half body's animations (torso, arms, head). */
-    /* 0x18 */ s32         disabledAnimBones; /** Bitfield of disabled animation bones. Can be created using the `BITMASK_RANGE` macro. */
-    /* 0x1C */ s32         state;             /** `e_PlayerState` */
-    /* 0x20 */ s32         upperBodyState;    /** `e_PlayerUpperBodyState` */
-    /* 0x24 */ s32         lowerBodyState;    /** `e_PlayerLowerBodyState` */
-    /* 0x28 */ e_InvItemId lastUsedItem;      /** Holds the last item ID used from inventory when the player is inside an item trigger area. */
+    /* 0x0  */ s_Model     model;                 /** Manages upper half body's animations (torso, arms, head). */
+    /* 0x18 */ s32         disabledAnimBoneFlags; /** Created using `BITMASK_RANGE`. */
+    /* 0x1C */ s32         state;                 /** `e_PlayerState` */
+    /* 0x20 */ s32         upperBodyState;        /** `e_PlayerUpperBodyState` */
+    /* 0x24 */ s32         lowerBodyState;        /** `e_PlayerLowerBodyState` */
+    /* 0x28 */ e_InvItemId lastUsedItem;          /** Holds the last item ID used from inventory when the player is inside an item trigger area. */
 } s_PlayerExtra;
 STATIC_ASSERT_SIZEOF(s_PlayerExtra, 44);
 
@@ -383,9 +387,8 @@ typedef struct _MapEffectsInfo
                                  * It works basically as a boolean to determine if fog is or not enabled, however,
                                  * the code count with probably unused features as some pieces of code handle cases
                                  * where this variable is set to 2 and 3.
-                                 * * In `Gfx_FogParametersSet` if this variable is set to 3 has the same behaviour of
-                                 * * 0 and 1 (which is setting the targ et fog distance), but if it is set to 2 the fog.
-                                 * * distance is set to 0.
+                                 * * In `Gfx_FogParametersSet`, if this variable is set to 3, has the same behaviour as
+                                 * * 0 and 1 (which sets the target fog distance). If set to 2, the fog distance is set to 0.
                                  * * In `Gfx_EffectsUpdate` setting the value to 3 sets some special behaviour and
                                  * * adjust the fog distance.
                                  * The only way this value is set is through the defined enviroment preset at `MAP_EFFECTS_INFOS`
@@ -404,24 +407,23 @@ typedef struct _MapEffectsInfo
     /* 0x18 */ u8      enableTintLightOverlap; /** `bool` */
     /* 0x19 */ CVECTOR pointLightTint;         /** Volumetric point light color. */
     /* 0x1D */ CVECTOR worldTint;              /** Subtractive. */
-    
-                                /** Odd use. (Particle related)
-                                 * This variables are only ever used in the maps' particle system. At `Particle_SystemUpdate`
-                                 * these variables values are retrieved to two different global variables by using  `func_8003EDB8`
-                                 *
-                                 * The values from `field_21` are only used in the code that handles the snow effect to define the color of the particles.
-                                 * The values from `field_26` are used in the code that handles the snow and rain effect from the first
-                                 * overlay, to define the color of the particles.
-                                 *
-                                 * The first variable shouldn't do any real impact as by default the game uses only the red value
-                                 * to represent all of the other three values, despite the existance of code that handle each of the
-                                 * variables from the struct, that code is never used. That code is also exclusive of the first overlay
-                                 * other overlays doesn't have the function that uses this value.
-                                 * The second variable seems to be either broken or doesn't do any real impact neither in rain the
-                                 * effect or the snow effect.
-                                 */
-    /* 0x21 */ CVECTOR field_21;
-    /* 0x25 */ CVECTOR field_25;
+                                               /** Odd use. (Particle related)
+                                                * This variables are only ever used in the maps' particle system. At `Particle_SystemUpdate`
+                                                * these variables values are retrieved to two different global variables by using  `func_8003EDB8`
+                                                *
+                                                * The values from `field_21` are only used in the code that handles the snow effect to define the color of the particles.
+                                                * The values from `field_26` are used in the code that handles the snow and rain effect from the first
+                                                * overlay, to define the color of the particles.
+                                                *
+                                                * The first variable shouldn't do any real impact as by default the game uses only the red value
+                                                * to represent all of the other three values, despite the existance of code that handle each of the
+                                                * variables from the struct, that code is never used. That code is also exclusive of the first overlay
+                                                * other overlays doesn't have the function that uses this value.
+                                                * The second variable seems to be either broken or doesn't do any real impact neither in rain the
+                                                * effect or the snow effect.
+                                                */
+    /* 0x21 */ CVECTOR field_21;               // } Particle effect related. Only the first value affects snow transparency.
+    /* 0x25 */ CVECTOR field_25;               // }
                // 3 bytes of padding.
 } s_MapEffectsInfo;
 STATIC_ASSERT_SIZEOF(s_MapEffectsInfo, 44);
@@ -531,9 +533,11 @@ typedef struct _SysWork
     /* 0x2380   */ q19_12           cameraRadiusXz;
     /* 0x2384   */ q19_12           cameraY;
     /* 0x2388   */ s_SysWork_2388   field_2388;
-    /* 0x2510   */ s32              field_2510;                       // } Related to libkpad.
-    /* 0x2514   */ s_SysWork_2514   field_2514;                       // }
-    /* 0x254C   */ s8               field_254C[508];                  /** Used through indirect pointer calls. Tied to `libkpad`.*/
+    /* 0x2510   */ s_KPad_Handler*  kpadHandlers_2510; // Head of the kpad handler list from `func_8009E4F8`.
+    /* 0x2514   */ s_KPadWork       kpad_2514;
+    /* 0x2534   */ s_KPad_Channel   kpadChannels_2534[2];
+    /* 0x2544   */ s_KPad_Effect    kpadEffects_2544[16];
+    /* 0x2744   */ s8               unk_2744[4];
     /* 0x2748   */ q3_12            bgmLayerVolumes[BGM_LAYER_COUNT]; // Last index value is not a layer, but some sort of timer. See `Bgm_LayersUpdate`.
                    // 2 bytes of padding.
     /* 0x275C   */ q23_8            field_275C; // } SFX volumes?
@@ -702,22 +706,21 @@ static inline s32 Game_StateStepSet(s32 stepIdx, s32 stateStep)
     return step;
 }
 
-/** @brief Increments one of the three game-state step counters.
+/** @brief Increments one of the three game state step counters.
  *
- * The steps form a hierarchy used by the games gameState state 
- * machines:
+ * The steps form a hierarchy used by the `gameState` machines:
  *   [0] = state step, [1] = sub-step, [2] = sub-sub-step.
  *
  * @note Incrementing a step cascades a reset downward: changing a higher 
- * level invalidates the steps nested beneath it, so all levels lower
+ * level invalidates the steps nested within it, so all levels lower
  * than `stepIdx` are reset to 0.
  * Incrementing [0] additionally clears the `gameStateStepCounter` frame counter.
  *
- * @param stepIdx    The step index to increment: 0, 1, or 2.
+ * @param stepIdx Step index to increment: 0, 1, or 2.
  */
 static inline void Game_StateStepIncrement(s32 stepIdx)
 {    
-    if(stepIdx == 0)
+    if (stepIdx == 0)
     {
         s32 step = g_GameWork.gameStateSteps[0];
 
@@ -726,7 +729,7 @@ static inline void Game_StateStepIncrement(s32 stepIdx)
         g_GameWork.gameStateSteps[2]   = 0;
         g_GameWork.gameStateSteps[0]   = step + 1;
     }
-    else if(stepIdx == 1)
+    else if (stepIdx == 1)
     {
         g_GameWork.gameStateSteps[1]++;
         g_GameWork.gameStateSteps[2] = 0;

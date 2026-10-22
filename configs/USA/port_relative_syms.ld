@@ -6,6 +6,5 @@
 PROVIDE("D_800A9938" = "g_CharaModelAnimsData" + 0xC);
 PROVIDE("D_800A9945" = "g_CharaModelAnimsData" + 0x19);
 PROVIDE("D_800A99B5" = "g_PaperMapFileIdxs" + 0x1);
-PROVIDE("D_800C39A0" = "__pad_bss_800C39A0" + 0x0);
 PROVIDE("g_Player_AnimResetRequest" = "__pad_bss_800C4606" + 0x0);
 PROVIDE("g_SaveScreen_IsLoadError" = "__pad_bss_800BCD39" + 0x0);

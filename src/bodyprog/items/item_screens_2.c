@@ -32,8 +32,6 @@ s32 g_Inventory_GameDifficulty;
 s32 g_Inventory_SelectionBordersDraw;
 s32 g_Inventory_PrevSelectionId;
 
-s32 __pad_bss_800C39A0[2];
-
 /** Something to do with inventory items. */
 static const s8 D_80025EB0[] = {
     0,  1,  2,  0,  0,  0,  0,  0,
@@ -81,14 +79,15 @@ void GameState_ItemScreens_Update(void) // 0x8004C9B0
     switch (g_GameWork.gameStateSteps[1])
     {
         case 0:
-            // Switch to results screen in case the player have finalized the game.
-            if (g_SavegamePtr->currentEndingFlags & (GameEndingFlag_GoodPlus | GameEndingFlag_Good | GameEndingFlag_BadPlus | GameEndingFlag_Bad | GameEndingFlag_Ufo))
+            // Switch to results screen if the player has finished the game.
+            if (g_SavegamePtr->currentEndingFlags & (GameEndingFlag_GoodPlus | GameEndingFlag_Good |
+                                                     GameEndingFlag_BadPlus | GameEndingFlag_Bad | GameEndingFlag_Ufo))
             {
                 Game_StateStepSet(1, 21);
                 return;
             }
             
-            // Throw player to intro screen after finalizing the game.
+            // Throw player to intro screen after finishing the game.
             if ((g_SavegamePtr->currentEndingFlags & GameEndingFlag_6) &&
                 g_GameWork.gameStatePrev == GameState_SaveScreen)
             {
@@ -110,7 +109,7 @@ void GameState_ItemScreens_Update(void) // 0x8004C9B0
             func_8004C7E4();
 #endif
 
-            Screen_RectInterlacedClear(0, 0x20, 0x140, 0x1C0, 0u, 0u, 0u);
+            Screen_RectInterlacedClear(0, 32, SCREEN_WIDTH, 448, 0u, 0u, 0u);
             Screen_Init(SCREEN_WIDTH, true);
 
             g_IntervalVBlanks = 1;
@@ -135,7 +134,7 @@ void GameState_ItemScreens_Update(void) // 0x8004C9B0
                 case 18:
                     g_Inventory_SelectionId     = InvSelectionId_Settings;
                     g_Inventory_PrevSelectionId = InvSelectionId_Settings;
-#if VERSION_EQUAL_OR_NEWER(JAP1) // @bug
+#if VERSION_EQUAL_OR_NEWER(JAP1) // @bugfix
                     g_Inventory_IsScrolling = false;
 #endif
                     break;
@@ -143,7 +142,7 @@ void GameState_ItemScreens_Update(void) // 0x8004C9B0
                 case 15:
                     g_Inventory_SelectionId     = InvSelectionId_Map;
                     g_Inventory_PrevSelectionId = InvSelectionId_Map;
-#if VERSION_EQUAL_OR_NEWER(JAP1) // @bug
+#if VERSION_EQUAL_OR_NEWER(JAP1) // @bugfix
                     g_Inventory_IsScrolling = false;
 #endif
                     break;
@@ -158,7 +157,7 @@ void GameState_ItemScreens_Update(void) // 0x8004C9B0
             g_GameWork.background2dColor.b          = 0;
 
             Gfx_Items_DrawInit();
-            func_8004EF48();
+            Inventory_ItemCommandSet();
 
             Game_StateStepSet(1, 1);
             return;
@@ -180,7 +179,7 @@ void GameState_ItemScreens_Update(void) // 0x8004C9B0
                 s32 prevGameState;
                 prevGameState = g_GameWork.gameStateSteps[2];
 
-                Inventory_Logic();
+                Inventory_Update();
 
                 g_GameWork.gameStateSteps[2] = prevGameState;
             }
@@ -189,16 +188,18 @@ void GameState_ItemScreens_Update(void) // 0x8004C9B0
 
             switch (g_GameWork.gameStateSteps[1])
             {
-                // "Can't use here" message. Triggers when attempting to use special items in places where they trigger nothing.
+                // "Can't use here" message.
+                // Triggers when attempting to use special items in places where they trigger nothing.
                 case 12:
                     Game_StateStepSet(1, 1);
-                    SysWork_StateStepSet(1, 3); // This specifically make it appear.
+                    SysWork_StateStepSet(1, 3); // This makes it appear.
                     break;
 
-                // "Too dark too look at the item" message. Triggers in circumstances like maps in Otherworld with the flashlight off.
+                // "Too dark too look at the item" message.
+                // Triggers in circumstances like maps in Otherworld with the flashlight off.
                 case 16:
                     Game_StateStepSet(1, 1);
-                    SysWork_StateStepSet(1, 4); // This specifically make it appear.
+                    SysWork_StateStepSet(1, 4); // This makes it appear.
                     break;
 
                 default:
@@ -210,7 +211,7 @@ void GameState_ItemScreens_Update(void) // 0x8004C9B0
             {
                 s32 prevGameState;
 
-                prevGameState                   = g_GameWork.gameStateSteps[2];
+                prevGameState = g_GameWork.gameStateSteps[2];
                 ScreenFade_Start(true, false, false);
 
                 Game_StateStepSet(1, 20);
@@ -246,7 +247,7 @@ void GameState_ItemScreens_Update(void) // 0x8004C9B0
             }
             break;
 
-        // Exiting inventory screen.
+        // Exit inventory screen.
         case 20:
             if (ScreenFade_IsFinished())
             {
@@ -264,7 +265,7 @@ void GameState_ItemScreens_Update(void) // 0x8004C9B0
             }
             break;
 
-        // Results screen triggers here.
+        // Results screen.
         case 21:
 #if VERSION_REGION_IS(NTSCJ)
             func_8004C7E4();
@@ -390,36 +391,36 @@ void Gfx_Results_Save(void) // 0x8004D1A0
 
     const s_ResultStringOffset STR_OFFSETS[] =
     {
-        {   0,   0,   0,  64 },
-        {   0,   0, 100,   0 },
-        { 208, 144, 208,  80 },
+        { 0,   0,   0,   64  },
+        { 0,   0,   100, 0   },
+        { 208, 144, 208, 80  },
         { 208, 144, 108, 144 },
-        {   4,   8, 204,   8 },
-        {   4, 136, 204, 136 },
-        {   4,   8,   4, 136 },
-        { 204,   8, 204, 136 },
-        {   0,   1, 100,   1 },
+        { 4,   8,   204, 8   },
+        { 4,   136, 204, 136 },
+        { 4,   8,   4,   136 },
+        { 204, 8,   204, 136 },
+        { 0,   1,   100, 1   },
         { 208, 143, 108, 143 },
-        {   4,   7, 204,   7 },
-        {   4, 137, 204, 137 },
-        {   0,   0,   0,  20 },
-        {   0,   0,  22,   0 },
-        {  48,  48,  48,  28 },
-        {  48,  48,  26,  48 },
-        {   2,   4,  46,   4 },
-        {   2,  44,  46,  44 },
-        {   2,   4,   2,  44 },
-        {  46,   4,  46,  44 },
-        {   0,   1,  22,   1 },
-        {  48,  47,  26,  47 },
-        {   2,   3,  46,   3 },
-        {   2,  45,  46,  45 }
+        { 4,   7,   204, 7   },
+        { 4,   137, 204, 137 },
+        { 0,   0,   0,   20  },
+        { 0,   0,   22,  0   },
+        { 48,  48,  48,  28  },
+        { 48,  48,  26,  48  },
+        { 2,   4,   46,  4   },
+        { 2,   44,  46,  44  },
+        { 2,   4,   2,   44  },
+        { 46,  4,   46,  44  },
+        { 0,   1,   22,  1   },
+        { 48,  47,  26,  47  },
+        { 2,   3,   46,  3   },
+        { 2,   45,  46,  45  }
     };
 
     GsOT* ot = &g_OrderingTable2[g_ActiveBufferIdx];
 
 #if VERSION_REGION_IS(NTSC)
-    const char* SAVE_DIALOG_STRS[] = {
+    const char* const SAVE_DIALOG_STRS[] = {
         "\7Is_it_OK_to_save?",
         "\7Yes_____________No"
     };
@@ -466,13 +467,12 @@ void Gfx_Results_Save(void) // 0x8004D1A0
     g_SysWork.enableHalfHeightGlyphs = true;
 
     Gfx_StringPositionSet(90, 92);
-    Gfx_StringDraw("\7Is_it_OK_to_save?", DEFAULT_MAP_MESSAGE_LENGTH);
+    Gfx_StringDraw(SAVE_DIALOG_STRS[0], DEFAULT_MAP_MESSAGE_LENGTH);
 
     Gfx_StringPositionSet(94, 122);
-    Gfx_StringDraw("\7Yes_____________No", DEFAULT_MAP_MESSAGE_LENGTH);
+    Gfx_StringDraw(SAVE_DIALOG_STRS[1], DEFAULT_MAP_MESSAGE_LENGTH);
 
     g_SysWork.enableHalfHeightGlyphs = false;
-
 #elif VERSION_REGION_IS(NTSCJ)
     for (i = 0; i < 2; i++)
     {
@@ -524,8 +524,10 @@ void Gfx_Results_Save(void) // 0x8004D1A0
     }
 }
 
-void Inventory_Logic(void) // 0x8004D518
+void Inventory_Update(void) // 0x8004D518
 {
+    #define BORDER_DRAW_TIMER_MAX 8
+
     s32 step;
     s32 cmdCountMax = 0;
     s32 temp;
@@ -534,13 +536,12 @@ void Inventory_Logic(void) // 0x8004D518
     Inventory_DirectionalInputSet();
 
     g_Inventory_SelectionBordersDraw++;
-
-    if (g_Inventory_SelectionBordersDraw >= 8)
+    if (g_Inventory_SelectionBordersDraw >= BORDER_DRAW_TIMER_MAX)
     {
         g_Inventory_PrevSelectionId = g_Inventory_SelectionId;
     }
 
-    g_Inventory_SelectionBordersDraw = CLAMP(g_Inventory_SelectionBordersDraw, 0, 8);
+    g_Inventory_SelectionBordersDraw = CLAMP(g_Inventory_SelectionBordersDraw, 0, BORDER_DRAW_TIMER_MAX);
 
     if (g_GameWork.gameStateSteps[1] != 1)
     {
@@ -562,21 +563,21 @@ void Inventory_Logic(void) // 0x8004D518
     switch (g_Inventory_SelectionId)
     {
         case InvSelectionId_Item:
-            if ((g_Inventory_IsLeftClicked && g_Inventory_SelectionBordersDraw == 8) ||
-                (g_Inventory_IsLeftHeld && (g_Inventory_IsScrolling || g_Inventory_SelectionBordersDraw == 8)))
+            if ((g_Inventory_IsLeftClicked && g_Inventory_SelectionBordersDraw == BORDER_DRAW_TIMER_MAX) ||
+                (g_Inventory_IsLeftHeld && (g_Inventory_IsScrolling || g_Inventory_SelectionBordersDraw == BORDER_DRAW_TIMER_MAX)))
             {
                 if (g_Inventory_IsLeftClicked || g_Inventory_IsLeftHeld)
                 {
                     g_Inventory_IsScrolling = true;
                 }
 
-                D_800AE178                           = 1;
+                D_800AE178                       = 1;
                 g_Inventory_SelectionBordersDraw = 2;
                 g_Inventory_CmdSelectedIdx       = 0;
                 Sd_SfxPlay(Sfx_MenuMove, Q8(-0.25f), Q8(0.25f));
 
                 g_SysWork.invItemSelectedIdx = ((g_SysWork.invItemSelectedIdx + g_SavegamePtr->invSlotCount) - 1) % g_SavegamePtr->invSlotCount;
-                temp                                    = g_SavegamePtr->invSlotCount - 3;
+                temp                         = g_SavegamePtr->invSlotCount - 3;
                 func_800539A4(0, (g_SysWork.invItemSelectedIdx + temp) % g_SavegamePtr->invSlotCount);
             }
             else if (((g_Inventory_IsRightClicked || g_Inventory_IsRightPulsed) && g_Inventory_SelectionBordersDraw == 8) ||
@@ -607,7 +608,7 @@ void Inventory_Logic(void) // 0x8004D518
             }
             else if ((g_Controller0->buttonFlags.clicked & g_GameWorkPtr->config.controllerConfig.cancel ||
                       g_Inventory_IsDownClicked) &&
-                     g_Inventory_SelectionBordersDraw == 8)
+                     g_Inventory_SelectionBordersDraw == BORDER_DRAW_TIMER_MAX)
             {
                 g_Inventory_SelectionBordersDraw = 1;
 
@@ -623,7 +624,7 @@ void Inventory_Logic(void) // 0x8004D518
                 g_Inventory_SelectionId = InvSelectionId_Exit;
             }
             else if (g_Controller0->buttonFlags.clicked & g_GameWorkPtr->config.controllerConfig.enter &&
-                     g_Inventory_SelectionBordersDraw >= 8)
+                     g_Inventory_SelectionBordersDraw >= BORDER_DRAW_TIMER_MAX)
             {
                 if (g_SavegamePtr->items[g_SysWork.invItemSelectedIdx].id == InvItemId_Flauros ||
                     (g_SysWork.field_2388.isFlashlightUnavailable &&
@@ -844,14 +845,14 @@ void Inventory_Logic(void) // 0x8004D518
 
             if (!HAS_PAPER_MAP(g_SavegamePtr->paperMapIdx))
             {
-                Gfx_Inventory_UnavailableMapText(1);
+                Inventory_UnavailableMapTextDraw(1);
             }
             else if (g_SysWork.field_2388.field_154.effectsInfo.flags.field_00[0] & SpecialEnvEventFlags_FlashlightAllowed &&
                      !g_SysWork.field_2388.isFlashlightOn &&
                      (g_SysWork.field_2388.field_1C[0].effectsInfo.flags.field_00[0] & SpecialEnvEventFlags_DarkEnvironment ||
                       g_SysWork.field_2388.field_1C[1].effectsInfo.flags.field_00[0] & SpecialEnvEventFlags_DarkEnvironment))
             {
-                Gfx_Inventory_UnavailableMapText(0);
+                Inventory_UnavailableMapTextDraw(0);
             }
             break;
 
@@ -1464,7 +1465,7 @@ bool Player_ItemRemove(u8 itemId, u8 count) // 0x8004EE94
     return false;
 }
 
-void func_8004EF48(void) // 0x8004EF48
+void Inventory_ItemCommandSet(void) // 0x8004EF48
 {
     u8  itemIdGroup; // `e_InvItemGroup`
     u8  invItemId;
@@ -1784,7 +1785,7 @@ s32 func_8004F190(s_Savegame* save) // 0x8004F190
     return j;
 }
 
-void Gfx_Inventory_UnavailableMapText(s32 strIdx) // 0x8004F57C
+void Inventory_UnavailableMapTextDraw(s32 strIdx) // 0x8004F57C
 {
 #if VERSION_REGION_IS(NTSCJ)
     GsOT* ot;
@@ -1800,12 +1801,12 @@ void Gfx_Inventory_UnavailableMapText(s32 strIdx) // 0x8004F57C
 
     if (strIdx)
     {
-        *(u32*)&sprt->w = 156 + (16 << 16); // setWHFast(sprt, 156, 16);
+        setWHFast(sprt, 156, 16);
         setUV0AndClutSum(sprt, 0, 224, 0x7F93);
     }
     else
     {
-        *(u32*)&sprt->w = 192 + (16 << 16); // setWHFast(sprt, 192, 16);
+        setWHFast(sprt, 192, 16);
         setUV0AndClutSum(sprt, 0, 16, 0x7F93);
     }
 
@@ -1882,5 +1883,5 @@ void Inventory_DirectionalInputSet(void) // 0x8004F5DC
 }
 
 #if VERSION_IS(USA)
-const u8 g_rodataData_800262F6 = 0x2A; // '*' as `char`.
+    const u8 g_rodataData_800262F6 = 0x2A; // '*' as `char`.
 #endif

@@ -14,6 +14,15 @@
 #include "maps/characters/floatstinger.h"
 #include "maps/characters/player.h"
 
+#include "../src/maps/particle_acid.c"
+
+#include "../src/maps/unk_draw_m1s03.c"
+
+#include "../src/maps/particle.c"
+
+#include "../src/maps/characters/player.c"
+
+
 // TODO: Move floatstinger to separate split.
 #include "../src/maps/characters/floatstinger.c" // 0x800D16FC
 
@@ -33,13 +42,20 @@ void func_800D61A4(void) {}
 
 const char* MAP_MESSAGES[] = {
     #include "maps/shared/map_msg_common.h"
+#if VERSION_REGION_IS(NTSC)
     /* 15 */ "~J0(1.0)\tWhat? ~E ",
     /* 16 */ "~J0(2.5)\tThat_light!? ~E ",
     /* 17 */ "\tThe_stairs_are_wrecked! ~E ",
     /* 18 */ "~C3\tAlchemilla_Hospital ~E "
+#elif VERSION_REGION_IS(NTSCJ)
+    /* 15 */ "~J0(1.0)\t何だ？ ~E ",
+    /* 16 */ "~J0(2.5)\tあの光は！？ ~E",
+    /* 17 */ "\t階段は壊れていて ~N\n\t逃げることはできない！ ~E ",
+    /* 18 */ "~C3\tアルケミラ病院 ~E "
+#endif
 };
 
-const VECTOR3 D_800CABE4 = { 0xFFF8C800, 0x00002000, 0x0006E800 };
+const VECTOR3 D_800CABE4 = { Q12(-115.5f), Q12(2.0f), Q12(110.5f) };
 
 void func_800D61AC(void) // 0x800D61AC
 {

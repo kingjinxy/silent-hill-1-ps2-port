@@ -258,11 +258,11 @@ void GameState_KcetLogo_Update(void) // 0x800C99A4
                     switch (g_GameWork.gameStateSteps[1])
                     {
                         case 0:
-                            MemCard_ProcessSet(MemCardProcess_Load_Game, g_SelectedDeviceId, 0, 0);
+                            MemCard_ProcessSet(MemCardGameProcessId_Load_Game, g_SelectedDeviceId, 0, 0);
                             Game_StateStepIncrement(1);
 
                         case 1:
-                            if (MemCard_LastMemCardResultGet() != MemCardResult_Success)
+                            if (MemCard_LastMemCardResultGet() != MemCardWorkResult_Success)
                             {
                                 Game_StateStepIncrement(1);
                             }
@@ -320,8 +320,7 @@ void GameState_KcetLogo_Update(void) // 0x800C99A4
 
                         case GameState_MovieIntroAlternate:
                         default:
-                            // USA moves `Demo_*` calls to after the switch.
-                            // TODO: Confirm whether the later JAP1 release also had them moved.
+                            // USA and later versions move these `Demo_*` calls to after the switch.
 #if VERSION_EQUAL_OR_OLDER(JAP0) 
                             Demo_SequenceAdvance(0);
                             Demo_DemoDataRead();
@@ -330,7 +329,7 @@ void GameState_KcetLogo_Update(void) // 0x800C99A4
                             break;
                     }
                     
-#if VERSION_EQUAL_OR_NEWER(USA)
+#if VERSION_EQUAL_OR_NEWER(USA) // @bugfix Moved from the switch above.
                     Demo_SequenceAdvance(0);
                     Demo_DemoDataRead();
 #endif

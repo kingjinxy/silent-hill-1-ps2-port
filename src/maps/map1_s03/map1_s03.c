@@ -18,6 +18,184 @@
 #include "maps/characters/player.h"
 #include "maps/characters/stalker.h"
 
+#include "../src/maps/particle_water.c"
+
+void func_800CDCE0(s32 arg0, s32 arg1, s32 arg2) // 0x800CDCE0
+{
+    s16 tmp0;
+    s16 offsetX; // } Implied Q8.
+    s16 offsetZ; // }
+    s32 zOff2;
+    s32 i;
+
+    switch (D_800E3A40[arg1].idx_14)
+    {
+        case 0:
+            sharedData_800DFB7C_0_s00[arg0].field_0.vx_0 = D_800E3A40[arg1].vx_0;
+            sharedData_800DFB7C_0_s00[arg0].field_4.vz_4 = D_800E3A40[arg1].vz_4;
+            break;
+
+        case 1:
+            // TODO: Not sure if this fits any RNG macro?
+            tmp0 = (Rng_Rand16() % D_800E3A40[arg1].field_C) - (D_800E3A40[arg1].field_C >> 1);
+            sharedData_800DFB7C_0_s00[arg0].field_0.vx_0 = D_800E3A40[arg1].vx_0 + FP_FROM((tmp0 * Math_Sin(D_800E3A40[arg1].field_A)), Q12_SHIFT);
+            zOff2 = FP_FROM((tmp0 * Math_Cos(D_800E3A40[arg1].field_A)), Q12_SHIFT);
+            sharedData_800DFB7C_0_s00[arg0].field_4.vz_4 = D_800E3A40[arg1].vz_4 + zOff2;
+            break;
+
+        case 2:
+            for (i = 0; i < 8; i++)
+            {
+                offsetX = Rng_GenerateInt(-D_800E3A40[arg1].field_C, D_800E3A40[arg1].field_C - 1);
+                offsetZ = Rng_GenerateInt(-D_800E3A40[arg1].field_C, D_800E3A40[arg1].field_C - 1);
+                if ((SQUARE(offsetX) + SQUARE(offsetZ)) < (D_800E3A40[arg1].field_C * D_800E3A40[arg1].field_C))
+                {
+                    break;
+                }
+            }
+
+            if (i == 8)
+            {
+                offsetZ = 0;
+                offsetX = 0;
+            }
+
+            sharedData_800DFB7C_0_s00[arg0].field_0.vx_0 = D_800E3A40[arg1].vx_0 + offsetX;
+            sharedData_800DFB7C_0_s00[arg0].field_4.vz_4 = D_800E3A40[arg1].vz_4 + offsetZ;
+            break;
+
+        case 3:
+            offsetX = Rng_GenerateUInt(0, Q12_ANGLE(360.0f) - 1);
+            sharedData_800DFB7C_0_s00[arg0].field_0.vx_0 = D_800E3A40[arg1].vx_0 + FP_FROM((D_800E3A40[arg1].field_C * Math_Sin(offsetX)), Q12_SHIFT);
+            zOff2 = FP_FROM((D_800E3A40[arg1].field_C * Math_Cos(offsetX)), Q12_SHIFT);
+            sharedData_800DFB7C_0_s00[arg0].field_4.vz_4 = D_800E3A40[arg1].vz_4 + zOff2;
+            break;
+
+        case 4:
+            offsetX = Rng_AddGeneratedUInt(D_800E3A40[arg1].field_A, Q12_ANGLE(-90.0f), Q12_ANGLE(90.0f) - 1);
+            sharedData_800DFB7C_0_s00[arg0].field_0.vx_0 = D_800E3A40[arg1].vx_0 + FP_FROM((D_800E3A40[arg1].field_C * Math_Sin(offsetX)), Q12_SHIFT);
+            zOff2 = FP_FROM((D_800E3A40[arg1].field_C * Math_Cos(offsetX)), Q12_SHIFT);
+            sharedData_800DFB7C_0_s00[arg0].field_4.vz_4 = D_800E3A40[arg1].vz_4 + zOff2;
+            break;
+    }
+
+    sharedData_800DFB7C_0_s00[arg0].vy_8 = D_800E3A40[arg1].field_8;
+
+    if (arg2 == 0)
+    {
+        sharedData_800DFB7C_0_s00[arg0].field_C.s_0.field_0 = Rng_GenerateInt(0, D_800E3A40[arg1].field_10 - 1);
+    }
+    else
+    {
+        sharedData_800DFB7C_0_s00[arg0].field_C.s_0.field_0 = sharedData_800DFB7C_0_s00[arg0].field_C.field_0 - D_800E3A40[arg1].field_10;
+    }
+
+    sharedData_800DFB7C_0_s00[arg0].field_C.s_1.field_2  = Rng_GenerateUInt(0, 3);
+    sharedData_800DFB7C_0_s00[arg0].field_C.s_1.field_3  = Rng_GenerateUInt(96, 159);
+    sharedData_800DFB7C_0_s00[arg0].field_10.s_2.field_0 = arg1;
+}
+
+void func_800CE0CC(s32 arg0) // 0x800CE0CC
+{
+    s32 idx;
+    s32 i;
+
+    for (i = 0; i < D_800E3A40[arg0].field_12; i++)
+    {
+        idx = func_8005E7E0(28);
+        if (idx == NO_VALUE)
+        {
+            break;
+        }
+
+        func_800CDCE0(idx, arg0, 0);
+    }
+}
+
+bool func_800CE164(POLY_FT4** poly, s32 idx) // 0x800CE164
+{
+    typedef struct
+    {
+        s_func_8005E89C field_0;
+        SVECTOR         field_12C;
+        DVECTOR         field_134;
+        s32             field_138;
+    } s_ScratchData;
+
+    s_ScratchData* scratch = PSX_SCRATCH;
+    s32            idx2;
+    s32            var_lo;
+    s32            var_a2;
+    s32            var_a1;
+    s32            rgbColor;
+
+    sharedData_800DFB7C_0_s00[idx].field_C.s_0.field_0 += g_DeltaTime;
+
+    idx2 = sharedData_800DFB7C_0_s00[idx].field_10.s_2.field_0;
+    if ((u16)sharedData_800DFB7C_0_s00[idx].field_C.s_0.field_0 > D_800E3A40[idx2].field_10)
+    {
+        func_800CDCE0(idx, idx2, 1);
+        return false;
+    }
+
+    Math_SetSVectorFastSum(&scratch->field_12C,
+                           Q12_TO_Q8(sharedData_800DFB7C_0_s00[idx].field_0.vx_0) - (u16)scratch->field_0.field_0.vx,
+                           Q12_TO_Q8((s32)sharedData_800DFB7C_0_s00[idx].vy_8) - scratch->field_0.field_0.vy,
+                           Q12_TO_Q8(sharedData_800DFB7C_0_s00[idx].field_4.vz_4) - scratch->field_0.field_0.vz);
+
+    gte_ldv0(&scratch->field_12C);
+    gte_rtps();
+    gte_stsxy(&scratch->field_134.vx);
+    gte_stsz(&scratch->field_138);
+
+    var_lo = FP_TO((u16)sharedData_800DFB7C_0_s00[idx].field_C.s_0.field_0, Q12_SHIFT) / D_800E3A40[idx2].field_10;
+
+    setPolyFT4(*poly);
+
+    var_a2 = (FP_FROM(Q12_MULT_PRECISE(D_800E3A40[idx2].field_E * sharedData_800DFB7C_0_s00[idx].field_C.s_1.field_3, Math_Sin(var_lo >> 2)), Q12_SHIFT) * scratch->field_0.field_2C) / scratch->field_138;
+    var_a1 = (var_a2 * (0x800 - ABS(scratch->field_0.field_30.vx))) >> 10;
+
+    setXY0Fast(*poly, (u16)scratch->field_134.vx - var_a2, scratch->field_134.vy - var_a1);
+    setXY1Fast(*poly, (u16)scratch->field_134.vx + var_a2, scratch->field_134.vy - var_a1);
+    setXY2Fast(*poly, (u16)scratch->field_134.vx - var_a2, scratch->field_134.vy);
+    setXY3Fast(*poly, (u16)scratch->field_134.vx + var_a2, scratch->field_134.vy);
+
+    *(u32*)&(*poly)->u0 = ((sharedData_800DFB7C_0_s00[idx].field_C.s_1.field_2 << 13) + 0xE0000);
+    *(u32*)&(*poly)->u1 = ((sharedData_800DFB7C_0_s00[idx].field_C.s_1.field_2 << 13) + 0x2D003F);
+    *(u16*)&(*poly)->u2 = ((sharedData_800DFB7C_0_s00[idx].field_C.s_1.field_2 << 13) | 0x1F00);
+    *(u16*)&(*poly)->u3 = ((sharedData_800DFB7C_0_s00[idx].field_C.s_1.field_2 << 13) | 0x1F3F);
+
+    setSemiTrans(*poly, true);
+
+    if (var_lo < 0x800)
+    {
+        rgbColor = Q12_MULT_PRECISE((var_lo * 2), 0x80);
+    }
+    else
+    {
+        rgbColor = 0x80 - Q12_MULT_PRECISE(((var_lo - 0x800) * 2), 0x80);
+    }
+
+    rgbColor = (rgbColor * func_80055D78(sharedData_800DFB7C_0_s00[idx].field_0.vx_0, sharedData_800DFB7C_0_s00[idx].vy_8, sharedData_800DFB7C_0_s00[idx].field_4.vz_4)) >> 7;
+
+    setRGB0Fast(*poly, rgbColor, rgbColor, rgbColor);
+
+    addPrim(&g_OrderingTable0[g_ActiveBufferIdx].org[(scratch->field_138 + 256) >> 3], *poly);
+
+    *poly += 1;
+
+    return true;
+}
+
+#include "../src/maps/unk_draw_m1s03.c"
+
+#include "../src/maps/particle.c"
+
+#include "../src/maps/characters/player.c"
+
+#include "../src/maps/characters/stalker.c" // 0x800D2DC0
+#include "../src/maps/characters/creeper.c" // 0x800D8010
+
 // TODO: Move to separate split.
 #include "../src/maps/characters/locker_dead_body.c" // 0x800DA284
 
@@ -42,7 +220,7 @@ void MapEvent_LibraryReserveKeyUse(void) // 0x800DA7F4
     };
 
     Player_ItemRemove(InvItemId_LibraryReserveKey, 1);
-    Event_DisplayMapMsgWithSfx(37, Sfx_UseKey, &sfxPos); // "Used the Library reverse key."
+    Event_DisplayMapMsgWithSfx(MAP_MSG(37), Sfx_UseKey, &sfxPos); // "Used the Library reverse key."
     Savegame_EventFlagSet(EventFlag_MapMark_AltSchool2F_LibraryReserveArrows);
 }
 
@@ -55,11 +233,12 @@ void MapEvent_ClassroomKeyUse(void) // 0x800DA8B0
     };
 
     Player_ItemRemove(InvItemId_ClassroomKey, 1);
-    Event_DisplayMapMsgWithSfx(38, Sfx_UseKey, &sfxPos); // "Used classroom key."
+    Event_DisplayMapMsgWithSfx(MAP_MSG(38), Sfx_UseKey, &sfxPos); // "Used classroom key."
 }
 
 const char* MAP_MESSAGES[] = {
     #include "maps/shared/map_msg_common.h"
+#if VERSION_REGION_IS(NTSC)
     /* 15 */ "\tWhat's_this? ~E ",
     /* 16 */ "\t[The_Monster_Lurks] ~N\n\tis_the_book's_title. ~E ",
     /* 17 */ "~C3\tChapter_3: ~N\n\t\t__[Manifestation_of_Delusions] ",
@@ -93,6 +272,42 @@ const char* MAP_MESSAGES[] = {
     /* 45 */ "\tA_body_is_slumped_over. ~E ",
     /* 46 */ "~J0(1.0)\tWhat? ~E ",
     /* 47 */ "~J0(2.5)\tThat_light!? ~E "
+#elif VERSION_REGION_IS(NTSCJ)
+    /* 15 */ "\tこれは……？ ~E ",
+    /* 16 */ "\t“潜在する怪物”……本の題名だったのか ~E ",
+    /* 17 */ "~C3\t◇第三章：妄想の顕在化 ",
+    /* 18 */ "~C3\tまた、ポルターガイストも、 ~N\n\t\tその一種と考えられている。 ",
+    /* 19 */ "~C3\t極度の不安、恐怖、ストレス等のネガティブ ~N\n\t\tな感情が、物理作用を持つ外部的なエネル ~N\n\t\tギーとして発露するのだ。 ",
+    /* 20 */ "~C3\t睡眠中に悪夢が引き金となって起こった ~N\n\t\tと思われるケースも確認されている。 ",
+    /* 21 */ "~C3\tしかし、これらの事象は誰にでも ~N\n\t\t起こり得るものではない。 ",
+    /* 22 */ "~C3\t生来の素養が大きく関わっているが、 ~N\n\t\t思春期の少年少女、とりわけ少女の ~N\n\t\t身の回りで起こる場合が多い。 ~E ",
+    /* 23 */ "~C3\tそれを聞いた弓矢をかついだ旅人は ~N\n\t\t「それなら私がトカゲをやっつけよう」 ~N\n\t\tと言いました。 ",
+    /* 24 */ "~C3\t旅人はトカゲに会うといきなりやっつけよ ~N\n\t\tうとはしないで、悪口を言い出しました。 ",
+    /* 25 */ "~C3\t「なんだい、こんなへなちょこトカゲ、 ~N\n\t\t　ちっとも怖くない」 ",
+    /* 26 */ "~C3\tそれを聞いてトカゲは怒りました。 ~N\n\t\t「おまえも一口に呑み込んでやる！」 ",
+    /* 27 */ "~C3\tトカゲは旅人めがけて大きな口を開けて ~N\n\t\tとびかかりました。 ",
+    /* 28 */ "~C3\t実は旅人はこれを待っていたのです。 ~N\n\t\t旅人は落ち着いて弓に矢をつがえると、 ~N\n\t\tその口めがけてひゅうと射ました。 ",
+    /* 29 */ "~C3\t見事、矢はトカゲの口の中へ、固いうろこ ~N\n\t\tのない口の中へと飛んでいき、お腹の中に ~N\n\t\tぶっすりとささりました。 ",
+    /* 30 */ "~C3\tそれにやられてトカゲはどうと倒れると死 ~N\n\t\tんでしまいました。 ~E ",
+    /* 31 */ "~L1\t外国のおとぎ話だな ~N\n\t子供の頃読んだことがある ~E ",
+    /* 32 */ "\t排水バルブがある ~N\n\t特に変わったところはない ~E ",
+    /* 33 */ "\t鍵が引っかかっている ~N\n\t指を伸ばしても届きそうにない ~E ",
+    /* 34 */ "\t鍵は流れていったようだ ~E ",
+    /* 35 */ "\t排水孔に ~C2 ゴムボール ~C7 が詰め込んである ~E ",
+    /* 36 */ "\t普通の排水孔だ ~N\n\t特に変わった様子はない ~E ",
+    /* 37 */ "\t~C2 ゴムボール ~C7 で排水孔をふさいだ ~E ",
+    /* 38 */ "\t~C2 書庫の鍵 ~C7 を使った ~E ",
+    /* 39 */ "\t~C2 教室の鍵 ~C7 を使った ~E ",
+    /* 40 */ "\t役に立ちそうな本はない ~E ",
+    /* 41 */ "\t排水バルブがある ~N\n\t開けますか？ ~S4 ",
+    /* 42 */ "\t手前の穴に流れていってしまう ~N\n\t……何かでふさげないか？ ~E ",
+    /* 43 */ "\tロッカーの中に役に ~N\n\t立ちそうな物は入ってない ~E ",
+    /* 44 */ "\t\tロッカーの中には何もない ~E ",
+    /* 45 */ "\t\t~C2 書庫の鍵 ~C7 がある ~N\n\t\t取りますか？ ~S4 ",
+    /* 46 */ "\t死体が横たわっている ~E ",
+    /* 47 */ "~J0(1.0)\t何だ？ ~E ",
+    /* 48 */ "~J0(2.5)\tあの光は！？ ~E"
+#endif
 };
 
 void MapEvent_CommonItemTake(void) // 0x800DA950
@@ -182,11 +397,11 @@ void MapEvent_RoofDrainPuzzleInteract0(void) // 0x800DAA28
                 if (g_MapEventData->activationType == TriggerActivationType_Item)
                 {
                     Savegame_EventFlagSet(EventFlag_M1S02_UsedRubberBall);
-                    Event_DisplayMapMsg(false, 36, false, false, 0, false); // "Used rubber ball."
+                    Event_DisplayMapMsg(false, MAP_MSG(36), false, false, 0, false); // "Used rubber ball."
                 }
                 else
                 {
-                    Event_DisplayMapMsg(false, 35, false, false, 0, false); // "Nothing special."
+                    Event_DisplayMapMsg(false, MAP_MSG(35), false, false, 0, false); // "Nothing special."
                 }
             }
             else if (g_MapEventData->mapPointIdx == 17 ||
@@ -194,12 +409,12 @@ void MapEvent_RoofDrainPuzzleInteract0(void) // 0x800DAA28
             {
                 if (Savegame_EventFlagGet(EventFlag_M1S02_PickupClassroomKey))
                 {
-                    Event_DisplayMapMsg(false, 35, false, false, 0, false); // "Nothing special."
+                    Event_DisplayMapMsg(false, MAP_MSG(35), false, false, 0, false); // "Nothing special."
                 }
                 else
                 {
 
-                    Event_DisplayMapMsg(false, 33, false, false, 0, false); // "There's a hanging key."
+                    Event_DisplayMapMsg(false, MAP_MSG(33), false, false, 0, false); // "There's a hanging key."
                 }
             }
             break;
@@ -287,17 +502,17 @@ void MapEvent_RoofDrainPuzzleInteract1(void) // 0x800DABC4
                 if (g_MapEventData->activationType == TriggerActivationType_Item)
                 {
                     Savegame_EventFlagSet(EventFlag_M1S02_UsedRubberBall);
-                    Event_DisplayMapMsg(false, 36, false, false, 0, false);
+                    Event_DisplayMapMsg(false, MAP_MSG(36), false, false, 0, false);
                 }
                 else
                 {
                     if (Savegame_EventFlagGet(EventFlag_M1S02_UsedRubberBall))
                     {
-                        Event_DisplayMapMsg(false, 34, false, false, 0, false); // "The ball is stuffed inside the pipe."
+                        Event_DisplayMapMsg(false, MAP_MSG(34), false, false, 0, false); // "The ball is stuffed inside the pipe."
                     }
                     else
                     {
-                        Event_DisplayMapMsg(false, 35, false, false, 0, false); // "Nothing special."
+                        Event_DisplayMapMsg(false, MAP_MSG(35), false, false, 0, false); // "Nothing special."
                     }
                 }
             }
@@ -306,17 +521,17 @@ void MapEvent_RoofDrainPuzzleInteract1(void) // 0x800DABC4
             {
                 if (Savegame_EventFlagGet(EventFlag_M1S02_PickupClassroomKey))
                 {
-                    Event_DisplayMapMsg(false, 35, false, false, 0, false); // "Nothing special."
+                    Event_DisplayMapMsg(false, MAP_MSG(35), false, false, 0, false); // "Nothing special."
                 }
                 else
                 {
                     if (!Savegame_EventFlagGet(EventFlag_M1S03_KeyDownTheDrain))
                     {
-                        Event_DisplayMapMsg(false, 32, false, false, 0, false); // "There's a hanging key."
+                        Event_DisplayMapMsg(false, MAP_MSG(32), false, false, 0, false); // "There's a hanging key."
                     }
                     else
                     {
-                        Event_DisplayMapMsg(false, 33, false, false, 0, false); // "The key went down the drain."
+                        Event_DisplayMapMsg(false, MAP_MSG(33), false, false, 0, false); // "The key went down the drain."
                     }
                 }
             }
@@ -388,7 +603,7 @@ void MapEvent_DrainageValveInteract(void) // 0x800DAF18
             break;
 
         case 2:
-            Event_DisplayMapMsg(true, 40, 4, 3, 0, false); // "There is a drainage valve."
+            Event_DisplayMapMsg(true, MAP_MSG(40), 4, 3, 0, false); // "There is a drainage valve."
             break;
 
         case 3:
@@ -620,7 +835,7 @@ void MapEvent_DrainageValveInteract(void) // 0x800DAF18
             }
             else
             {
-                Event_DisplayMapMsg(false, 41, false, false, 0, false); // "It draains into the wrong hole."
+                Event_DisplayMapMsg(false, MAP_MSG(41), false, false, 0, false); // "It draains into the wrong hole."
             }
             break;
 
@@ -899,7 +1114,7 @@ void MapEvent_SplitHeadFairyTaleBookRead(void) // 0x800DC0F8
             break;
 
         case 9:
-            Event_DisplayMapMsg(false, 30, false, false, 0, false); // "This is from an old fairy tale."
+            Event_DisplayMapMsg(false, MAP_MSG(30), false, false, 0, false); // "This is from an old fairy tale."
             break;
 
         default: // `EventState_Flag117True`
@@ -914,7 +1129,7 @@ void MapEvent_SplitHeadFairyTaleBookRead(void) // 0x800DC0F8
 
 void MapEvent_OpenedCatLockerInspect(void) // 0x800DC2E4
 {
-    Event_DisplayMapMsgWithBg(FILE_TIM_LOCKER1_TIM, Q12(2.5f), Q12(2.5f), 43); // "Nothing inside."
+    Event_DisplayMapMsgWithBg(FILE_TIM_LOCKER1_TIM, Q12(2.5f), Q12(2.5f), MAP_MSG(43)); // "Nothing inside."
 }
 
 void MapEvent_UnopenedCatLockerInspect(void) // 0x800DC310
@@ -1004,7 +1219,7 @@ void MapEvent_UnopenedCatLockerInspect(void) // 0x800DC310
 
         case 11:
             Event_BgTextureCmd(BgTextureCmd_Draw, 0, false);
-            Event_DisplayMapMsg(false, 43, 0, 0, 0, false); // "Nothing inside."
+            Event_DisplayMapMsg(false, MAP_MSG(43), 0, 0, 0, false); // "Nothing inside."
             break;
 
         case 12:
@@ -1132,7 +1347,7 @@ void MapEvent_LibraryReserveKeyItemTake(void) // 0x800DC9A0
             Savegame_EventFlagSet(EventFlag_M1S03_PickupLibraryReserveKey);
             if (Gfx_PickupItemAnimate(InvItemId_LibraryReserveKey))
             {
-                Event_DisplayMapMsg(true, 44, 5, 6, 0, false); // "There is a Library Reserve Key. Take it?"
+                Event_DisplayMapMsg(true, MAP_MSG(44), 5, 6, 0, false); // "There is a Library Reserve Key. Take it?"
             }
             if (g_SysWork.sysStateSteps[0] == 6)
             {
@@ -1192,7 +1407,7 @@ void MapEvent_RubberBallUse(void) // 0x800DCB54
             break;
 
         case 7:
-            Event_DisplayMapMsg(false, 36, 0, 0, 0, false); // "Used the rubber ball."
+            Event_DisplayMapMsg(false, MAP_MSG(36), 0, 0, 0, false); // "Used the rubber ball."
             Event_BgTextureCmd(BgTextureCmd_Draw, 0, false);
             break;
 
@@ -1298,7 +1513,7 @@ void func_800DCDDC(void) // 0x800DCDDC
             Event_ScreenFadeCmd(ScreenFadeCmd_Auto, false, 0, 0, false);
 
         case 5:
-            Event_DisplayMapMsgWithAudio(46, &D_800E2102, D_800E2000); // "What?"
+            Event_DisplayMapMsgWithAudio(MAP_MSG(46), &D_800E2102, D_800E2000); // "What?"
             break;
 
         case 6:
@@ -1307,7 +1522,7 @@ void func_800DCDDC(void) // 0x800DCDDC
             break;
             
         case 7:
-            Event_DisplayMapMsg(false, 47, 0, 0, 0, false); // "That light!?"
+            Event_DisplayMapMsg(false, MAP_MSG(47), 0, 0, 0, false); // "That light!?"
             sharedFunc_800CE5D4_1_s03(&D_800E200C, Q12(0.5f), Q12(0.05f), 0);
             break;
 
@@ -1383,10 +1598,10 @@ void Map_WorldObjectsInit(void) // 0x800DD3AC
 
     if (g_SavegamePtr->gameDifficulty == GameDifficulty_Easy)
     {
-        Chara_SpawnFlagsSet(Chara_GreyChild, 1, SpawnFlag_None);
-        Chara_SpawnFlagsSet(Chara_GreyChild, 5, SpawnFlag_None);
-        Chara_SpawnFlagsSet(Chara_GreyChild, 6, SpawnFlag_None);
-        Chara_SpawnFlagsSet(Chara_GreyChild, 7, SpawnFlag_None);
+        Chara_SpawnFlagsSet(Chara_GreyChildOrMumbler, 1, SpawnFlag_None);
+        Chara_SpawnFlagsSet(Chara_GreyChildOrMumbler, 5, SpawnFlag_None);
+        Chara_SpawnFlagsSet(Chara_GreyChildOrMumbler, 6, SpawnFlag_None);
+        Chara_SpawnFlagsSet(Chara_GreyChildOrMumbler, 7, SpawnFlag_None);
         Chara_SpawnFlagsSet(Chara_Creeper, 5, SpawnFlag_None);
         Chara_SpawnFlagsSet(Chara_Creeper, 6, SpawnFlag_None);
     }
@@ -1646,25 +1861,25 @@ void func_800DE624(void) // 0x800DE624
 
     if (Savegame_EventFlagGet(EventFlag_M1S02_PickupClassroomKey) && g_SavegamePtr->gameDifficulty != GameDifficulty_Easy)
     {
-        Chara_SpawnFlagsSet(Chara_GreyChild, 9, SpawnFlag_0 | SpawnFlag_1);
-        Chara_SpawnFlagsSet(Chara_GreyChild, 10, SpawnFlag_0 | SpawnFlag_1);
+        Chara_SpawnFlagsSet(Chara_GreyChildOrMumbler, 9, SpawnFlag_0 | SpawnFlag_1);
+        Chara_SpawnFlagsSet(Chara_GreyChildOrMumbler, 10, SpawnFlag_0 | SpawnFlag_1);
     }
 
     if (Savegame_EventFlagGet(EventFlag_M1S03_PickupLibraryReserveKey))
     {
         if (g_SavegamePtr->gameDifficulty != GameDifficulty_Easy)
         {
-            Chara_SpawnFlagsSet(Chara_GreyChild, 12, SpawnFlag_0 | SpawnFlag_1);
+            Chara_SpawnFlagsSet(Chara_GreyChildOrMumbler, 12, SpawnFlag_0 | SpawnFlag_1);
         }
 
         if (g_SavegamePtr->gameDifficulty == GameDifficulty_Hard)
         {
-            Chara_SpawnFlagsSet(Chara_GreyChild, 13, SpawnFlag_0 | SpawnFlag_1);
-            Chara_SpawnFlagsSet(Chara_GreyChild, 11, SpawnFlag_0 | SpawnFlag_1 | SpawnFlag_2);
+            Chara_SpawnFlagsSet(Chara_GreyChildOrMumbler, 13, SpawnFlag_0 | SpawnFlag_1);
+            Chara_SpawnFlagsSet(Chara_GreyChildOrMumbler, 11, SpawnFlag_0 | SpawnFlag_1 | SpawnFlag_2);
         }
 
-        Chara_SpawnFlagsSet(Chara_GreyChild, 14, SpawnFlag_0 | SpawnFlag_1 | SpawnFlag_3);
-        Chara_SpawnFlagsSet(Chara_GreyChild, 15, SpawnFlag_0 | SpawnFlag_1);
+        Chara_SpawnFlagsSet(Chara_GreyChildOrMumbler, 14, SpawnFlag_0 | SpawnFlag_1 | SpawnFlag_3);
+        Chara_SpawnFlagsSet(Chara_GreyChildOrMumbler, 15, SpawnFlag_0 | SpawnFlag_1);
     }
 
     playerHealth = g_SysWork.playerWork.player.health;

@@ -196,8 +196,8 @@ void Options_ExtraOptionsMenu_SelectionHighlightDraw(void);
  */
 void Options_MainOptionsMenu_SelectionHighlightDraw(void);
 
-/** @brief Draws the background vignette of Harry in the main and extra options menus. */
-void Options_Menu_VignetteDraw(void);
+/** @brief Draws the background of Harry in the main and extra options menus. */
+void Options_Menu_BackgroundDraw(void);
 
 /** @brief Draws configuration strings and blue arrows to the right of the listed entries in the extra options menu. */
 void Options_ExtraOptionsMenu_ConfigDraw(void);
@@ -261,6 +261,12 @@ void Options_Selection_ArrowDraw(const s_Triangle2d* arrow, bool isFlashing, boo
  * @param isInactive `true` if the entry is unselected, `false` if selected.
  */
 void Options_Selection_BulletPointDraw(const s_Quad2d* quad, bool isBorder, bool isInactive);
+
+#if VERSION_REGION_IS(NTSCJ)
+void func_801E6F1C(RECT* rect);
+void func_801E749C(void);
+void func_801E794C(void);
+#endif
 
 /** @brief Controller for the controller configuration options menu.
  *

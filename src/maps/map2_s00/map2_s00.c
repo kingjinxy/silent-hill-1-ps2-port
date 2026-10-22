@@ -7,6 +7,17 @@
 #include "maps/map2/map2_s00.h"
 #include "maps/particle.h"
 #include "maps/characters/player.h"
+#include "inline_no_dmpsx.h"
+#include <psyq/gtemac.h>
+#include "maps/characters/air_screamer.h"
+#include "maps/characters/groaner.h"
+
+#include "../src/maps/particle.c"
+
+#include "../src/maps/characters/player.c"
+
+#include "../src/maps/characters/air_screamer.c" // 0x800D1F40
+#include "../src/maps/characters/groaner.c" // 0x800E2F78
 
 #include "../src/maps/map_util.c" // 0x800E76B8
 
@@ -20,6 +31,7 @@ void GameBoot_LoadScreen_StageString(void) {}
 
 const char* MAP_MESSAGES[] = {
     #include "maps/shared/map_msg_common.h"
+#if VERSION_REGION_IS(NTSC)
     /* 15 */ "\tThere_is_a_ ~C2 Steel_pipe ~C7 . ~N\n\tTake_it? ~S4 ",
     /* 16 */ "\tWhere_could_Cheryl_have_gone? ",
     /* 17 */ "\tI_guess_I'll_check ~N\n\tthat_alley_again. ~E ",
@@ -84,6 +96,71 @@ const char* MAP_MESSAGES[] = {
     /* 76 */ "\tThere_is_a_ ~C2 Chainsaw ~C7 . ~N\n\tTake_it? ~S4 ",
     /* 77 */ "\tUsed_the_gasoline. ~E ",
     /* 78 */ "\tThis_must_be_that_water_works ~N\n\tLisa_was_talking_about. ~E "
+#elif VERSION_REGION_IS(NTSCJ)
+    /* 15 */ "\t~C2 鉄パイプ ~C7 がある ~N\n\t取りますか？ ~S4 ",
+    /* 16 */ "\tシェリル……どこに行ったんだ……？ ",
+    /* 17 */ "\tあの路地をもう一度　探してみるか…… ~E ",
+    /* 18 */ "~C3\t学校へ ~E ",
+    /* 19 */ "~J1(2.5)\tこれは……シェリルのスケッチブックか？ ",
+    /* 20 */ "~J1(3.8)\t学校……にいるということなのか？ ~E ",
+    /* 21 */ "\tスケッチブックの表紙だ ~N\n\tこの絵は……わたしがモデルだ ",
+    /* 22 */ "\t５歳の誕生日に贈った ~N\n\tこのスケッチブックに ~N\n\tシェリルが最初に描いた絵だ…… ~E ",
+    /* 23 */ "~M ~C3\tＬＥＶＩＮ通り ~N\n\t\t犬小屋 ~E ",
+    /* 24 */ "\t特に何もない ~E ",
+    /* 25 */ "\tたぶん　犬小屋だろう ",
+    /* 26 */ "\t特に気になるものは見当たらないな ~E ",
+    /* 27 */ "\t~C2 民家の鍵 ~C7 が犬小屋の中に隠されていた ~N\n\t取りますか？ ~S4 ",
+    /* 28 */ "\t~C2 ［ライオン］の鍵 ~C7 がある ~N\n\t取りますか？ ~S4 ",
+    /* 29 */ "\t~C2 ［きこり］の鍵 ~C7 がある ~N\n\t取りますか？ ~S4 ",
+    /* 30 */ "\t~C2 ［かかし］の鍵 ~C7 がある ~N\n\t取りますか？ ~S4 ",
+    /* 31 */ "\t~C2 民家の鍵 ~C7 を使った ~E ",
+    /* 32 */ "\t~C2 ［ライオン］の鍵 ~C7 を使った ~E ",
+    /* 33 */ "\t~C2 ［きこり］の鍵 ~C7 を使った ~E ",
+    /* 34 */ "\t~C2 ［かかし］の鍵 ~C7 を使った ~E ",
+    /* 35 */ "~J0(20)\t何だ？ ~E ",
+    /* 36 */ "\t……また暗くなってしまった ",
+    /* 37 */ "\tいったい　どうなってるんだ？ ~E ",
+    /* 38 */ "\t犬の……頭が落ちている ~E ",
+    /* 39 */ "\t~C2 Ｋ・ゴードンの鍵 ~C7 を使った ~E ",
+    /* 40 */ "~C3\tミドウィッチ小学校 ~E ",
+    /* 41 */ "\tもう学校を調べる必要はないだろう ~E ",
+    /* 42 */ "~C3\tオーリッジ橋制御室 ~E ",
+    /* 43 */ "\t操作盤に鍵穴がある ~E ",
+    /* 44 */ "\t機械は作動している ~N\n\tスイッチを押しますか？ ~S4 ",
+    /* 45 */ "\t道がふさがれている ~N\n\tここから町を出ることはできないな ~E ",
+    /* 46 */ "\t乗ってきた車だ ~N\n\t壊れて動かなくなっている ",
+    /* 47 */ "\t……シェリルはどこに行ったのだろう？ ~N\n\t無事ならいいのだが…… ~E ",
+    /* 48 */ "~C3\tオーリッジ橋制御室 ~E ",
+    /* 49 */ "~C3\t給水用設備 ~N 許可無き立ち入りを禁ず ~E ",
+    /* 50 */ "\t……待てよ ",
+    /* 51 */ "\t鍵がかなり古くなっているな ~N\n\t何か強い力を加えれば壊せそうだ ~E ",
+    /* 52 */ "\t壁に貼られた地図に何か描かれている ~N\n\t手持ちの地図に描き写した ~E ",
+    /* 53 */ "\t壁に貼られた地図に何か描かれている ~E ",
+    /* 54 */ " ",
+    /* 55 */ "\t３つの鍵がかかっている ~E ",
+    /* 56 */ "\t２つの鍵がかかっている ~E ",
+    /* 57 */ "\t１つの鍵がかかっている ~E ",
+    /* 58 */ "\t鍵をあけた ~E ",
+    /* 59 */ "~H\t~C5 繁華街の地図 ~C7 がある ~N\n\t取りますか？ ~S4 ",
+    /* 60 */ "\t特に気になることはない ~E ",
+    /* 61 */ "\t跳ね橋の駆動機械が動いている ~E ",
+    /* 62 */ "\t跳ね橋の駆動機械は止まっている ~E ",
+    /* 63 */ "\tテレビが置いてある　停電しているらしく ~N\n\t電源を押しても反応がない ~E ",
+    /* 64 */ "\t役に立ちそうなものは見当たらない ~E ",
+    /* 65 */ "\t特に気になるものはない ~E ",
+    /* 66 */ "\t冷蔵庫の中は空っぽだ ~E ",
+    /* 67 */ "\tガレージのシャッターに ~N\n\tべったりと血が付着している ~E ",
+    /* 68 */ "~C3\tＫ・ゴードン ~E ",
+    /* 69 */ "~C3\tバルカン教会 ~E ",
+    /* 70 */ "\t~C2 小型削岩機 ~C7 がある ",
+    /* 71 */ "\tしかし　ガソリンが入っていないので ~N\n\t使うことはできない ~E ",
+    /* 72 */ "\t~C2 小型削岩機 ~C7 がある ~N\n\t取りますか？ ~S4 ",
+    /* 73 */ "\t~C2 チェーンソー ~C7 がある ",
+    /* 74 */ "\tしかし　ガソリンが入っていないので ~N\n\t使うことはできない ~E ",
+    /* 75 */ "\t~C2 チェーンソー ~C7 がある ~N\n\t取りますか？ ~S4 ",
+    /* 76 */ "\t~C2 ガソリン ~C7 を使った ~E ",
+    /* 77 */ "\tこれがリサの言っていた給水施設か？ ~E "
+#endif
 };
 
 void func_800E7B74(void) // 0x800E7B74
@@ -357,7 +434,7 @@ void MapEvent_AtWaterWorks(void) // 0x800E7E60
             break;
 
         case 6:
-            Event_DisplayMapMsg(false, 78, 0, 0, 0, false); // "This must be the water works."
+            Event_DisplayMapMsg(false, MAP_MSG(78), 0, 0, 0, false); // "This must be the water works."
             break;
 
         default:
@@ -374,17 +451,17 @@ void MapEvent_AtWaterWorks(void) // 0x800E7E60
 
 void func_800E816C(void) // 0x800E816C
 {
-    Event_ItemTake(InvItemId_RockDrill, DEFAULT_PICKUP_ITEM_COUNT, EventFlag_M2S00_PickupRockDrill, 73);
+    Event_ItemTake(InvItemId_RockDrill, DEFAULT_PICKUP_ITEM_COUNT, EventFlag_M2S00_PickupRockDrill, MAP_MSG(73));
 }
 
 void func_800E8198(void) // 0x800E8198
 {
-    Event_ItemTake(InvItemId_Chainsaw, DEFAULT_PICKUP_ITEM_COUNT, EventFlag_M2S00_PickupChainsaw, 76);
+    Event_ItemTake(InvItemId_Chainsaw, DEFAULT_PICKUP_ITEM_COUNT, EventFlag_M2S00_PickupChainsaw, MAP_MSG(76));
 }
 
 void MapEvent_PaperMapTake(void) // 0x800E81C4
 {
-    Event_PaperMapTake(2, EventFlag_M2S00_PickupMap, 60);
+    Event_PaperMapTake(2, EventFlag_M2S00_PickupMap, MAP_MSG(60));
 }
 
 void MapEvent_SteelPipeTake(void) // 0x800E81EC
@@ -1193,11 +1270,11 @@ void func_800E9DD8(void) // 0x800E9DD8
 
         case 3:
             Event_ScreenFadeCmd(ScreenFadeCmd_Auto, false, false, false, false);
-            Screen_BackgroundImgDrawAlt(D_800F22A0);
+            Screen_BackgroundImgDrawBlackFadeIn(D_800F22A0);
             break;
 
         case EventState_UseKey:
-            Screen_BackgroundImgDrawAlt(D_800F22A0);
+            Screen_BackgroundImgDrawBlackFadeIn(D_800F22A0);
 
             if (Savegame_EventFlagGet(EventFlag_M2S00_PickupKeyOfLion) && !Savegame_EventFlagGet(EventFlag_M2S00_LockOfLionOpen))
             {
@@ -1249,15 +1326,15 @@ void func_800E9DD8(void) // 0x800E9DD8
                         break;
 
                     case 1:
-                        g_DoorOfEclypse_MapMsgIdx = 58; // "There is one lock."
+                        g_DoorOfEclypse_MapMsgIdx = MAP_MSG(58); // "There is one lock."
                         break;
 
                     case 2:
-                        g_DoorOfEclypse_MapMsgIdx = 57; // "There are two locks."
+                        g_DoorOfEclypse_MapMsgIdx = MAP_MSG(57); // "There are two locks."
                         break;
 
                     case 3:
-                        g_DoorOfEclypse_MapMsgIdx = 56; // "There are three locks."
+                        g_DoorOfEclypse_MapMsgIdx = MAP_MSG(56); // "There are three locks."
                         break;
                 }
 
@@ -1267,7 +1344,7 @@ void func_800E9DD8(void) // 0x800E9DD8
 
         case 5:
             Event_DisplayMapMsg(false, g_DoorOfEclypse_MapMsgIdx, 0, 0, 0, false);
-            Screen_BackgroundImgDrawAlt(D_800F22A0);
+            Screen_BackgroundImgDrawBlackFadeIn(D_800F22A0);
             Sd_SfxPlay(Sfx_Unk1390, Q8(0.0f), Q8(0.5f));
             SysWork_StateStepIncrement(0);
             break;
@@ -1281,12 +1358,12 @@ void func_800E9DD8(void) // 0x800E9DD8
             SysWork_StateStepIncrement(0);
 
         case 7:
-            Screen_BackgroundImgDrawAlt(D_800F22A0);
+            Screen_BackgroundImgDrawBlackFadeIn(D_800F22A0);
             Event_DisplayMapMsg(false, g_DoorOfEclypse_MapMsgIdx, 0, 0, 0, false);
             break;
 
         case 8:
-            Screen_BackgroundImgDrawAlt(D_800F22A0);
+            Screen_BackgroundImgDrawBlackFadeIn(D_800F22A0);
             Event_BgTextureCmd(BgTextureCmd_AwaitLoad, 0, false);
             break;
 
@@ -1306,7 +1383,7 @@ void func_800E9DD8(void) // 0x800E9DD8
             break;
 
         case 10:
-            Screen_BackgroundImgDrawAlt(D_800F22A0);
+            Screen_BackgroundImgDrawBlackFadeIn(D_800F22A0);
             Event_WaitTimer(Q12(1.0f), false);
 
             if (g_Controller0->buttonFlags.clicked & (g_GameWorkPtr->config.controllerConfig.enter |
@@ -1322,12 +1399,12 @@ void func_800E9DD8(void) // 0x800E9DD8
             break;
 
         case 11:
-            Screen_BackgroundImgDrawAlt(D_800F22A0);
+            Screen_BackgroundImgDrawBlackFadeIn(D_800F22A0);
             Event_DisplayMapMsg(false, g_DoorOfEclypse_MapMsgIdx, 0, 0, 0, false);
             break;
 
         case 12:
-            Screen_BackgroundImgDrawAlt(D_800F22A0);
+            Screen_BackgroundImgDrawBlackFadeIn(D_800F22A0);
             Event_ScreenFadeCmd(ScreenFadeCmd_Auto, true, false, false, false);
             break;
 
@@ -1443,11 +1520,11 @@ void func_800EA6E0(void) // 0x800EA6E0
         case EventState_Msg:
             if (Savegame_EventFlagGet(EventFlag_MapMark_OldTown_FineyStRightKeyArrow))
             {
-                Event_DisplayMapMsg(false, 54, 0, 0, 0, false); // "Something is written on the map on the wall.{E}"
+                Event_DisplayMapMsg(false, MAP_MSG(54), 0, 0, 0, false); // "Something is written on the map on the wall.{E}"
             }
             else
             {
-                Event_DisplayMapMsg(false, 52, 0, 0, 0, false); // "... Copied it to the map."
+                Event_DisplayMapMsg(false, MAP_MSG(52), 0, 0, 0, false); // "... Copied it to the map."
             }
 
             Event_BgTextureCmd(BgTextureCmd_Draw, 0, false);
@@ -1718,7 +1795,7 @@ void func_800EB090(void) // 0x800EB090
             break;
 
         case 2:
-            Event_DisplayMapMsg(false, 61, 0, 0, 0, false); // "Nothing special."
+            Event_DisplayMapMsg(false, MAP_MSG(61), 0, 0, 0, false); // "Nothing special."
             break;
 
         default:
@@ -1758,9 +1835,19 @@ void func_800EB174(void) // 0x800EB174
             break;
 
         case 4:
-            Event_CameraPositionSet(NULL, Q12(-261.27f), Q12(-2.11f), Q12(-105.46f), Q12(0.0f), Q12(0.0f), Q12(0.0f), Q12(0.0f), true);
-            Event_CameraLookAtSet(NULL, Q12(-262.74f), Q12(0.07f), Q12(-102.45f), Q12(0.0f), Q12(0.0f), Q12(0.0f), Q12(0.0f), true);
+            // Warp camera.
+            Event_CameraPositionSet(NULL,
+                                    Q12(-261.27f), Q12(-2.11f), Q12(-105.46f),
+                                    Q12(0.0f), Q12(0.0f),
+                                    Q12(0.0f), Q12(0.0f),
+                                    true);
+            Event_CameraLookAtSet(NULL,
+                                  Q12(-262.74f), Q12(0.07f), Q12(-102.45f),
+                                  Q12(0.0f), Q12(0.0f),
+                                  Q12(0.0f), Q12(0.0f),
+                                  true);
 
+            // Warp player.
             g_SysWork.playerWork.player.position.vx = Q12(-262.39f);
             g_SysWork.playerWork.player.position.vz = Q12(-104.33f);
             g_SysWork.playerWork.player.rotation.vy = Q12_ANGLE(45.0f);
@@ -1786,8 +1873,10 @@ void func_800EB174(void) // 0x800EB174
             break;
 
         default:
+            // Restore player control.
             Player_ControlUnfreeze(false);
             SysWork_StateSetNext(SysState_Gameplay);
+
             vcReturnPreAutoCamWork(true);
             func_8003D01C();
             Player_WeaponAttackRestore();
@@ -1997,11 +2086,13 @@ void Map_WorldObjectsInit(void) // 0x800EB908
 
     func_800EE5D0();
 
+#if VERSION_EQUAL_OR_NEWER(USA) // @bugfix?
     if (Savegame_EventFlagGet(EventFlag_132) && !Savegame_EventFlagGet(EventFlag_M2S00_KGordonDoorOpen))
     {
         // TODO: Should be `~((1 << 8) | (1 << 6) | (1 << 7));`.
         g_SavegamePtr->mapEnemyStates[10] &= 0xF3FFFEFF;
     }
+#endif
 
     if (g_SavegamePtr->gameDifficulty == GameDifficulty_Easy)
     {

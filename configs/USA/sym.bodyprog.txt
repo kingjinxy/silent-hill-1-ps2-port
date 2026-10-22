@@ -38,7 +38,7 @@ FONT_12X16_GLYPH_WIDTHS                      = 0x80025D6C;
 STRING_COLORS                                = 0x80025DC0;
 
 //-----------------------------------------------------------------------------
-//--- PA: 0x00179C   VA: 0x800262FC   subsegment: .rodata, items/item_screens_3
+//--- PA: 0x001798   VA: 0x800262F8   subsegment: .rodata, items/item_screens_3
 //-----------------------------------------------------------------------------
 INV_ITEM_ROTATIONS                           = 0x800262FC; // type:DVECTOR size:0x380
 LABEL_STR_POS_TABLE                          = 0x80027DD8; // size:0x20
@@ -49,6 +49,11 @@ LABEL_STR_POS_TABLE                          = 0x80027DD8; // size:0x20
 tileScreenEdgesX                             = 0x80028B2C;
 tileScreenEdgesY                             = 0x80028B34;
 
+//----------------------------------------------------------------------------
+//--- PA: 0x003FE4   VA: 0x80028B44   subsegment: .rodata, collision/collision
+//----------------------------------------------------------------------------
+hack_D_80028B8C_fix                          = 0x80028B8C; // type:s32 can_reference:False - Garbage padding where data coincidentally equals `Gfx_Items_Draw` address, causing spimdisasm to create a relocation here.
+
 //-------------------------------------------------------------------------------
 //--- PA: 0x004034   VA: 0x80028B94   subsegment: .rodata, bodyprog_data_80028B94
 //-------------------------------------------------------------------------------
@@ -58,6 +63,11 @@ HARRY_WEAPON_ANIM_INFOS                      = 0x80028B94;
 //--- PA: 0x004BF0   VA: 0x80029750   subsegment: .rodata, player_control
 //-----------------------------------------------------------------------
 hack_D_8002A844_fix                          = 0x8002A844; // type:s32
+
+//--------------------------------------------------------------------------
+//--- PA: 0x0060A4   VA: 0x8002AC04   subsegment: .rodata, bodyprog_80089090
+//--------------------------------------------------------------------------
+g_VibScript_Steps                            = 0x8002AC04;
 
 //--------------------------------------------------------------
 //--- PA: 0x006754   VA: 0x8002B2B4   subsegment: .rodata, water
@@ -105,7 +115,7 @@ MemCard_Process_Load                         = 0x8002F2C4;
 MemCard_Process_Save                         = 0x8002F61C;
 MemCard_SaveInfoClear                        = 0x8002FB64;
 MemCard_UserConfigCopy                       = 0x8002FBB4; // type:func
-MemCard_BiggestTotalSavegameCountGet         = 0x8002FC3C;
+MemCard_FileWithBiggestTotalSavegameCountGet = 0x8002FC3C;
 MemCard_GameDataCopy                         = 0x8002FCCC; // type:func
 MemCard_TotalSavegameCountUpdate             = 0x8002FD5C;
 MemCard_TotalSavegameCountStepUpdate         = 0x8002FDB0;
@@ -114,7 +124,7 @@ MemCard_ChecksumUpdate                       = 0x8002FF30; // type:func
 MemCard_ChecksumValidate                     = 0x8002FF74; // type:func
 MemCard_ChecksumGenerate                     = 0x8002FFD0; // type:func
 MemCard_FilenameGenerate                     = 0x80030000; // type:func
-MemCard_SaveBlockInit                        = 0x800300B4; // type:func
+MemCard_SaveBlockGenerate                    = 0x800300B4; // type:func
 MemCard_DeviceTest                           = 0x80030288; // type:func
 MemCard_DeviceFormat                         = 0x8003030C; // type:func
 MemCard_FileClear                            = 0x80030334; // type:func
@@ -129,7 +139,7 @@ MemCard_SwEventsClose                        = 0x80030668; // type:func
 MemCard_HwEventsClose                        = 0x800306C8; // type:func
 MemCard_SwEventsTest                         = 0x80030734; // type:func
 MemCard_SwEventsReset                        = 0x800307BC; // type:func
-MemCard_HwEventsTest                         = 0x80030810; // type:func
+MemCard_HwLastEvent                          = 0x80030810; // type:func
 MemCard_HwEventsReset                        = 0x80030820; // type:func
 MemCard_HwEventSpIOE                         = 0x80030884; // type:func
 MemCard_HwEventSpERROR                       = 0x80030894; // type:func
@@ -154,7 +164,7 @@ MemCard_DevicePathGenerate                   = 0x800314A4; // type:func
 //-------------------------------------------------------------------------
 Screen_BackgroundImgDraw                     = 0x800314EC; // type:func
 Screen_BackgroundImgTransition               = 0x800317CC; // type:func
-Screen_BackgroundImgDrawAlt                  = 0x80031AAC; // type:func
+Screen_BackgroundImgDrawBlackFadeIn          = 0x80031AAC; // type:func
 Screen_BackgroundMotionBlur                  = 0x80031CCC; // type:func
 
 //-----------------------------------------------------------------------
@@ -558,20 +568,23 @@ WorldMap_Draw                                = 0x80044090; // type:func
 WorldMap_SubcellVisibleCheck                 = 0x80044420; // type:func
 
 //-------------------------------------------------------------------------------
-//--- PA: 0x01FA44   VA: 0x800445A4   subsegment: c, world/bodyprog_anim_800445A4
+//--- PA: 0x01FA44   VA: 0x800445A4   subsegment: c, chara/anim
 //-------------------------------------------------------------------------------
-Anim_BoneInit                                = 0x800445A4; // type:func
-Anim_BoneUpdate                              = 0x800446D8; // type:func
+Anim_BonesInit                               = 0x800445A4; // type:func
+Anim_BonesUpdate                             = 0x800446D8; // type:func
+Anim_InfoGet                                 = 0x80044918; // type:func
+Anim_CharaUpdate                             = 0x80044950; // type:func
 Anim_DurationGet                             = 0x800449AC; // type:func
-Anim_PlaybackOnce                            = 0x800449F0; // type:func
-Anim_PlaybackLoop                            = 0x80044B38; // type:func
+Anim_PlayOnce                                = 0x800449F0; // type:func
+Anim_PlayLoop                                = 0x80044B38; // type:func
 Anim_BlendLinear                             = 0x80044CA4; // type:func
 Anim_BlendEaseOut                            = 0x80044DF0; // type:func
 
 //-------------------------------------------------------------------------------
-//--- PA: 0x0203B4   VA: 0x80044F14   subsegment: c, world/bodyprog_bone_80044F14
+//--- PA: 0x0203B4   VA: 0x80044F14   subsegment: c, chara/bone
 //-------------------------------------------------------------------------------
-Bone_ModelIdxGet                             = 0x80044F6C; // type:func
+Bone_ExtraRotationSet                        = 0x80044F14; // type:func
+Bone_ModelIdxIterator                        = 0x80044F6C; // type:func
 Skeleton_Init                                = 0x80044FE0; // type:func
 Skeleton_BoneModelAssign                     = 0x800451B0; // type:func
 
@@ -694,7 +707,7 @@ Gfx_StringDrawInt                            = 0x8004B9F8; // type:func
 //--- PA: 0x026FB0   VA: 0x8004BB10   subsegment: c, items/item_screens_cam
 //-------------------------------------------------------------------------
 ItemScreen_TmdGsFCallInit                    = 0x8004BB10; // type:func
-ItemScreen_CamSet                            = 0x8004BB4C; // type:func
+ItemScreen_CameraSet                         = 0x8004BB4C; // type:func
 GameFs_TmdDataAlloc                          = 0x8004BCBC; // type:func
 ItemScreen_ItemRotate                        = 0x8004BCDC; // type:func
 
@@ -713,12 +726,13 @@ Game_TimerUpdate                             = 0x8004C8DC; // type:func
 //-----------------------------------------------------------------------
 GameState_ItemScreens_Update                 = 0x8004C9B0; // type:func
 Gfx_Results_Save                             = 0x8004D1A0; // type:func
-Inventory_Logic                              = 0x8004D518; // type:func
+Inventory_Update                             = 0x8004D518; // type:func
 Inventory_ItemUse                            = 0x8004E6D4; // type:func
 Gfx_Inventory_CmdOptionsDraw                 = 0x8004E864; // type:func
 Gfx_Inventory_ScrollArrowsDraw               = 0x8004EC7C; // type:func
 Player_ItemRemove                            = 0x8004EE94; // type:func
-Gfx_Inventory_UnavailableMapText             = 0x8004F57C; // type:func
+Inventory_ItemCommandSet                     = 0x8004EF48;
+Inventory_UnavailableMapTextDraw             = 0x8004F57C; // type:func
 Inventory_DirectionalInputSet                = 0x8004F5DC; // type:func
 
 //-----------------------------------------------------------------------
@@ -2454,7 +2468,7 @@ g_Screen_FadeProgress                        = 0x800A8E94; // type:s32
 //-----------------------------------------------------------------------------
 //--- PA: 0x084338   VA: 0x800A8E98   subsegment: .data, screen/cutscene_border
 //-----------------------------------------------------------------------------
-g_BlackBorderShade                           = 0x800A8F40;
+g_Screen_BlackBorderShade                    = 0x800A8F40;
 
 //-------------------------------------------------------------------------
 //--- PA: 0x0843E4   VA: 0x800A8F44   subsegment: .data, screen/screen_data
@@ -2524,12 +2538,12 @@ g_AmbientVabTaskLoad                         = 0x800A98AC; // type:u16 size:0x50
 //--- PA: 0x084D9C   VA: 0x800A98FC   subsegment: .data, game_boot/fs_chara_anim
 //------------------------------------------------------------------------------
 g_CharaAnimDataIdxs                          = 0x800A98FC;
-
-//------------------------------------------------------------------------
-//--- PA: 0x084DCC   VA: 0x800A992C   subsegment: .data, events/bgm_update
-//------------------------------------------------------------------------
 g_CharaModelAnimsData                        = 0x800A992C;
 D_800A998C                                   = 0x800A998C; // type:AnimInfo size:0x10
+
+//------------------------------------------------------------------------
+//--- PA: 0x084E3C   VA: 0x800A999C   subsegment: .data, events/bgm_update
+//------------------------------------------------------------------------
 g_Bgm_ChannelSetProcessState                 = 0x800A99A0;
 g_Bgm_ChannelLimits                          = 0x800A99A4;
 
@@ -2567,12 +2581,12 @@ g_MainMenu_NewGameSelectedDifficultyIdx      = 0x800A9A84;
 g_MemCard_PrevSavegameCount                  = 0x800A9A88;
 MAIN_MENU_ENTRY_STRINGS                      = 0x800A9A8C;
 DIFFICULTY_MENU_ENTRY_STRINGS                = 0x800A9AA0;
-
-//-----------------------------------------------------------------------
-//--- PA: 0x08534C   VA: 0x800A9EAC   subsegment: .data, world/world_draw
-//-----------------------------------------------------------------------
 RAND.67                                      = 0x800A9EAC;
 FOG_COUNT.68                                 = 0x800A9EB0;
+
+//-----------------------------------------------------------------------
+//--- PA: 0x085354   VA: 0x800A9EB4   subsegment: .data, world/world_draw
+//-----------------------------------------------------------------------
 IMAGE.81                                     = 0x800A9EB4;
 IMAGE_TIM.86                                 = 0x800A9EBC;
 IMAGE_ETC.87                                 = 0x800A9EC4;
@@ -2616,7 +2630,7 @@ g_Items_GunsMaxLoadAmmo                      = 0x800AD4A0;
 D_800AD4C8                                   = 0x800AD4C8; // size:0x690
 g_Inventory_CmdSelectedIdx                   = 0x800ADB58; // type:s32
 g_Inventory_SelectionId                      = 0x800ADB5C; // type:u32
-INVENTORY_ITEM_NAMES                         = 0x800ADB60; // type:u32 size:0x30C
+INV_ITEM_NAMES                               = 0x800ADB60; // type:u32 size:0x30C
 g_ItemDescriptions                           = 0x800ADE6C; // type:u32 size:0x30C
 g_Inventory_SelectedItemIdx                  = 0x800AE17C;
 g_Items_DisplayedCount                       = 0x800AE180;
@@ -2671,6 +2685,11 @@ deflt_watch_mv_prm                           = 0x800AFCB8; // type:VC_WATCH_MV_P
 self_view_watch_mv_prm                       = 0x800AFCC4; // type:VC_WATCH_MV_PARAM size:0xC
 cam_mv_prm_user                              = 0x800AFCD0; // type:VC_CAM_MV_PARAM size:0x10
 excl_r_ary                                   = 0x800AFCE0; // int[9]
+
+//------------------------------------------------------------------------
+//--- PA: 0x08B1A4   VA: 0x800AFD04   subsegment: .data, bodyprog_80089090
+//------------------------------------------------------------------------
+g_VibScript_StepHandlers                     = 0x800AFD08;
 
 //------------------------------------------------------------
 //--- PA: 0x08B1DC   VA: 0x800AFD3C   subsegment: .data, water
@@ -2985,8 +3004,8 @@ g_MemCard_SaveHeaderInfo_Slot1               = 0x800B2780;
 g_MemCard_SaveHeaderInfo_Slot2               = 0x800B3680;
 g_MemCard_SaveHeaderInfo_Null                = 0x800B4580;
 g_MemCard_SysAvailibityStatus                = 0x800B5480; // size:0x4
-g_MemCard_Work                               = 0x800B5488; // size:0x80
-g_MemCard_SaveWork                           = 0x800B5508; // size:0x718
+g_MemCardWork                                = 0x800B5488; // size:0x80
+g_MemCardSaveWork                            = 0x800B5508; // size:0x718
 
 //--------------------------------------------------------------------------
 //--- PA: 0x0910C0   VA: 0x800B5C20   subsegment: .bss, text/text_debug_draw
@@ -3000,13 +3019,9 @@ g_Text_Debug_PositionSet1                    = 0x800B5C24; // type:DVECTOR size:
 g_Screen_PrevFadeProgressState               = 0x800B5C28; // type:s32
 
 //------------------------------------------------------------------------
-//--- PA: 0x0910D0   VA: 0x800B5C30   subsegment: .bss, screen/screen_draw
+//--- PA: 0x0910D0   VA: 0x800B5C30   subsegment: .bss, screen/screen_data
 //------------------------------------------------------------------------
 g_ScreenFadeTimestep                         = 0x800B5C30; // type:s32
-
-//------------------------------------------------------------------------
-//--- PA: 0x0910D4   VA: 0x800B5C34   subsegment: .bss, screen/screen_data
-//------------------------------------------------------------------------
 g_VBlanks                                    = 0x800B5C34; // type:s32
 g_UncappedVBlanks                            = 0x800B5C38; // type:s32
 g_OtTags0                                    = 0x800B5C40; // type:u32 size:0x80
@@ -3150,8 +3165,11 @@ g_GlyphSpritePositionX                       = 0x800C391C;
 //----------------------------------------------------------------------------
 //--- PA: 0x09EDC8   VA: 0x800C3928   subsegment: .bss, items/item_screens_cam
 //----------------------------------------------------------------------------
-D_800C3928                                   = 0x800C3928;
-g_Player_WeaponAttack                        = 0x800C3950;
+g_ItemScreen_CameraTransform                 = 0x800C3928;
+g_ItemScreen_PlayerWeaponAttack              = 0x800C3950;
+g_ItemScreen_ViewDistance                    = 0x800C3954;
+g_ItemScreen_GeomOffsetX                     = 0x800C3958;
+g_ItemScreen_GeomOffsetY                     = 0x800C395C;
 
 //--------------------------------------------------------------------------
 //--- PA: 0x09EE08   VA: 0x800C3968   subsegment: .bss, items/item_screens_2
@@ -3174,10 +3192,14 @@ g_Inventory_PrevSelectionId                  = 0x800C399C;
 //--- PA: 0x09EE48   VA: 0x800C39A8   subsegment: .bss, items/item_screens_3
 //--------------------------------------------------------------------------
 g_Items_Lights                               = 0x800C39A8;
+g_ItemScreen_CameraCoord                     = 0x800C3AE8;
+g_ItemScreen_CameraRotation                  = 0x800C3B38;
+g_ItemScreen_CameraView                      = 0x800C3B48;
 g_Item_MapLoadableItems                      = 0x800C3BB8;
 g_Items_Transforms                           = 0x800C3BE8;
 g_Items_ItemsModelData                       = 0x800C3D78;
 g_Inventory_EquippedItemIdx                  = 0x800C3E34;
+g_Ranking_ExtraItemFlags                     = 0x800C3E40;
 g_Items_Coords                               = 0x800C3E48;
 
 //---------------------------------------------------------------------------

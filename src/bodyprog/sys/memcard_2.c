@@ -9,7 +9,6 @@
 #ifndef PAD_HACK_IGNORE
     s16 __pad_bss_800BCD2A;
     s16 __pad_bss_800BCD32;
-    s8  __pad_bss_800BCD39;
 #endif
 
 // ========================================
@@ -18,12 +17,13 @@
 
 s16                  g_MemCard_SavegameCount;
 s_SaveScreenElement* g_MemCard_ActiveMemCardSlotSaves;
-u8                   g_Savegame_ElementCount0[MEMCARD_SLOT_COUNT_MAX];
-u32                  g_MemCard_AllMemCardsStatus;
-s8                   g_SaveScreen_SaveScreenState;
-s16                  g_MemCard_TotalElementsCount;
-u8                   g_Savegame_ElementCount1[MEMCARD_SLOT_COUNT_MAX];
-u8                   g_Savegame_SelectedElementIdx;
+u8                   g_Savegame_ElementCount0[MEMCARD_SLOT_COUNT_MAX]; /** Number of elements in each memory card. */
+u32                  g_MemCard_AllMemCardsStatus;                      /** Stores statuses of all memory cards/devices. */
+s8                   g_SaveScreen_SaveScreenState;                     /** Some determinator for the state of the save screen. 2 - Saving, 3 - Loading. */
+s8                   g_SaveScreen_IsLoadError;                         /** `bool` */
+s16                  g_MemCard_TotalElementsCount;                     /** Counts all elements of all inserted memory cards. */
+u8                   g_Savegame_ElementCount1[MEMCARD_SLOT_COUNT_MAX]; /** Number of elements in each memory card. */
+u8                   g_Savegame_SelectedElementIdx;                    /** Index of selected element in the selected file from the memory card. */
 s8                   g_SelectedFileIdx;
 s8                   g_SelectedDeviceId;
 
@@ -31,7 +31,7 @@ u8 g_SlotElementSelectedIdx[MEMCARD_SLOT_COUNT_MAX] = { 0, 0 };
 s8 g_SelectedSaveSlotIdx                            = 0;
 u8 D_800A97D7                                       = 0;
 s8 g_SaveScreen_IsInSaveScreen                      = 0xFF;
-s8 D_800A97D9                                       = 0; // @unused Dead code. Only used for a check which ask if this is 0.
+s8 D_800A97D9                                       = 0;
 
 // ========================================
 // INLINE FUNCTIONS
@@ -80,8 +80,8 @@ static bool MemCard_FilesDamagedCheck(s32 deviceId) // 0x800334D8
 
 bool MemCard_ElementsUpdate(void) // 0x80033548
 {
-    u32                         unavailableMemCardSlot[MEMCARD_SLOT_COUNT_MAX]; // Boolean.
-    s32                         isWriteNewSaveAvailable[MEMCARD_DEVICE_COUNT_MAX]; // Boolean. Used to generate `Create New File` and `New Save`.
+    u32                         unavailableMemCardSlot[MEMCARD_SLOT_COUNT_MAX]; // `bool`
+    s32                         isWriteNewSaveAvailable[MEMCARD_DEVICE_COUNT_MAX]; // `bool` | Used to generate `Create New File` and `New Save`.
     u32                         prevStatusCpy;
     s32                         memCardStatus3; /** @brief Memory cards status.
                                                  * This variable is based upon `e_MemCardState`. This variable is first defined with the value `1`
@@ -207,7 +207,7 @@ bool MemCard_ElementsUpdate(void) // 0x80033548
                 case MemCardState_Unavailable:
                     g_MemCard_ActiveMemCardSlotSaves->type = SavegameEntryType_NoMemCard;
 
-#if VERSION_EQUAL_OR_NEWER(JAP1) // @bug Fail safe.
+#if VERSION_EQUAL_OR_NEWER(JAP1) // @bugfix Fail safe.
                                  // If the game have as selected the slot where a memory card is
                                  // not available (disconected) it will automatically switch to the one available.
                     if (g_SelectedSaveSlotIdx == (WrapIdx(i) >> 2))

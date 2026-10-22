@@ -161,7 +161,7 @@ SILENT_ASSETS_FLAGS := -exe "$(ROM_DIR)/$(GAME_VERSION)/$(GAME_FILE_EXE)" -fs "$
 INSERT_OVLS_FLAGS   := -exe "$(ROM_DIR)/$(GAME_VERSION)/$(GAME_FILE_EXE)" -fs "$(ROM_DIR)/$(GAME_VERSION)/$(GAME_FILE_SILENT)" -ftb "$(ASSETS_DIR)/$(GAME_VERSION)/filetable.c.inc" -b $(OUT_DIR) -xml "$(ROM_DIR)/$(GAME_VERSION)/layout.xml" -o $(ROM_DIR)
 
 # Targets that will run tools/postbuild.py after being linked & extracted from ELF.
-TARGET_POSTBUILD := bodyprog screens/b_konami screens/stream maps/map3_s06 maps/map4_s05 maps/map5_s01 maps/map6_s01
+TARGET_POSTBUILD := main bodyprog screens/b_konami screens/stream screens/options maps/map3_s06 maps/map4_s05 maps/map5_s01 maps/map6_s01 maps/map1_s04 maps/map4_s00 maps/map4_s06 maps/map6_s05 maps/map2_s03
 
 # Adjusts compiler and assembler flags based on source file location.
 # - Files under main executable paths use -G8; overlay files use -G0.
@@ -615,6 +615,8 @@ objdiff-config-all:
 
 objdiff-generate:
 	$(MAKE) GAME_VERSION=$(GAME_VERSION) GEN_COMP_TU=1 regenerate
+# Hide jtbl symbols from the splat asm files, to improve data match % (see py script header)
+	$(PYTHON) $(TOOLS_DIR)/hide_jtbl_syms.py $(ASM_DIR)
 	$(MAKE) GAME_VERSION=$(GAME_VERSION) NON_MATCHING=1 SKIP_ASM=1 GEN_COMP_TU=1 build
 	mv $(BUILD_DIR)/$(ASM_DIR) $(EXPECTED_DIR)
 
@@ -727,10 +729,11 @@ $(BUILD_DIR)/%.c.o: $(BUILD_DIR)/%.c.s
 
 ifneq ($(OBJDIFF_FIX),1)
 
+# jlabel is global unless building objdiff expected objects (GEN_COMP_TU), which keep jumptable labels local.
 $(BUILD_DIR)/%.s.o: %.s
 	@mkdir -p $(dir $@)
 	$(call FlagsSwitch, $@)
-	$(AS) $(AS_FLAGS) -o $@ $<
+	$(AS) $(AS_FLAGS) $(if $(filter 1,$(GEN_COMP_TU)),--defsym JLABEL_LOCAL=1) -o $@ $<
 
 $(BUILD_DIR)/%.bin.o: %.bin
 	@mkdir -p $(dir $@)

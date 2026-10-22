@@ -627,8 +627,13 @@
     },
     // [91]
     {
+#if VERSION_EQUAL_OR_NEWER(USA)
         .positionX = Q12(4.0f),
         .triggerParam0 = 72,
+#else
+        .positionX = Q12(0.0f),
+        .triggerParam0 = 56,
+#endif
         .triggerParam1 = 32,
         .positionZ = Q12(-106.0f),
     },

@@ -131,7 +131,7 @@ typedef struct _PrimColor
 
 /** @brief Same as `setWH`, but uses 1x 32-bit store instead of 2x 16-bit stores. */
 #define setWHFast(p, _w, _h) \
-    *(u32*)(&(p)->w) = (((_w) & 0xFFFF) + ((_h) << 16))
+    *(u32*)(&(p)->w) = ((_w) + ((_h) << 16))
 
 /** @brief Combines `setUV0` and `setClut` into a single 32-bit stores. Also doesn't call `GetClut`. */
 #define setUV0AndClut(p, u, v, cx, cy) \
@@ -156,6 +156,22 @@ typedef struct _PrimColor
 /** @brief Combines `setcode` and `setRGB0`. */
 #define setCodeWord(p, code, rgb24) \
     *(u32*)(((u8*)(p)) + 4) = (((code) << 24) | ((rgb24) & 0xFFFFFF))
+
+/** @brief Sets `r0`, `g0`, `b0` and `code` from one packed 32-bit word. */
+#define setRGBC0Word(p, rgbc) \
+    *(u32*)(&(p)->r0) = (rgbc)
+
+/** @brief Sets `r1`, `g1`, `b1` and the padding byte after them from one packed 32-bit word. */
+#define setRGBC1Word(p, rgbc) \
+    *(u32*)(&(p)->r1) = (rgbc)
+
+/** @brief Sets `r2`, `g2`, `b2` and the padding byte after them from one packed 32-bit word. */
+#define setRGBC2Word(p, rgbc) \
+    *(u32*)(&(p)->r2) = (rgbc)
+
+/** @brief Sets `r3`, `g3`, `b3` and the padding byte after them from one packed 32-bit word. */
+#define setRGBC3Word(p, rgbc) \
+    *(u32*)(&(p)->r3) = (rgbc)
 
 // TODO: Perhaps `setRGBC0`, `setRGBC1`, `setRGBC2`, and `setRGBC3` were one macro. Incidental value set to padding fields suggests it?
 /** @brief Combines `setRGB0` and `setcode`. */

@@ -158,10 +158,10 @@ typedef struct _CollisionState
     /* 0x2    */ u16                   flags         : 16; /** `e_CollisionTriggerFlags` */
     /* 0x4    */ s_CollisionCharaState charaState;
     /* 0x34   */ s32                   field_34;
-    /* 0x38   */ s16                   field_38;
+    /* 0x38   */ s16                   field_38; // `distanceAlpha` for something.
     /* 0x3A   */ q11_4                 field_3A;
-    /* 0x3C   */ s16                   field_3C; // X?
-    /* 0x3E   */ s16                   field_3E; // Z?
+    /* 0x3C   */ q7_8                  field_3C; // X?
+    /* 0x3E   */ q7_8                  field_3E; // Z?
     /* 0x40   */ s8*                   field_40;
     /* 0x44   */ s_CollisionState_44   field_44;
     /* 0x7C   */ q23_8                 slopedGroundHeight; // TODO: How is `groundHeight` different?
@@ -197,11 +197,11 @@ typedef struct _CollisionState
                      {
                          /* 0x0 */ q7_8 bottom; // Set to absolute character bottom height.
                          /* 0x2 */ q7_8 top;    // Set to absolute character top height.
-                         /* 0x4 */ s16  field_4;
+                         /* 0x4 */ q7_8 radius;
                          /* 0x6 */ u8   collisionState; /** `e_CharaCollisionState` */
                          /* 0x8 */ u8*  field_8;
                      } s_1;
-    /* 0xA0   */ } field_A0;
+    /* 0xA0   */ } field_A0; // Ground info? Cell info? Cell state?
 
     /* 0xC8   */ u8                   subcellIdx; /** Secondary. Used only if detecting a subcell after not finding one. */
     /* 0xCA   */ q7_8                 groundHeight; // TODO: Base ground height with slope unaccounted for?
@@ -220,7 +220,10 @@ extern s_ActiveCollisionTriggers g_ActiveCollisionTriggers;
 /** @brief Initializes the collision subsystem, resetting flags and clearing the trigger zone count. */
 void Collision_Init(void);
 
-/** @brief Gets the active collision flags. */
+/** @brief Gets the active collision flags.
+ *
+ * @return Active collision flags.
+ */
 u16 Collision_FlagsGet(void);
 
 /** @brief Sets the active collision flags.
@@ -229,12 +232,16 @@ u16 Collision_FlagsGet(void);
  */
 void Collision_FlagsSet(u16 collFlags);
 
-/** @brief Sets additional active collision flags using OR.
+/** @brief Sets additional active collision flags.
  *
- * @param collFlags Collision flag bits to set.
+ * @param collFlags Additional collision flags to set.
  */
 void Collision_FlagBitsSet(u16 collFlags);
 
+/** @brief Clears active collision flags. `CollisionTriggerFlag_Map` is excepted.
+ *
+ * @param collFlags Collision flags to clear.
+ */
 void Collision_FlagBitsClear(s32 collFlags);
 
 /** @brief Runs through collision triggers and collects those containing the given XZ position.
@@ -243,7 +250,7 @@ void Collision_FlagBitsClear(s32 collFlags);
  * @param posZ Query Z position.
  * @param triggers Array of collision triggers.
  */
-void Collision_NearbyTriggersGet(q19_12 posX, q19_12 posZ, s_CollisionTrigger* triggers);
+void Collision_NearbyTriggersGet(q19_12 posX, q19_12 posZ, const s_CollisionTrigger* triggers);
 
 // ========================================
 // @split? IPD functions.
@@ -408,11 +415,11 @@ void func_8006BE40(s_CollisionState* state);
 
 void func_8006BF88(s_CollisionState* state, const SVECTOR3* splitVert);
 
-void func_8006C0C8(s_CollisionState* state, s16 arg1, q7_8 arg2);
+void func_8006C0C8(s_CollisionState* state, q3_12 arg1, q7_8 arg2);
 
-bool func_8006C1B8(u32 arg0, q3_12 arg1, s_CollisionState* state);
+bool func_8006C1B8(u32 arg0, q3_12 distAlpha, s_CollisionState* state);
 
-q3_12 func_8006C248(s32 packedDir, q3_12 arg1, q3_12 deltaX, q7_8 deltaZ, q7_8 arg4);
+q3_12 func_8006C248(s32 packedDir, q3_12 arg1, q3_12 deltaX, q7_8 deltaZ, q7_8 radius);
 
 bool func_8006C3D4(s_CollisionState* state, s_IpdCollisionData* collData, s32 subcellIdx);
 
@@ -437,17 +444,13 @@ void func_8006CF18(s_CollisionState* state, s_func_8006CF18* arg1, s32 idx);
 
 void func_8006D01C(VECTOR3* arg0, VECTOR3* offset, q3_12 offsetAlpha, s_CollisionState* state);
 
-void func_8006D2B4(VECTOR3* arg0, s_CollisionState_44* arg1);
+void func_8006D2B4(VECTOR3* offset, s_CollisionState_44* arg1);
 
 void func_8006D600(VECTOR3* pos, q19_12 angle, q19_12 rotX, q19_12 rotY, q19_12 dist);
 
-void func_8006D774(s_CollisionState* state, VECTOR3* arg1, VECTOR3* arg2);
+void func_8006D774(s_CollisionState* state, const VECTOR3* offset0, const VECTOR3* offset1);
 
 /** Offsets are Q23.8. */
-void func_8006D7EC(s_CollisionCharaState* charaState, SVECTOR* offset0, SVECTOR* offset1);
-
-// ========================================
-// @split? Harry weapon anim infos.
-// ========================================
+void func_8006D7EC(s_CollisionCharaState* charaState, const SVECTOR* offset0, const SVECTOR* offset1);
 
 #endif

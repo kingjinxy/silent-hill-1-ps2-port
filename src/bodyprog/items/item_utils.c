@@ -7,8 +7,11 @@
 #include "bodyprog/player.h"
 #include "bodyprog/math/math.h"
 
+#define playerChara g_SysWork.playerWork.player
+#define playerExtra g_SysWork.playerWork.extra
+#define playerProps playerChara.properties.player
+
 static const s32 __pad_rodata_80025E90 = 0;
-s32 __pad_bss_800C3964;
 
 void Inventory_ExitAnimEquippedItemUpdate(u8* weaponId) // 0x8004C088
 {
@@ -21,10 +24,6 @@ void Inventory_ExitAnimEquippedItemUpdate(u8* weaponId) // 0x8004C088
     s_Model* modelPtr0;
     s_Model* modelPtr1;
 
-    #define playerChara g_SysWork.playerWork.player
-    #define playerExtra g_SysWork.playerWork.extra
-    #define playerProps playerChara.properties.player
-
     Game_PlayerMovementsReset();
 
     playerState = playerExtra.state;
@@ -32,12 +31,12 @@ void Inventory_ExitAnimEquippedItemUpdate(u8* weaponId) // 0x8004C088
     if (playerExtra.state < PlayerState_Idle &&
         playerState >= PlayerState_None)
     {
-        if (g_Player_WeaponAttack != g_SysWork.playerCombat.weaponAttack)
+        if (g_ItemScreen_PlayerWeaponAttack != g_SysWork.playerCombat.weaponAttack)
         {
             g_SysWork.playerCombat.isAiming = false;
         }
 
-        weaponId = WEAPON_ATTACK_ID_GET(g_Player_WeaponAttack);
+        weaponId = WEAPON_ATTACK_ID_GET(g_ItemScreen_PlayerWeaponAttack);
         if (weaponId == EquippedWeaponId_Chainsaw &&
             g_SysWork.playerCombat.weaponAttack != weaponId)
         {
@@ -64,7 +63,7 @@ void Inventory_ExitAnimEquippedItemUpdate(u8* weaponId) // 0x8004C088
             default:
 
                 if (playerExtra.state == PlayerState_Combat &&
-                    g_Player_WeaponAttack != g_SysWork.playerCombat.weaponAttack)
+                    g_ItemScreen_PlayerWeaponAttack != g_SysWork.playerCombat.weaponAttack)
                 {
                     playerExtra.state = PlayerState_None;
                     playerProps.flags = PlayerFlag_None;
@@ -72,7 +71,7 @@ void Inventory_ExitAnimEquippedItemUpdate(u8* weaponId) // 0x8004C088
 
                 if (playerExtra.lowerBodyState >= PlayerLowerBodyState_Aim &&
                     g_SysWork.playerCombat.weaponAttack != NO_VALUE &&
-                    g_Player_WeaponAttack == g_SysWork.playerCombat.weaponAttack)
+                    g_ItemScreen_PlayerWeaponAttack == g_SysWork.playerCombat.weaponAttack)
                 {
                     extraModelPtr0 = &playerExtra.model;
                     if (extraModelPtr0->anim.status >= ANIM_STATUS(33, false))
@@ -105,7 +104,7 @@ void Inventory_ExitAnimEquippedItemUpdate(u8* weaponId) // 0x8004C088
                 }
 
                 playerProps.moveSpeed = Q12(0.0f);
-                playerProps.afkTimer         = Q12(0.0f);
+                playerProps.afkTimer  = Q12(0.0f);
         }
     }
 
@@ -117,23 +116,19 @@ void Inventory_ExitAnimEquippedItemUpdate(u8* weaponId) // 0x8004C088
     extraModelPtr2->anim.alpha = Q12(1.0f);
 
     // Disable upper body bones.
-    playerExtra.disabledAnimBones = HARRY_UPPER_BODY_BONE_MASK;
+    playerExtra.disabledAnimBoneFlags = HARRY_UPPER_BODY_BONE_MASK;
 
     // Set animation time.
     modelPtr3->anim.time      = Q12(modelPtr3->anim.keyframeIdx);
     extraModelPtr2->anim.time = Q12(extraModelPtr2->anim.keyframeIdx);
 
-    Anim_BoneUpdate((s_AnmHeader*)FS_BUFFER_0, g_SysWork.playerBoneCoords, modelPtr3->anim.keyframeIdx, modelPtr3->anim.keyframeIdx, Q12(1.0f));
+    Anim_BonesUpdate((s_AnmHeader*)FS_BUFFER_0, g_SysWork.playerBoneCoords, modelPtr3->anim.keyframeIdx, modelPtr3->anim.keyframeIdx, Q12(1.0f));
 
     // Re-enable upper body bones, disable lower body bones.
-    playerExtra.disabledAnimBones = HARRY_LOWER_BODY_BONE_MASK;
+    playerExtra.disabledAnimBoneFlags = HARRY_LOWER_BODY_BONE_MASK;
 
-    Anim_BoneUpdate((s_AnmHeader*)FS_BUFFER_0, g_SysWork.playerBoneCoords, extraModelPtr2->anim.keyframeIdx, extraModelPtr2->anim.keyframeIdx, Q12(1.0f));
+    Anim_BonesUpdate((s_AnmHeader*)FS_BUFFER_0, g_SysWork.playerBoneCoords, extraModelPtr2->anim.keyframeIdx, extraModelPtr2->anim.keyframeIdx, Q12(1.0f));
     func_8004C040();
-
-    #undef playerChara
-    #undef playerExtra
-    #undef playerProps
 }
 
 bool Inventory_GunsAvailableCheck(bool unused) // 0x8004C328
@@ -232,7 +227,7 @@ s32 Inventory_HyperBlasterUnlockTest(void) // 0x8004C45C
     if (g_SavegamePtr->mapIdx > MapIdx_MAP0_S00)
     {
         // Konami gun controller connected.
-        if (g_GameWork.controllers[1].analogController.status         == 0 &&
+        if (g_GameWork.controllers[1].analogController.status        == 0 &&
             g_GameWork.controllers[1].analogController.receivedBytes == 1 &&
             g_GameWork.controllers[1].analogController.terminalType  == PadTerminalType_GunControllerKonami)
         {
@@ -255,17 +250,17 @@ s32 Inventory_HyperBlasterFunctionalTest(void) // 0x8004C4F8
     {
         if ((g_SavegamePtr->clearGameEndings & GameEndingFlag_Ufo) != 0)
         {
-            // Game completed with Ufo ending.
+            // Game completed with UFO ending.
             return 2;
         }
 
-        // Returns 1 if controller port 2 has Konami gun controller connected.
-        return g_GameWork.controllers[1].analogController.status         == 0 &&
+        // Return 1 if controller port 2 has Konami gun controller connected.
+        return g_GameWork.controllers[1].analogController.status        == 0 &&
                g_GameWork.controllers[1].analogController.receivedBytes == 1 &&
                g_GameWork.controllers[1].analogController.terminalType  == PadTerminalType_GunControllerKonami;
     }
 
-    // Neither of the conditions has been completed.
+    // Neither condition is met.
     return 0;
 }
 
@@ -276,120 +271,122 @@ s32 Game_HyperBlasterBeamColorGet(void) // 0x8004C54C
 
 void func_8004C564(u8 arg0, s8 weaponAttack) // 0x8004C564
 {
-    s32 temp_v1;
-    static s8 D_800C3960;
-    static s8 D_800C3961;
-    static s8 D_800C3962;
-    static u8 D_800C3963;
+    s32 flagsCpy;
+
+    static s8 curMapIdx;
+    static s8 curVol;
+    static s8 curSoundType;
+    static u8 curFlags; // TODO: Or weapon attack?
 
     switch (weaponAttack)
     {
         case NO_VALUE:
-            D_800C3960 = g_SavegamePtr->mapIdx;
-            D_800C3962 = 0;
-            D_800C3963 = 0;
-            D_800C3961 = 32;
+            curMapIdx    = g_SavegamePtr->mapIdx;
+            curSoundType = 0;
+            curFlags     = 0;
+            curVol       = 32;
 
             func_8008B398();
 
-            g_SysWork.playerWork.player.properties.player.gasWeaponPowerTimer = Q12(0.0f);
+            playerProps.gasWeaponPowerTimer = Q12(0.0f);
             break;
 
         case 0:
-            D_800C3960 = g_SavegamePtr->mapIdx;
-            D_800C3962 = 0;
-            D_800C3961 = 32;
+            curMapIdx    = g_SavegamePtr->mapIdx;
+            curSoundType = 0;
+            curVol       = 32;
 
             func_8008B438(arg0 != (1 << 1), 32, 0);
             func_8008B3E4(Q8(0.0f));
 
             if (arg0 != (1 << 1))
             {
-                D_800C3963 |= 1 << 0;
+                curFlags |= 1 << 0;
             }
             else
             {
-                D_800C3963 |= 1 << 1;
+                curFlags |= 1 << 1;
             }
             break;
 
         case 1:
             if (arg0 == (1 << 1))
             {
-                func_8008B40C((u8)D_800C3961, D_800C3962);
-                D_800C3963 |= 1 << 2;
+                func_8008B40C((u8)curVol, curSoundType);
+                curFlags |= 1 << 2;
             }
             break;
 
         case 2:
-            if (D_800C3961 != 0)
+            if (curVol != 0)
             {
-                D_800C3961 -= ((g_DeltaTime / 68) == 0) ? 1 : (g_DeltaTime / 68);
-                D_800C3962  = D_800C3961 - 32;
-                D_800C3961  = CLAMP(D_800C3961, 0, 32);
+                curVol      -= ((g_DeltaTime / 68) == 0) ? 1 : (g_DeltaTime / 68);
+                curSoundType = curVol - 32;
+                curVol       = CLAMP(curVol, 0, 32);
 
                 func_8008B438(arg0 != 2, 0, 0);
                 func_8008B3E4(NO_VALUE);
 
                 if (arg0 == 2)
                 {
-                    func_8008B40C((u8)D_800C3961, D_800C3962);
+                    func_8008B40C((u8)curVol, curSoundType);
                 }
 
-                if (D_800C3961 == 0)
+                if (curVol == 0)
                 {
                     func_8008B398();
-                    D_800C3963                                                                    = 0;
-                    D_800C3962                                                                    = 0;
-                    g_SysWork.playerWork.player.properties.player.gasWeaponPowerTimer = Q12(0.0f);
-                    g_SysWork.playerWork.player.field_44.field_0                             = 0;
+
+                    curFlags                        = 0;
+                    curSoundType                    = 0;
+                    playerProps.gasWeaponPowerTimer = Q12(0.0f);
+                    playerChara.field_44.field_0    = 0;
                 }
             }
             break;
 
         case 3:
-            if (D_800C3963 & (1 << 1))
+            if (curFlags & (1 << 1))
             {
-                if (!(D_800C3963 & (1 << 2)))
+                if (!(curFlags & (1 << 2)))
                 {
                     func_8008B438(0, 0, 0);
                     func_8008B3E4(Q8(0.0f));
 
-                    g_SysWork.playerWork.player.properties.player.gasWeaponPowerTimer = Q12(0.0f);
-                    D_800C3963                                                              -= 2;
+                    playerProps.gasWeaponPowerTimer = Q12(0.0f);
+                    curFlags                       -= 2;
                 }
             }
             break;
 
         case 4:
-            if (g_SavegamePtr->mapIdx != D_800C3960)
+            if (g_SavegamePtr->mapIdx != curMapIdx)
             {
-                D_800C3960 = g_SavegamePtr->mapIdx;
-                D_800C3963 = 0;
-                D_800C3962 = 0;
-                D_800C3961 = 32;
+                curMapIdx    = g_SavegamePtr->mapIdx;
+                curFlags     = 0;
+                curSoundType = 0;
+                curVol       = 32;
 
-                temp_v1 = arg0;
-                if (temp_v1 != (1 << 1))
+                flagsCpy = arg0;
+                if (flagsCpy != (1 << 1))
                 {
-                    D_800C3963 = 1 << 0;
+                    curFlags = 1 << 0;
                 }
                 else
                 {
-                    D_800C3963 = temp_v1;
+                    curFlags = flagsCpy;
                 }
 
                 if (arg0 == (1 << 1))
                 {
-                    D_800C3963 |= 1 << 2;
+                    curFlags |= 1 << 2;
                 }
             }
 
-            func_8008B438(arg0 != 2, (u8)D_800C3961, D_800C3962);
+            func_8008B438(arg0 != 2, (u8)curVol, curSoundType);
 
             if (arg0 == (1 << 1))
             {
-                func_8008B40C((u8)D_800C3961, D_800C3962);
+                func_8008B40C((u8)curVol, curSoundType);
             }
 
             func_8008B3E4(NO_VALUE);

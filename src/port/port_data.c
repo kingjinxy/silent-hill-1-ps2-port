@@ -12,3 +12,7 @@
 /** Anchored on `screenPosY.53` (a GCC 2.8 static-local name) in `relative_syms.ld`. Used only by
  * bodyprog_mapscreen_80066D90.c; occupies its own bss gap. */
 q3_12 D_800C4454;
+
+/** Was `__pad_bss_800C39A0` (item_screens_2.c) in `port_relative_syms.ld`; the decomp dropped that
+ * padding variable (2026-10). Used by the maps' particle code; occupies its own bss gap. */
+s8 D_800C39A0;

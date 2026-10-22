@@ -7,6 +7,18 @@
 #include "maps/particle.h"
 #include "maps/characters/player.h"
 #include "maps/characters/romper.h"
+#include "inline_no_dmpsx.h"
+#include <psyq/gtemac.h>
+#include "bodyprog/player.h"
+#include "maps/characters/air_screamer.h"
+#include "maps/characters/groaner.h"
+
+#include "../src/maps/particle.c"
+
+#include "../src/maps/characters/player.c"
+
+#include "../src/maps/characters/air_screamer.c" // 0x800D0728
+#include "../src/maps/characters/groaner.c" // 0x800E1760
 
 // TODO: Move this line into separate `Chara_Romper` split.
 #include "../src/maps/characters/romper.c" // 0x800E5D38
@@ -32,9 +44,15 @@ void func_800E9D54(void) // 0x800E9D54
 
 const char* MAP_MESSAGES[] = {
     #include "maps/shared/map_msg_common.h"
+#if VERSION_REGION_IS(NTSC)
     /* 15 */ "\tUsed_the_ ~C2 Antique_shop_key ~C7 . ~E ",
     /* 16 */ "~C3\tAlchemilla_Hospital ~E ",
     /* 17 */ "~C3\tgreen_lion ~E "
+#elif VERSION_REGION_IS(NTSCJ)
+    /* 15 */ "\t~C2 骨董屋の鍵 ~C7 を使った ~E ",
+    /* 16 */ "~C3\tアルケミラ病院 ~E ",
+    /* 17 */ "~C3\tｇｒｅｅｎ　ｌｉｏｎ ~E "
+#endif
 };
 
 void func_800E9E10(void) // 0x800E9E10

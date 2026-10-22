@@ -8,6 +8,18 @@
 #include "maps/map3/map3_s04.h"
 #include "maps/characters/lisa.h"
 #include "bodyprog/sound/sound_system.h"
+#include "maps/particle.h"
+#include "maps/characters/player.h"
+#include "maps/characters/puppet_nurse.h"
+
+#include "../src/maps/particle.c"
+
+#include "../src/maps/characters/player.c"
+
+#include "../src/maps/unk_m3s03.c" // 0x800CD574
+
+#include "../src/maps/characters/puppet_nurse.c"
+#include "../src/maps/characters/lisa.c"
 
 #include "../src/maps/chara_util.c" // 0x800D1374
 
@@ -25,6 +37,7 @@ void GameBoot_LoadScreen_StageString(void) {}
 
 const char* MAP_MESSAGES[] = {
     #include "maps/shared/map_msg_common.h"
+#if VERSION_REGION_IS(NTSC)
     /* 15 */ "~J1(3.6)\tFinally. ~N\n\t\t\tSomeone_else_who's_OK. ",
     /* 16 */ "~J1(1.0)\tWho_are_you? ",
     /* 17 */ "~J1(3.1)\tMy_name's_Lisa_Garland. ~N\n\t\t\tWhat's_yours? ",
@@ -65,6 +78,48 @@ const char* MAP_MESSAGES[] = {
     /* 52 */ "\tNothing_helpful. ~E ",
     /* 53 */ "\tNothing_useful ~N\n\tin_the_desk_drawer. ~E ",
     /* 54 */ "\tA_sound_is_heard ~N\n\tfrom_beyond_the_door. ~E "
+#elif VERSION_REGION_IS(NTSCJ)
+    /* 15 */ "~J1(3.6)\t良かった…… ~N\n\t\t\tまだ無事な人がいたのね…… ",
+    /* 16 */ "~J1(1.0)\tきみは？ ",
+    /* 17 */ "~J1(3.1)\tあたしはリサ・ガーランド ~N\n\t\t\tあなたは？ ",
+    /* 18 */ "~J1(1.2)\tハリー・メイソンだ~E ",
+    /* 19 */ "~J0(4.7)\tねえ　いったい何が起こったの？ ~N\n\t\t\tみんなどうなってしまったの？ ",
+    /* 20 */ "~J0(2.7)\tあたしが気を失っている間に…… ",
+    /* 21 */ "~J0(3.2)\t誰もいなくなってしまって…… ",
+    /* 22 */ "~J0(1.3)\t本当に怖かったわ…… ~E ",
+    /* 23 */ "~J1(3.8)\tきみも知らないのか…… ",
+    /* 24 */ "~J1(3.0)\tわたしもどうしてこんなことに ~N\n\t\t\tなったのか　わからないんだ ~E ",
+    /* 25 */ "~J1(4.0)\tどうなっているんだ…… ~N\n\t\t\tすべてが悪い夢のようにも思えてくる…… ",
+    /* 26 */ "~J1(2.8)\t……あたしもよ ~N\n\t\t\tすべてが悪夢のようだわ…… ~E ",
+    /* 27 */ "~J1(3.6)\tところで……女の子を見なかったか？ ",
+    /* 28 */ "~J1(2.8)\t短い黒髪の７歳の女の子だ ",
+    /* 29 */ "~J1(3.8)\t７歳の女の子……？ ~N\n\t\t\tあなたの娘さん？ ",
+    /* 30 */ "~J1(1.2)\tああ ",
+    /* 31 */ "~J1(3.0)\t７歳の女の子…… ",
+    /* 32 */ "~J1(4.8)\tわからないわ ~N\n\t\t\tずっと気を失っていたから…… ",
+    /* 33 */ "~J1(1.3)\tごめんなさい ~E ",
+    /* 34 */ "~J1(2.2)\tいや　いいんだ ",
+    /* 35 */ "~J1(3.8)\tそれなら　この地下にある ~N\n\t\t\tあの妙な一帯は何なのか知ってるか？ ",
+    /* 36 */ "~J1(3.8)\t何のこと？ ~N\n\t\t\tここの地下に何？ ",
+    /* 37 */ "~J1(2.7)\t知らないのか？ ~N\n\t\t\tこの病院に勤めていたのに ",
+    /* 38 */ "~J1(4.0)\t地下の倉庫には絶対に ~N\n\t\t\t入らないように言われているの ",
+    /* 39 */ "~J1(2.0)\tだから……わからないわ ~E ",
+    /* 40 */ "~J1(2.0)\tあそこに何があるというの……？ ",
+    /* 41 */ "~J1(1.7)\tあそこは…… ~E ",
+    /* 42 */ "~J0(0.8)\t~E ",
+    /* 43 */ "~J0(2.5)\t……くそ！ ~N\n\t\t\t頭が…… ",
+    /* 44 */ "~J0(2.5)\tどうしたの？ ~N\n\t\t\tハリー……？ ~E ",
+    /* 45 */ "~J0(2.6)\tハリー ~N\n\t\t\tしっかりして…… ~E ",
+    /* 46 */ "~J0(1.0)\t~E ",
+    /* 47 */ "\t~C2 ［女王］のプレート ~C7 がある ~N\n\t取りますか？ ~S4 ",
+    /* 48 */ "\t~C2 診察室の鍵 ~C7 を使った ~E ",
+    /* 49 */ "\t壊れた自動販売機だ ~E ",
+    /* 50 */ "\t特に気になるものはない ~E ",
+    /* 51 */ "\t冷蔵庫の中は空っぽだ ~E ",
+    /* 52 */ "\t役に立ちそうなものはない ~E ",
+    /* 53 */ "\t机の中には何もない ~E ",
+    /* 54 */ "\t扉の向こうから物音が聞こえる ~E "
+#endif
 };
 
 const VECTOR3 D_800CB1E0 = { Q12(14.5f), Q12(-1.0f), Q12(139.9f) };
@@ -232,7 +287,10 @@ void func_800D2668(void) // 0x800D2668
             CutsceneBorder_ForceShow();
             ScreenFade_ResetTimestep();
             g_SysWork.sysFlags |= SysFlag_CutsceneActive;
+
+#if VERSION_EQUAL_OR_NEWER(USA) // @bugfix?
             Game_TurnFlashlightOn();
+#endif
 
             g_SysWork.lightBoneCoord     = NULL;
             g_SysWork.lensFlareBoneCoord = NULL;
@@ -436,9 +494,9 @@ void func_800D2E58(void) // 0x800D2E58
     Event_ItemTake(InvItemId_PlateOfQueen, DEFAULT_PICKUP_ITEM_COUNT, EventFlag_M3S04_PickupPlateOfQueen, 47);
 }
 
-INCLUDE_RODATA("maps/map3_s04/nonmatchings/map3_s04_2", sharedData_800CB088_3_s01);
+MATCH_CONST VECTOR3 sharedData_800CB088_3_s01 = { Q12(19.1f), Q12(-2.0f), Q12(59.1f) };
 
-INCLUDE_RODATA("maps/map3_s04/nonmatchings/map3_s04_2", sharedData_800CB094_3_s01);
+const VECTOR3 sharedData_800CB094_3_s01 = { Q12(17.2f), Q12(-1.0f), Q12(59.1f) };
 
 #include "maps/shared/sharedFunc_800D15F0_3_s01.h" // 0x800D2E84
 
@@ -595,8 +653,8 @@ void func_800D43B8(void) // 0x800D43B8
     }
 }
 
-INCLUDE_RODATA("maps/map3_s04/nonmatchings/map3_s04_2", D_800CB35C);
+MATCH_CONST SVECTOR3 D_800CB35C = { 0, 0, 0 };
 
-INCLUDE_RODATA("maps/map3_s04/nonmatchings/map3_s04_2", D_800CB364);
+MATCH_CONST VECTOR3 D_800CB364 = { Q12(96.0f), Q12(-1.2f), Q12(59.8f) };
 
-INCLUDE_RODATA("maps/map3_s04/nonmatchings/map3_s04_2", D_800CB370);
+MATCH_CONST VECTOR3 D_800CB370 = { Q12(140.5f), Q12(-1.8f), Q12(98.0f) };

@@ -5,6 +5,36 @@
 #include "bodyprog/items.h"
 #include "bodyprog/sys/joy.h"
 
+/** @brief Save location IDs. */
+typedef enum _SaveLocationId
+{
+    SaveLocationId_Anywhere    = 0,
+    SaveLocationId_Cafe        = 1,
+    SaveLocationId_Bus         = 2,
+    SaveLocationId_Store       = 3,
+    SaveLocationId_Infirmary   = 4,
+    SaveLocationId_Doghouse    = 5,
+    SaveLocationId_Gordon      = 6,
+    SaveLocationId_Church      = 7,
+    SaveLocationId_Garage      = 8,
+    SaveLocationId_Police      = 9,
+    SaveLocationId_Reception   = 10,
+    SaveLocationId_Room302     = 11,
+    SaveLocationId_Directors   = 12,
+    SaveLocationId_JewelryShop = 13,
+    SaveLocationId_PoolHall    = 14,
+    SaveLocationId_AntiqueShop = 15,
+    SaveLocationId_ThemePark   = 16,
+    SaveLocationId_Boat        = 17,
+    SaveLocationId_Bridge      = 18,
+    SaveLocationId_Motel       = 19,
+    SaveLocationId_Lighthouse  = 20,
+    SaveLocationId_Sewer       = 21,
+    SaveLocationId_Nowhere     = 22,
+    SaveLocationId_ChildsRoom  = 23,
+    SaveLocationId_NextFear    = 24
+} e_SaveLocationId;
+
 /** @brief Savegame data. */
 typedef struct _Savegame
 {
@@ -42,20 +72,18 @@ typedef struct _Savegame
     /* 0x258    */ q20_12          walkDistance;
     /* 0x25C+0  */ u8              isNextFearMode           : 1; /** `bool` | Makes savegame entry text gold. */
     /* 0x25C+1  */ u8              add290Hours              : 2; /** Adds 290 hours per 1 bit, i.e. 290, 580, 870. */
-    /* 0x25C+3  */ u8              pickedUpSpecialItemCount : 5; /** Red/None: 0?, Yellow: 8, Green: 16, @unused Rainbow: 24. */
-                                                                 /** Sparagas' investigations indicate this variable should be
-                                                                  * two different variables. However, splitting it causes minor
-                                                                  * mismatches in some functions.
+    /* 0x25C+3  */ u8              pickedUpSpecialItemCount : 5; /** Count of picked special items and unlocked Hyper Blaster's color beam.
                                                                   *
                                                                   * The first 3 bits indicate the number of special items the
                                                                   * player has picked up, and the last 2 bits indicate the color of the Hyper
                                                                   * Blaster beam.
                                                                   *
-                                                                  * Belek666 suggests that some functions specifically access this field as 5 bits.
+                                                                  * Hyper Blaster Beam color: Red: b00000, Yellow: b00001, Green: b00010, @unused Rainbow: b00011.
                                                                   *
-                                                                  * The the odd access results in a bug where the results screen will count more collected
-                                                                  * special items than normal by additionally reading one of the two bits
-                                                                  * for the Hyper Blaster beam color.
+                                                                  * @bug In the NTSC and the original NTSC-J releases this variable is accessed improperly in the
+                                                                  * result screen. Instead of only accessing to the first three bits when counting the picked
+                                                                  * special items it access to the first four meaning that it could count an extra bit in case
+                                                                  * the green beam is unlocked.
                                                                   */
     /* 0x25D    */ u8              meleeKillCount;
     /* 0x25E    */ u8              meleeKillCountB; // Can't be packed if used as `u16`.

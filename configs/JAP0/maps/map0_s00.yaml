@@ -29,9 +29,9 @@ options:
   section_order: [".rodata", ".text", ".data", ".bss"]
 
   symbol_addrs_path:
-    - configs/JAP0/maps/sym.map0_s00.txt
-    - configs/JAP0/sym.bodyprog.txt
     - configs/USA/sym.main.txt
+    - configs/JAP0/sym.bodyprog.txt
+    - configs/JAP0/maps/sym.map0_s00.txt
   reloc_addrs_path:
     - configs/JAP0/maps/rel.map0_s00.txt
 
@@ -57,10 +57,7 @@ segments:
       # .rodata section
       - [0x0, rodata]
       - [0x4, .rodata, map0_s00_header]
-      - [0x1050, .rodata, map0_s00]
-      - [0x18C8, .rodata, Chara_Cheryl]
-      - [0x18DC, rodata]
-      - [0x18E0, .rodata, map0_s00_2]
+      - [0x1050, .rodata, map0_s00_2]
 
       # Data only C files
       - [0x20F8, c, map0_s00_header]
@@ -68,9 +65,7 @@ segments:
       - [0x20F8, c, map0_s00_anim_info]
       
       # .text section
-      - [0x20F8, c, map0_s00]
-      - [0xEA00, c, Chara_Cheryl]
-      - [0xF2F4, c, map0_s00_2]
+      - [0x20F8, c, map0_s00_2]
 
       # .data section
       - [0x13D04, .data, map0_s00_anim_info]

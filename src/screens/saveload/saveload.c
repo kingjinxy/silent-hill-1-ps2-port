@@ -21,8 +21,47 @@
 #define LAYER_32 32
 #define LAYER_36 36
 
-const pad = 0;
+#if !VERSION_REGION_IS(NTSCJ)
+const s32 pad = 0;
+#endif
 
+// @todo Temporary hack while JAP data is unmigrated, remove this once data is brought over.
+#if VERSION_REGION_IS(NTSCJ)
+    #define SAVE_BSS extern
+#else
+    #define SAVE_BSS static
+#endif
+
+#if VERSION_REGION_IS(NTSCJ)
+// Strings live in the overlay rodata, in the part included from assembly.
+char* g_Savegame_SaveLocationNames[] = {
+    (char*)0x801E2714,
+    (char*)0x801E270C,
+    (char*)0x801E2704,
+    (char*)0x801E26F8,
+    (char*)0x801E26E8,
+    (char*)0x801E26D8,
+    (char*)0x801E26C8,
+    (char*)0x801E26C0,
+    (char*)0x801E26B4,
+    (char*)0x801E26AC,
+    (char*)0x801E26A0,
+    (char*)0x801E2690,
+    (char*)0x801E2684,
+    (char*)0x801E267C,
+    (char*)0x801E266C,
+    (char*)0x801E2664,
+    (char*)0x801E265C,
+    (char*)0x801E2654,
+    (char*)0x801E2644,
+    (char*)0x801E2638,
+    (char*)0x801E2630,
+    (char*)0x801E2628,
+    (char*)0x801E2620,
+    (char*)0x801E2614,
+    (char*)0x801E2604
+};
+#else
 char* g_Savegame_SaveLocationNames[] = {
     "Anywhere",
     "Cafe",
@@ -50,6 +89,7 @@ char* g_Savegame_SaveLocationNames[] = {
     "Child's_room",
     "Next_fear"
 };
+#endif
 
 /** @brief Reduntant code. Some overwrite status.
  * Indicates if the player is or have overwritten
@@ -148,9 +188,9 @@ void (*g_GameState_AutoLoadSavegame_Funcs[])() = {
     SaveScreen_Continue
 };
 
-static s32 D_801E7560; // Unused/Pad.
+SAVE_BSS s32 D_801E7560; // Unused/Pad.
 
-/** @brief Dead code.
+/** @brief @unused Dead code.
  * Only used when booting the save screen where both
  * values are defined as 0, the memory card is being
  * loaded, or the user has the last save selected in
@@ -159,30 +199,40 @@ static s32 D_801E7560; // Unused/Pad.
  *
  * Used in: `SaveScreen_MemCardInfoReset` and `SaveScreen_SavesSlotDraw`.
  */
-static s32 D_801E7564[MEMCARD_SLOT_COUNT_MAX];
+SAVE_BSS s32 D_801E7564[MEMCARD_SLOT_COUNT_MAX];
 
-/** @brief Dead code.
+/** @brief @unused Dead code.
  * Constantly updates changing the value from 0 up to
  * the amount of files available in the slot.
  *
  * Code indicate that it is related the draw of file borders color.
  */
-static s16 D_801E756C[MEMCARD_SLOT_COUNT_MAX];
+SAVE_BSS s16 D_801E756C[MEMCARD_SLOT_COUNT_MAX];
 
 /** @brief Count of saves hidden as the user scrolls down
  * through the displayed saves in the slot.
  */
-static s16 g_SaveScreen_HiddenSaves[MEMCARD_SLOT_COUNT_MAX];
+SAVE_BSS s16 g_SaveScreen_HiddenSaves[MEMCARD_SLOT_COUNT_MAX];
 
-/** @brief Dead code.
+/** @brief @unused Dead code.
  * The only usage it is given is to check it is in `SaveScreen_SavesSlotDraw`
  * where it is used to check if the value is not the same as
  * `g_SaveScreen_HiddenSaves` if the condition is true then it assigns
  * `D_801E7514` a true value. However, the only instance where a value
  * is assigned is when booting the save screen when it get assigned
  * the value of -1 so it's always realizing the conditional.
+ * (@todo JPN makes use of it in `SaveScreen_SavesSlotDraw` - comment may need 
+ * updating)
  */
-static s16 D_801E7574[MEMCARD_SLOT_COUNT_MAX];
+SAVE_BSS s16 D_801E7574[MEMCARD_SLOT_COUNT_MAX];
+
+#if VERSION_REGION_IS(NTSCJ)
+/** @brief Savegame index whose location name glyphs are currently rendered for each
+ * visible row of each slot, `NO_VALUE` if none. Lets `SaveScreen_SaveLocationDraw`
+ * only render a row's glyphs when the element shown in it changes.
+ */
+SAVE_BSS s16 g_SaveScreen_LocationGlyphSaveIdx[MEMCARD_SLOT_COUNT_MAX][5];
+#endif
 
 /** @brief Stores the index of the element selected in each
  * slot based on what is visually available in the slot.
@@ -192,37 +242,50 @@ static s16 D_801E7574[MEMCARD_SLOT_COUNT_MAX];
  * `New Save` element will be 4 and not 9 (index starting from 0)
  * as it is the fifth element visually available in the slot.
  */
-static s16 g_SaveScreen_VisualElementIdx[MEMCARD_SLOT_COUNT_MAX];
+SAVE_BSS s16 g_SaveScreen_VisualElementIdx[MEMCARD_SLOT_COUNT_MAX];
 
-static s8 D_801E757C[8]; // Unused/Pad.
+SAVE_BSS s8 D_801E757C[8]; // Unused/Pad.
 
-/** @brief Dead code. */
-static s8 D_801E7584[SAVEGAME_COUNT_MAX * MEMCARD_SLOT_COUNT_MAX];
+/** @brief @unused Dead code in USA. (@todo JPN makes more use of it) */
+SAVE_BSS u8 D_801E7584[MEMCARD_SLOT_COUNT_MAX][SAVEGAME_COUNT_MAX];
 
 /** @brief Stores the index of the last save done.
  *
  * Depending on the slot where the last save was done
  * the value representing the other slot is turn into -1.
  */
-static s8 g_SaveScreen_LastSaveIdx[MEMCARD_SLOT_COUNT_MAX];
+SAVE_BSS s8 g_SaveScreen_LastSaveIdx[MEMCARD_SLOT_COUNT_MAX];
 
 /** @brief Boolean. State if save information should be displayed. */
-static s8 g_SaveScreen_DisplaySaveInfo;
+SAVE_BSS s8 g_SaveScreen_DisplaySaveInfo;
 
-static s8 D_801E76D1; // Unused/Pad.
+SAVE_BSS s8 D_801E76D1; // Unused/Pad.
 
-static u8 g_SaveScreen_IsMemCardNotInserted[MEMCARD_SLOT_COUNT_MAX];
+SAVE_BSS u8 g_SaveScreen_IsMemCardNotInserted[MEMCARD_SLOT_COUNT_MAX];
 
-static s8 g_SaveScreen_SaveFlashTimer;
+SAVE_BSS s8 g_SaveScreen_SaveFlashTimer;
 
-static u8 g_SaveScreen_IsNextFearMode;
+SAVE_BSS u8 g_SaveScreen_IsNextFearMode;
 
-static u8 g_SaveScreen_IsGameSaving;
+SAVE_BSS u8 g_SaveScreen_IsGameSaving;
+
+#if VERSION_REGION_IS(NTSCJ)
+INCLUDE_RODATA("screens/saveload/nonmatchings/saveload", D_801E2600);
+
+#endif
 
 void SaveScreen_ScreenInfoClear(void) // 0x801E2D8C
 {
     s32 i;
     s32 j;
+
+#if VERSION_REGION_IS(NTSCJ)
+    const char* digitStr = "０１２３４５６７８９";
+    const char* glyphStrs[2] = {
+        "差込口１　差込口２　",
+        "ファイル　　ファイル　　はい　　　いいえ"
+    };
+#endif
 
     func_80037124();
 
@@ -243,13 +306,30 @@ void SaveScreen_ScreenInfoClear(void) // 0x801E2D8C
         D_801E7514[i]                        = true;
         D_801E7518[i]                        = 0;
 
+#if VERSION_REGION_IS(NTSCJ)
+        for (j = 0; j < 5; j++)
+        {
+            g_SaveScreen_LocationGlyphSaveIdx[i][j] = NO_VALUE;
+        }
+#endif
+
         for (j = 0; j < SAVEGAME_COUNT_MAX; j++)
         {
-            D_801E7584[j + (SAVEGAME_COUNT_MAX * i)] = 0;
+            D_801E7584[i][j] = 0;
         }
 
         g_SaveScreen_DisplaySaveInfo = true;
     }
+
+#if VERSION_REGION_IS(NTSCJ)
+    D_800C3920 = 10;
+    func_8004C918(digitStr,     1, 0, 13);
+
+    func_8004C918(glyphStrs[0], 1, 0, 9);
+
+    D_800C3920 = 20;
+    func_8004C918(glyphStrs[1], 1, 0, 12);
+#endif
 }
 
 void SaveScreen_SlotStrAndBottomRectDraw(void) // 0x801E2EBC
@@ -257,6 +337,10 @@ void SaveScreen_SlotStrAndBottomRectDraw(void) // 0x801E2EBC
     s_Line2d line;
     s32      i;
 
+#if VERSION_REGION_IS(NTSCJ)
+    GsOT*     ot;
+    POLY_FT4* poly;
+#else
     const DVECTOR SLOT_STR_POS_TABLE[] =
     {
         { 59, 16 },
@@ -267,7 +351,40 @@ void SaveScreen_SlotStrAndBottomRectDraw(void) // 0x801E2EBC
         "SLOT1",
         "SLOT2"
     };
+#endif
 
+#if VERSION_REGION_IS(NTSCJ)
+    ot = &g_OrderingTable2[g_ActiveBufferIdx];
+
+    // Draw SLOT1/SLOT2 label sprites.
+    for (i = 0; i < MEMCARD_SLOT_COUNT_MAX; i++)
+    {
+        poly = (POLY_FT4*)GsOUT_PACKET_P;
+        setPolyFT4(poly);
+        poly->tpage = getTPage(0, 0, 128, 256);
+        poly->clut  = getClut(304, 510);
+        
+        setRGB0(poly, 0x80, 0x80, 0x80);
+
+        if (i != 0)
+        {
+            setUV4(poly, 120, 224, 120, 240,
+                         168, 224, 168, 240);
+            setXY4(poly, -96, -96, -96, -80,
+                         -48, -96, -48, -80);
+        }
+        else
+        {
+            setUV4(poly, 180, 224, 180, 240,
+                         228, 224, 228, 240);
+            setXY4(poly, 52,  -96, 52,  -80,
+                         100, -96, 100, -80);
+        }
+
+        addPrim((u8*)ot->org + LAYER_24, poly);
+        GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_FT4);
+    }
+#else
     Gfx_StringColorSet(StringColorId_White);
 
     for (i = 0; i < MEMCARD_SLOT_COUNT_MAX; i++)
@@ -275,6 +392,7 @@ void SaveScreen_SlotStrAndBottomRectDraw(void) // 0x801E2EBC
         Gfx_StringPositionSet(SLOT_STR_POS_TABLE[i].vx, SLOT_STR_POS_TABLE[i].vy);
         Gfx_StringDraw(SLOT_STRS[i], 50);
     }
+#endif
 
     line.vertex0.vx = -136;
     line.vertex0.vy = 60;
@@ -295,10 +413,46 @@ void SaveScreen_FileIdxDraw(s32 saveIdx, s32 slotIdx, s32 fileId, s32 entryType)
     #define FILE_ID_STR_MARGIN_X (FILE_STR_MARGIN_X + 50)
     #define POS_Y                35
 
+#if VERSION_REGION_IS(NTSCJ)
+    GsOT* ot = &g_OrderingTable2[g_ActiveBufferIdx];
+#else
     const char* FILE_STR = "FILE";
+#endif
 
     if (saveIdx == g_SlotElementSelectedIdx[slotIdx] && entryType >= SavegameEntryType_OutOfBlocks)
     {
+#if VERSION_REGION_IS(NTSCJ)
+        RECT      rect;
+        POLY_FT4* poly;
+
+        if (fileId / 10 != 0)
+        {
+            setRECT(&rect, ((fileId / 10) * 3) + 158, 16, 3, 16);
+            MoveImage(&rect, (slotIdx * 18) + 268, 480);
+        }
+        else
+        {
+            setRECT(&rect, (slotIdx * 18) + 268, 480, 3, 16);
+            ClearImage(&rect, 0, 0, 0);
+        }
+
+        setRECT(&rect, ((fileId % 10) * 3) + 158, 16, 3, 16);
+        MoveImage(&rect, (slotIdx * 18) + 271, 480);
+
+        poly = (POLY_FT4*)GsOUT_PACKET_P;
+        setPolyFT4(poly);
+        poly->tpage = getTPage(0, 0, 256, 256);
+        poly->clut  = getClut(304, 510);
+
+        setRGB0(poly, 0x80, 0x80, 0x80);
+        setUV4(poly, slotIdx * 72,        224, slotIdx * 72,        240,
+                     (slotIdx * 72) + 72, 224, (slotIdx * 72) + 72, 240);
+        setXY4(poly, (slotIdx * OFFSET_X) - 130, -78, (slotIdx * OFFSET_X) - 130, -62,
+                     (slotIdx * OFFSET_X) - 58,  -78, (slotIdx * OFFSET_X) - 58,  -62);
+
+        addPrim((u8*)ot->org + LAYER_24, poly);
+        GsOUT_PACKET_P = (u8*)poly + sizeof(POLY_FT4);
+#else
         Gfx_StringColorSet(StringColorId_White);
 
         // Draw "FILE" string.
@@ -308,6 +462,7 @@ void SaveScreen_FileIdxDraw(s32 saveIdx, s32 slotIdx, s32 fileId, s32 entryType)
         // Draw file ID string.
         Gfx_StringPositionSet((slotIdx * OFFSET_X) + FILE_ID_STR_MARGIN_X, POS_Y);
         Gfx_StringDrawInt(1, fileId);
+#endif
     }
 
     #undef OFFSET_X
@@ -336,6 +491,11 @@ void SaveScreen_SaveLocationDraw(s_SaveScreenElement* saveEntry, s32 saveIdx, s3
     #define MARGIN_Y 53
 
     s32 nameIdx = saveEntry->locationId;
+    s32 selectedSaveIdx;
+    s16 hiddenSaveCount;
+
+#if !VERSION_REGION_IS(NTSCJ)
+    s32 colorId;
 
     const u8 X_OFFSETS[] = {
         82, 37,  30, 44,
@@ -346,10 +506,7 @@ void SaveScreen_SaveLocationDraw(s_SaveScreenElement* saveEntry, s32 saveIdx, s3
         95, 48,  71, 102,
         77
     };
-
-    s32 selectedSaveIdx;
-    s16 hiddenSaveCount;
-    s32 colorId;
+#endif
 
     hiddenSaveCount = g_SaveScreen_HiddenSaves[slotIdx];
 
@@ -357,6 +514,15 @@ void SaveScreen_SaveLocationDraw(s_SaveScreenElement* saveEntry, s32 saveIdx, s3
     {
         selectedSaveIdx = saveIdx - hiddenSaveCount;
 
+#if VERSION_REGION_IS(NTSCJ)
+        if (g_SaveScreen_LocationGlyphSaveIdx[slotIdx][selectedSaveIdx] != saveIdx)
+        {
+            g_SaveScreen_LocationGlyphSaveIdx[slotIdx][selectedSaveIdx] = saveIdx;
+
+            D_800C3920 = (s32)strlen(g_Savegame_SaveLocationNames[nameIdx]) / 2;
+            func_8004C918(g_Savegame_SaveLocationNames[nameIdx], (slotIdx * 5) + selectedSaveIdx, 0, 10);
+        }
+#else
         SaveScreen_NextFearModeSave(saveEntry->saveMetadata);
 
         if (g_SaveScreen_IsGameSaving != 0 && g_SelectedSaveSlotIdx == slotIdx && g_SlotElementSelectedIdx[slotIdx] == saveIdx)
@@ -375,6 +541,7 @@ void SaveScreen_SaveLocationDraw(s_SaveScreenElement* saveEntry, s32 saveIdx, s3
         Gfx_StringPositionSet(((slotIdx * OFFSET_X) + MARGIN_X) - (X_OFFSETS[nameIdx] / 2),
                               (selectedSaveIdx * OFFSET_Y) + MARGIN_Y);
         Gfx_StringDraw(g_Savegame_SaveLocationNames[nameIdx], 50);
+#endif
     }
 
     #undef OFFSET_X
@@ -405,7 +572,29 @@ void SaveScreen_SaveBorder(s_SaveScreenElement* saveEntry, s_SaveScreenElement* 
 
 void SaveScreen_SavesSlotDraw(s_SaveScreenElement* saveEntry, s32 saveIdx, s32 slotIdx) // 0x801E3304
 {
+#if VERSION_REGION_IS(NTSCJ)
+    RECT rect;
+    s32 rowIdx;
+    s32 isNextFearMode;
+#endif
+
+    s32 i;
+    s32 entryType;
+
     const char* DIALOG_STRS[11] = {
+#if VERSION_REGION_IS(NTSCJ)
+        "~C7　メモリーカードが　　差されていません　",
+        "~C7　メモリーカードが　初期化されていません",
+        "~C7　メモリーカードに　　異常があります　　",
+        "~C7　メモリーカードを　　チェックしています",
+        "~C7　空きブロックが　　　不足しています　　",
+        "~C7ファイルがありません",
+        "~C7データがありません　",
+        "~C7ファイルが壊れてます",
+        "~C7　　　　　　　　　　",
+        "~C7セーブできます　　　",
+        "~C7新規ファイルにセーブ"
+#else
         "\7MEMORY_CARD\nis_not_inserted",
         "\7MEMORY_CARD\nis_\x01not_\x01""formatted",
         "\7MEMORY_CARD\nmay_be_broken",
@@ -417,10 +606,8 @@ void SaveScreen_SavesSlotDraw(s_SaveScreenElement* saveEntry, s32 saveIdx, s32 s
         "\7",
         "\7________\x01New_save",
         "\7____Crea\x01t\x01""e_\x01n\x01""e\x01w_\x01""fi\x01le"
+#endif
     };
-
-    s32 i;
-    s32 entryType;
 
     entryType = saveEntry->type;
 
@@ -448,6 +635,13 @@ void SaveScreen_SavesSlotDraw(s_SaveScreenElement* saveEntry, s32 saveIdx, s32 s
 
         if (g_SaveScreen_IsMemCardNotInserted[slotIdx])
         {
+#if VERSION_REGION_IS(NTSCJ)
+            if (entryType != SavegameEntryType_LoadMemCard)
+            {
+                D_801E7564[slotIdx] = 0;
+            }
+#endif
+
             if (g_SlotElementSelectedIdx[slotIdx] == (g_Savegame_ElementCount1[slotIdx] - 2))
             {
                 g_SaveScreen_HiddenSaves[slotIdx] = g_SlotElementSelectedIdx[slotIdx] - 3;
@@ -503,12 +697,21 @@ void SaveScreen_SavesSlotDraw(s_SaveScreenElement* saveEntry, s32 saveIdx, s32 s
         case SavegameEntryType_LoadMemCard:
             g_SaveScreen_IsMemCardNotInserted[slotIdx] = true;
 
+#if VERSION_REGION_IS(NTSCJ)
+            for (i = 0; i < 5; i++)
+            {
+                g_SaveScreen_LocationGlyphSaveIdx[slotIdx][i] = NO_VALUE;
+            }
+#endif
+
             for (i = 0; i < SAVEGAME_COUNT_MAX; i++)
             {
-                D_801E7584[i + (slotIdx * SAVEGAME_COUNT_MAX)] = 0;
+                D_801E7584[slotIdx][i] = 0;
             }
 
+#if !VERSION_REGION_IS(NTSCJ)
             g_SaveScreen_HiddenSaves[slotIdx] = NO_VALUE;
+#endif
             break;
 
         case SavegameEntryType_CorruptedSave:
@@ -529,6 +732,87 @@ void SaveScreen_SavesSlotDraw(s_SaveScreenElement* saveEntry, s32 saveIdx, s32 s
         return;
     }
 
+#if VERSION_REGION_IS(NTSCJ)
+    // Glyph rows for this slot are cached in VRAM, only redraw them when the visible entries change.
+    if (D_801E7514[slotIdx] != 0 || D_801E7584[slotIdx][saveIdx] != (u8)entryType)
+    {
+        if (D_801E7514[slotIdx] == 0 && D_801E7518[slotIdx] == 0)
+        {
+            D_801E7564[slotIdx] = 0;
+        }
+
+        if (D_801E7564[slotIdx] == 0)
+        {
+            func_801E4334(entryType, saveIdx, slotIdx, DIALOG_STRS[entryType]);
+            D_801E7574[slotIdx] = g_SaveScreen_HiddenSaves[slotIdx];
+        }
+        else
+        {
+            if (g_SaveScreen_HiddenSaves[slotIdx] > D_801E7574[slotIdx])
+            {
+                // Scrolled down, shift the cached rows up.
+                if (saveIdx == g_SaveScreen_HiddenSaves[slotIdx])
+                {
+                    for (rowIdx = 1; rowIdx < 5; rowIdx++)
+                    {
+                        setRECT(&rect, ((rowIdx >> 1) << 6) + ((rowIdx & 1) * 30), (slotIdx != 0) ? 480 : 16, 30, 16);
+                        MoveImage(&rect, (((rowIdx - 1) >> 1) << 6) + (((rowIdx - 1) & 1) * 30), (slotIdx != 0) ? 480 : 16);
+
+                        g_SaveScreen_LocationGlyphSaveIdx[slotIdx][rowIdx - 1] = g_SaveScreen_LocationGlyphSaveIdx[slotIdx][rowIdx];
+                    }
+                }
+
+                if (g_SaveScreen_HiddenSaves[slotIdx] == (saveIdx - 4))
+                {
+                    func_801E4334(entryType, saveIdx, slotIdx, DIALOG_STRS[entryType]);
+                    D_801E7574[slotIdx] = g_SaveScreen_HiddenSaves[slotIdx];
+                    D_801E7514[slotIdx] = 0;
+
+                    g_SaveScreen_LocationGlyphSaveIdx[slotIdx][saveIdx - g_SaveScreen_HiddenSaves[slotIdx]] = NO_VALUE;
+                }
+            }
+            else if (g_SaveScreen_HiddenSaves[slotIdx] < D_801E7574[slotIdx])
+            {
+                // Scrolled up, shift the cached rows down.
+                if (saveIdx == g_SaveScreen_HiddenSaves[slotIdx])
+                {
+                    for (rowIdx = 3; rowIdx >= 0; rowIdx--)
+                    {
+                        setRECT(&rect, ((rowIdx >> 1) << 6) + ((rowIdx & 1) * 30), (slotIdx != 0) ? 480 : 16, 30, 16);
+                        MoveImage(&rect, (((rowIdx + 1) >> 1) << 6) + (((rowIdx + 1) & 1) * 30), (slotIdx != 0) ? 480 : 16);
+
+                        g_SaveScreen_LocationGlyphSaveIdx[slotIdx][rowIdx + 1] = g_SaveScreen_LocationGlyphSaveIdx[slotIdx][rowIdx];
+                    }
+
+                    g_SaveScreen_LocationGlyphSaveIdx[slotIdx][saveIdx - g_SaveScreen_HiddenSaves[slotIdx]] = NO_VALUE;
+
+                    func_801E4334(entryType, saveIdx, slotIdx, DIALOG_STRS[entryType]);
+                    D_801E7574[slotIdx] = g_SaveScreen_HiddenSaves[slotIdx];
+                    D_801E7514[slotIdx] = 0;
+                }
+            }
+        }
+
+        D_801E7584[slotIdx][saveIdx] = entryType;
+    }
+
+    isNextFearMode = SaveScreen_NextFearModeSave(saveEntry->saveMetadata);
+
+    if (g_SaveScreen_IsGameSaving != 0 && g_SelectedSaveSlotIdx == slotIdx && g_SlotElementSelectedIdx[slotIdx] == saveIdx)
+    {
+        isNextFearMode = g_SaveScreen_IsNextFearMode;
+    }
+
+    if (entryType == SavegameEntryType_Save)
+    {
+        func_801E4128(slotIdx, saveIdx - g_SaveScreen_HiddenSaves[slotIdx],
+                      (s32)strlen(g_Savegame_SaveLocationNames[saveEntry->locationId]) / 2, isNextFearMode);
+    }
+    else
+    {
+        func_8004C394(DIALOG_STRS[entryType], slotIdx, saveIdx - g_SaveScreen_HiddenSaves[slotIdx], entryType);
+    }
+#else
     D_801E7514[slotIdx] = true;
     Gfx_StringColorSet(StringColorId_White);
 
@@ -556,6 +840,7 @@ void SaveScreen_SavesSlotDraw(s_SaveScreenElement* saveEntry, s32 saveIdx, s32 s
             break;
     }
     Gfx_StringDraw(DIALOG_STRS[entryType], 50);
+#endif
 
     // Draw memory card message box.
     if (entryType < SavegameEntryType_CorruptedSave)
@@ -579,12 +864,32 @@ void SaveScreen_SavesSlotDraw(s_SaveScreenElement* saveEntry, s32 saveIdx, s32 s
     }
 }
 
+#if VERSION_REGION_IS(NTSCJ)
+INCLUDE_ASM("screens/saveload/nonmatchings/saveload", func_801E4128);
+
+INCLUDE_ASM("screens/saveload/nonmatchings/saveload", func_801E4334);
+#endif
+
 void SaveScreen_MemCardStateDraw(s32 g_SaveScreen_SaveScreenState, s32 memCardState) // 0x801E3910
 {
-    s32        strIdx;
-    static s32 D_801E7554;
+    s32          strIdx;
+    SAVE_BSS s32 D_801E7554;
 
     const char* DIALOG_STRS[] = {
+#if VERSION_REGION_IS(NTSCJ)
+        "　　　　　　　　　　　　　　　　　　　　",
+        "~C7メモリーカードが抜かれました　　　　　　",
+        "~C7メモリーカードを初期化しています　　　　",
+        "~C7セーブ中です　　　　　　　　　　　　　　",
+        "~C7新規ファイルを作れませんでした　　　　　",
+        "~C7セーブが終了しました　　　　　　　　　　",
+        "~C7セーブに失敗しました　　　　　　　　　　",
+        "~C7ロードしようとしたデータは存在しなかった",
+        "~C7データが壊れています　　　　　　　　　　",
+        "~C7ロードに失敗しました　　　　　　　　　　",
+        "~C7ロードが終了しました　　　　　　　　　　",
+        "~C7ロード中です　　　　　　　　　　　　　　"
+#else
         " ",
         "\7You_\x01\x01removed_\x01\x01the_\x01\x01MEMORY_\x01\x01""CARD!",
         "\7Now_formatting...",
@@ -597,8 +902,14 @@ void SaveScreen_MemCardStateDraw(s32 g_SaveScreen_SaveScreenState, s32 memCardSt
         "\7""Failed_to_load!",
         "\7""Finished_loading.",
         "\7Now_loading..."
+#endif
     };
 
+#if VERSION_REGION_IS(NTSCJ)
+    const u8 GLYPH_COUNTS[] = {
+        0, 14, 16, 6, 15, 10, 10, 20, 10, 10, 10, 6
+    };
+#else
     const s16 X_OFFSETS[] = {
         0,   268,
         141, 107,
@@ -607,6 +918,8 @@ void SaveScreen_MemCardStateDraw(s32 g_SaveScreen_SaveScreenState, s32 memCardSt
         170, 117,
         143, 114
     };
+
+#endif
 
     switch (g_SaveScreen_SaveScreenState)
     {
@@ -617,23 +930,23 @@ void SaveScreen_MemCardStateDraw(s32 g_SaveScreen_SaveScreenState, s32 memCardSt
         case SaveScreenState_Save:
             switch (memCardState)
             {
-                case MemCardResult_NotConnected:
+                case MemCardWorkResult_NotConnected:
                     strIdx = 1;
                     break;
 
-                case MemCardResult_Success:
+                case MemCardWorkResult_Success:
                     strIdx = 3;
                     break;
 
-                case MemCardResult_FileCreateError:
+                case MemCardWorkResult_FileCreateError:
                     strIdx = 4;
                     break;
 
-                case MemCardResult_FileIoComplete:
+                case MemCardWorkResult_FileIoComplete:
                     strIdx = 5;
                     break;
 
-                case MemCardResult_FileIoError:
+                case MemCardWorkResult_FileIoError:
                     strIdx = 6;
                     break;
 
@@ -647,27 +960,27 @@ void SaveScreen_MemCardStateDraw(s32 g_SaveScreen_SaveScreenState, s32 memCardSt
             switch (memCardState)
             {
                 // Now loading.
-                case MemCardResult_Success:
+                case MemCardWorkResult_Success:
                     strIdx = 11;
                     break;
 
-                case MemCardResult_DamagedData:
+                case MemCardWorkResult_DamagedData:
                     strIdx = 8;
                     break;
 
-                case MemCardResult_FileIoError:
+                case MemCardWorkResult_FileIoError:
                     strIdx = 9;
                     break;
 
-                case MemCardResult_FileIoComplete:
+                case MemCardWorkResult_FileIoComplete:
                     strIdx = 10;
                     break;
 
-                case MemCardResult_NotConnected:
+                case MemCardWorkResult_NotConnected:
                     strIdx = 1;
                     break;
 
-                case MemCardResult_Full:
+                case MemCardWorkResult_Full:
                     strIdx = 1;
                     break;
 
@@ -695,15 +1008,47 @@ void SaveScreen_MemCardStateDraw(s32 g_SaveScreen_SaveScreenState, s32 memCardSt
                 g_SaveScreen_VisualElementIdx[g_SelectedSaveSlotIdx] = NO_VALUE;
             }
 
+#if VERSION_REGION_IS(NTSCJ)
+            D_800C3920 = 20;
+            func_8004C918(DIALOG_STRS[strIdx] + 3, 1, 0, 3);
+#endif
+
             D_801E7554 = strIdx;
             g_SaveScreen_MemCardStateDisplay++;
 
+#if VERSION_REGION_IS(NTSCJ)
+            if (strIdx == 5)
+            {
+                D_801E7564[g_SelectedSaveSlotIdx]                   = 0;
+                g_SaveScreen_LastSaveIdx[g_SelectedSaveSlotIdx]     = g_SlotElementSelectedIdx[g_SelectedSaveSlotIdx];
+                g_SaveScreen_LastSaveIdx[1 - g_SelectedSaveSlotIdx] = NO_VALUE;
+                g_SaveScreen_IsGameSaving                           = 0;
+                g_SaveScreen_SaveFlashTimer                         = 0;
+            }
+#endif
+
         case 1:
-            if (g_SaveScreen_SaveScreenState == SaveScreenState_Save && memCardState == MemCardResult_Success)
+            if (g_SaveScreen_SaveScreenState == SaveScreenState_Save && memCardState == MemCardWorkResult_Success)
             {
                 g_SaveScreen_IsGameSaving = memCardState;
             }
 
+#if VERSION_REGION_IS(NTSCJ)
+            if (D_801E7554 == strIdx)
+            {
+                func_8004C394(DIALOG_STRS[strIdx], 2, GLYPH_COUNTS[strIdx], strIdx + 11);
+
+                if (strIdx == 5)
+                {
+                    g_SaveScreen_LocationGlyphSaveIdx[g_SelectedSaveSlotIdx][g_SaveScreen_VisualElementIdx[g_SelectedSaveSlotIdx]] = NO_VALUE;
+                }
+            }
+            else
+            {
+                g_SaveScreen_MemCardStateDisplay--;
+                D_801E7564[g_SelectedSaveSlotIdx] = 0;
+            }
+#else
             // Finished saving and `D_801E7554` isn't required string.
             if (strIdx == 5 && D_801E7554 != strIdx)
             {
@@ -721,19 +1066,32 @@ void SaveScreen_MemCardStateDraw(s32 g_SaveScreen_SaveScreenState, s32 memCardSt
             {
                 g_SaveScreen_IsGameSaving = 0;
             }
+#endif
             break;
     }
 }
 
 void SaveScreen_WriteOptionsStepDraw(s32 stringIdx, bool optionSelected) // 0x801E3C44
 {
-    s8          color;
-    u32         time;
-    GsOT*       ot;
-    POLY_F4*    poly;
-    static bool D_801E7558;
+    SAVE_BSS bool D_801E7558;
+    s8       color;
+    u32      time;
+    GsOT*    ot;
+    POLY_F4* poly;
+#if VERSION_REGION_IS(NTSCJ)
+    POLY_FT4* glyphPoly;
+    s32       i;
 
-    const char* DIALOG_STRS[] = {
+    const char* const DIALOG_STRS[] = {
+        "~C7上書きしてもよろしいですか？　　　　　　",
+        "~C7初期化してもよろしいですか？　　　　　　"
+    };
+
+    const u8 GLYPH_COUNTS[] = {
+        14, 14
+    };
+#else
+    const char* const DIALOG_STRS[] = {
         "\7Is_it_OK_to_overwrite?",
         "\7Is_it_OK_to_format?",
         "\7Yes__________No"
@@ -742,6 +1100,7 @@ void SaveScreen_WriteOptionsStepDraw(s32 stringIdx, bool optionSelected) // 0x80
     const u8 X_OFFSETS[] = {
         180, 154
     };
+#endif
 
     g_SaveScreen_DisplaySaveInfo = false;
     time                         = (u8)g_SysWork.gameStateCounter % 64;
@@ -751,14 +1110,59 @@ void SaveScreen_WriteOptionsStepDraw(s32 stringIdx, bool optionSelected) // 0x80
     {
         case 0:
             g_SaveScreen_MemCardStateDisplay = 0;
+#if VERSION_REGION_IS(NTSCJ)
+            D_800C3920 = 20;
+            func_8004C918(DIALOG_STRS[stringIdx != 0] + 3, 1, 0, 3);
+            D_801E7558 = stringIdx != 0;
+            g_SaveScreen_OverwriteActive++;
+#else
             D_801E7558 = stringIdx != 0;
             g_SaveScreen_OverwriteActive = 1;
+#endif
 
         case 1:
+#if VERSION_REGION_IS(NTSCJ)
+            if (D_801E7558 == (stringIdx != 0))
+            {
+                func_8004C394(DIALOG_STRS[D_801E7558], 3, GLYPH_COUNTS[D_801E7558], -1);
+            }
+            else
+            {
+                g_SaveScreen_OverwriteActive--;
+            }
+
+            for (i = 0; i < 2; i++)
+            {
+                glyphPoly = (POLY_FT4*)GsOUT_PACKET_P;
+                setPolyFT4(glyphPoly);
+                glyphPoly->tpage = getTPage(0, 0, 256, 256);
+                glyphPoly->clut  = getClut(304, 510);
+                setRGB0(glyphPoly, 128, 128, 128);
+
+                if (i != 0)
+                {
+                    setUV4(glyphPoly, 144, 224, 144, 240,
+                                      168, 224, 168, 240);
+                    setXY4(glyphPoly, -54, 82, -54, 98,
+                                      -30, 82, -30, 98);
+                }
+                else
+                {
+                    setUV4(glyphPoly, 204, 224, 204, 240,
+                                      240, 224, 240, 240);
+                    setXY4(glyphPoly, 24, 82, 24, 98,
+                                      60, 82, 60, 98);
+                }
+
+                addPrim((u8*)ot->org + LAYER_24, glyphPoly);
+                GsOUT_PACKET_P = (u8*)glyphPoly + sizeof(POLY_FT4);
+            }
+#else
             Gfx_StringPositionSet(160 - (X_OFFSETS[stringIdx] / 2), 178);
             Gfx_StringDraw(DIALOG_STRS[stringIdx], DEFAULT_MAP_MESSAGE_LENGTH);
             Gfx_StringPositionSet(104, 196);
-            Gfx_StringDraw("\7Yes__________No", DEFAULT_MAP_MESSAGE_LENGTH);
+            Gfx_StringDraw(DIALOG_STRS[2], DEFAULT_MAP_MESSAGE_LENGTH);
+#endif
 
             poly = (POLY_F4*)GsOUT_PACKET_P;
             setPolyF4(poly);
@@ -842,6 +1246,35 @@ void SaveScreen_SlotBorder(void) // 0x801E4010
     s32      j;
 
     // Lines for green border around slot. Each line is doubled for 2-pixel width.
+#if VERSION_REGION_IS(NTSCJ)
+    const s_Line2d BORDER_LINES[BORDER_LINE_COUNT][BORDER_PIXEL_WIDTH] = {
+        // Top-left.
+        {
+            { { -103, -88 }, { -146, -88 } },
+            { { -103, -87 }, { -146, -87 } }
+        },
+        // Top-right.
+        {
+            { { -46, -88 }, { -2, -88 } },
+            { { -46, -87 }, { -2, -87 } }
+        },
+        // Left.
+        {
+            { { -146, -88 }, { -146, 42 } },
+            { { -145, -87 }, { -145, 41 } }
+        },
+        // Right.
+        {
+            { { -2, -88 }, { -2, 42 } },
+            { { -3, -87 }, { -3, 41 } }
+        },
+        // Bottom.
+        {
+            { { -146, 42 }, { -2, 42 } },
+            { { -145, 41 }, { -3, 41 } }
+        }
+    };
+#else
     const s_Line2d BORDER_LINES[BORDER_LINE_COUNT][BORDER_PIXEL_WIDTH] = {
         // Top-left.
         {
@@ -869,8 +1302,38 @@ void SaveScreen_SlotBorder(void) // 0x801E4010
             { { -145, 41 }, { -3, 41 } }
         }
     };
+#endif
 
     // Polygons for green glow of border around slot. Each line has 2 quads for inner and outer glow.
+#if VERSION_REGION_IS(NTSCJ)
+    const s_Quad2d BORDER_GLOW_QUADS[BORDER_LINE_COUNT][BORDER_PIXEL_WIDTH] = {
+        // Top-left.
+        {
+            { { -102, -88 }, { -102, -92 }, { -146, -88 }, { -150, -92 } },
+            { { -102, -87 }, { -102, -83 }, { -146, -87 }, { -142, -83 } }
+        },
+        // Top-right.
+        {
+            { { -46, -88 }, { -46, -92 }, { -2, -88 }, { 2,  -92 } },
+            { { -46, -87 }, { -46, -83 }, { -2, -87 }, { -6, -83 } }
+        },
+        // Left.
+        {
+            { { -146, -88 }, { -150, -92 }, { -146, 42 }, { -150, 46 } },
+            { { -145, -87 }, { -141, -83 }, { -145, 41 }, { -141, 37 } }
+        },
+        // Right.
+        {
+            { { -2, -88 }, { 2,  -92 }, { -2, 42 }, {  2, 46 } },
+            { { -3, -87 }, { -7, -83 }, { -3, 41 }, { -7, 37 } }
+        },
+        // Bottom.
+        {
+            { { -146, 42 }, { -150, 46 }, { -2, 42 }, {  2, 46 } },
+            { { -145, 41 }, { -141, 37 }, { -3, 41 }, { -7, 37 } }
+        }
+    };
+#else
     const s_Quad2d BORDER_GLOW_QUADS[BORDER_LINE_COUNT][BORDER_PIXEL_WIDTH] = {
         // Top-left.
         {
@@ -898,6 +1361,7 @@ void SaveScreen_SlotBorder(void) // 0x801E4010
             { { -145, 41 }, { -141, 37 }, { -3, 41 }, { -7, 37 } }
         }
     };
+#endif
 
     ot = &g_OrderingTable2[g_ActiveBufferIdx];
 
@@ -1535,14 +1999,21 @@ void SaveScreen_RectSaveInfoDraw(s_Line2d* line) // 0x801E5898
 
 void SaveScreen_ElementInfoDraw(s32 slotIdx, s32 selectedSaveIdx) // 0x801E5E18
 {
-    // @unused
-    char* labelStrs[] = {
+    const char* const labelStrs[] = {
+#if VERSION_REGION_IS(NTSCJ)
+        "data",
+        "save",
+        "time",
+#else
         "Data",
         "Save",
         "Time",
+#endif
         "hyper blaster",
         "power up",
+#if !VERSION_REGION_IS(NTSCJ)
         "You_need_1_free_block\n__to_create_a_new_file."
+#endif
     };
 
     GsOT*                   ot;
@@ -1554,9 +2025,12 @@ void SaveScreen_ElementInfoDraw(s32 slotIdx, s32 selectedSaveIdx) // 0x801E5E18
     s32                     saveDataIdx;
     s32                     i;
     s32                     digitCount;
-    s32                     offset;
     u32                     hyperBlasterBeamColor;
+#if VERSION_EQUAL_OR_NEWER(USA)
     u32                     timeInSec;
+#else
+    s32                     timeInSec;
+#endif
     s_MemCard_SaveMetadata* ptr;
     POLY_G4*                poly;
 
@@ -1564,13 +2038,16 @@ void SaveScreen_ElementInfoDraw(s32 slotIdx, s32 selectedSaveIdx) // 0x801E5E18
 
     g_MemCard_ActiveMemCardSlotSaves = MemCard_ActiveMemCardSlotGet(slotIdx);
 
+#if !VERSION_REGION_IS(NTSCJ)
     if (g_MemCard_ActiveMemCardSlotSaves[selectedSaveIdx].type == SavegameEntryType_NewFile)
     {
         Gfx_StringColorSet(StringColorId_White);
         Gfx_StringPositionSet(66, 178);
-        Gfx_StringDraw("You_need_1_free_block\n__to_create_a_new_file.", 50);
+        Gfx_StringDraw(labelStrs[5], 50);
     }
-    else if (g_MemCard_ActiveMemCardSlotSaves[selectedSaveIdx].type == SavegameEntryType_Save)
+    else
+#endif
+    if (g_MemCard_ActiveMemCardSlotSaves[selectedSaveIdx].type == SavegameEntryType_Save)
     {
         saveId      = g_MemCard_ActiveMemCardSlotSaves[selectedSaveIdx].savegameCount;
         saveDataIdx = g_MemCard_ActiveMemCardSlotSaves[selectedSaveIdx].elementIdx + 1;
@@ -1579,19 +2056,21 @@ void SaveScreen_ElementInfoDraw(s32 slotIdx, s32 selectedSaveIdx) // 0x801E5E18
 
         ptr = g_MemCard_ActiveMemCardSlotSaves[selectedSaveIdx].saveMetadata;
 
+#if VERSION_EQUAL_OR_NEWER(USA)
         timeInSec = FP_FROM(ptr->gameplayTimer, Q12_SHIFT);
+#else
+        timeInSec = FP_FROM((s32)ptr->gameplayTimer, Q12_SHIFT);
+#endif
 
-        offset = ptr->add290Hours;
-        hours  = (timeInSec / 3600) + (offset * 290);
-
-        hyperBlasterBeamColor = ptr->pickedUpSpecialItemCount;
-
+        hours = (timeInSec / 3600) + (ptr->add290Hours * 290);
         mins = (timeInSec / 60) % 60;
         sec  = timeInSec % 60;
 
+        hyperBlasterBeamColor = ptr->pickedUpSpecialItemCount;
+
         Gfx_StringColorSet(StringColorId_White);
         Gfx_StringPositionSet(40, 178);
-        Gfx_StringDraw("Data", 5);
+        Gfx_StringDraw(labelStrs[0], 5);
 
         digitCount = (saveDataIdx < 10) ? 1 : 0;
 
@@ -1599,7 +2078,7 @@ void SaveScreen_ElementInfoDraw(s32 slotIdx, s32 selectedSaveIdx) // 0x801E5E18
         Gfx_StringDrawInt(2, saveDataIdx);
 
         Gfx_StringPositionSet(40, 196);
-        Gfx_StringDraw("Save", 5);
+        Gfx_StringDraw(labelStrs[1], 5);
 
         digitCount = (saveId < 10) ? 1 : 0;
 
@@ -1607,7 +2086,7 @@ void SaveScreen_ElementInfoDraw(s32 slotIdx, s32 selectedSaveIdx) // 0x801E5E18
         Gfx_StringDrawInt(2, saveId);
 
         Gfx_StringPositionSet(128, 178);
-        Gfx_StringDraw("Time", 5);
+        Gfx_StringDraw(labelStrs[2], 5);
 
         digitCount = 0;
         if (hours < 100)
@@ -1644,9 +2123,9 @@ void SaveScreen_ElementInfoDraw(s32 slotIdx, s32 selectedSaveIdx) // 0x801E5E18
         }
 
         Text_Debug_PositionSet(152, 194);
-        Text_Debug_Draw("hyper blaster");
+        Text_Debug_Draw(labelStrs[3]);
         Text_Debug_PositionSet(172, 202);
-        Text_Debug_Draw("power up");
+        Text_Debug_Draw(labelStrs[4]);
 
         for (i = 0; i < 2; i++)
         {
@@ -1736,7 +2215,7 @@ void SaveScreen_LogicUpdate(void) // 0x801E649C
 {
     s32                  gameStateStep = g_GameWork.gameStateSteps[1];
     s_SaveScreenElement* saveEntry;
-    static bool          isSaveWriteOptionSelected;
+    SAVE_BSS bool          isSaveWriteOptionSelected;
 
     switch (gameStateStep)
     {
@@ -1849,6 +2328,9 @@ void SaveScreen_LogicUpdate(void) // 0x801E649C
             }
 
             // Exit save screen.
+#if VERSION_EQUAL_OR_NEWER(JAP1)
+            if (!(g_Controller0->buttonFlags.clicked & g_GameWorkPtr->config.controllerConfig.enter))
+#endif
             if (g_Controller0->buttonFlags.clicked & g_GameWorkPtr->config.controllerConfig.cancel)
             {
                 ScreenFade_Start(false, false, false);
@@ -1958,19 +2440,19 @@ void SaveScreen_FormatCard(void) // 0x801E69E8
             break;
 
         case 2:
-            MemCard_ProcessSet(MemCardProcess_Format, g_SelectedDeviceId, 0, 0);
+            MemCard_ProcessSet(MemCardGameProcessId_Format, g_SelectedDeviceId, 0, 0);
             Game_StateStepIncrement(1);
             break;
 
         case 3:
             switch (MemCard_LastMemCardResultGet())
             {
-                case MemCardResult_FileIoError:
+                case MemCardWorkResult_FileIoError:
                     g_SaveScreen_MemCardStateTextTimer = STR_TIMER_MAX;
                     Game_StateStepSet(0, 1);
                     break;
 
-                case MemCardResult_FileIoComplete:
+                case MemCardWorkResult_FileIoComplete:
                     Game_StateStepIncrement(0);
                     break;
             }
@@ -2010,7 +2492,7 @@ void SaveScreen_SaveGame(void) // 0x801E6B18
             saveEntry->add290Hours              = g_SavegamePtr->add290Hours;
             saveEntry->pickedUpSpecialItemCount = g_SavegamePtr->pickedUpSpecialItemCount;
 
-            MemCard_ProcessSet(MemCardProcess_Save_5, g_SelectedDeviceId, g_SelectedFileIdx, g_Savegame_SelectedElementIdx);
+            MemCard_ProcessSet(MemCardGameProcessId_Save_Game, g_SelectedDeviceId, g_SelectedFileIdx, g_Savegame_SelectedElementIdx);
             Game_StateStepIncrement(1);
 
         case 1:
@@ -2020,12 +2502,12 @@ void SaveScreen_SaveGame(void) // 0x801E6B18
                     Game_StateStepSet(0, 1);
                     break;
 
-                case MemCardResult_Success:
+                case MemCardWorkResult_Success:
                     g_SaveScreen_MemCardStateTextTimer = 30;
                     break;
 
-                case MemCardResult_FileIoComplete:
-                    MemCard_ProcessSet(MemCardProcess_Save_3, g_SelectedDeviceId, g_SelectedFileIdx, 0);
+                case MemCardWorkResult_FileIoComplete:
+                    MemCard_ProcessSet(MemCardGameProcessId_Save_Settings, g_SelectedDeviceId, g_SelectedFileIdx, 0);
                     Game_StateStepIncrement(1);
                     break;
             }
@@ -2034,11 +2516,11 @@ void SaveScreen_SaveGame(void) // 0x801E6B18
         case 2:
             switch (MemCard_LastMemCardResultGet())
             {
-                case MemCardResult_Success:
+                case MemCardWorkResult_Success:
                     g_SaveScreen_MemCardStateTextTimer = 30;
                     break;
 
-                case MemCardResult_FileIoComplete:
+                case MemCardWorkResult_FileIoComplete:
                     g_GameWork.autosave = g_GameWork.savegame;
 
                 default:
@@ -2059,21 +2541,21 @@ void SaveScreen_LoadSave(void) // 0x801E6DB0
         case 0:
             g_SaveScreen_State = SaveScreenState_Load;
 
-            MemCard_ProcessSet(MemCardProcess_Load_Settings, g_SelectedDeviceId, g_SelectedFileIdx, g_Savegame_SelectedElementIdx);
+            MemCard_ProcessSet(MemCardGameProcessId_Load_Settings, g_SelectedDeviceId, g_SelectedFileIdx, g_Savegame_SelectedElementIdx);
             Game_StateStepIncrement(1);
 
         case 1:
             memCardStateResult = MemCard_LastMemCardResultGet();
-            if (memCardStateResult != MemCardResult_Success)
+            if (memCardStateResult != MemCardWorkResult_Success)
             {
-                if (memCardStateResult != MemCardResult_FileIoComplete)
+                if (memCardStateResult != MemCardWorkResult_FileIoComplete)
                 {
                     g_SaveScreen_IsLoadError = true;
                     Game_StateStepSet(0, 1);
                     break;
                 }
 
-                MemCard_ProcessSet(MemCardProcess_Load_Game, g_SelectedDeviceId, 0, 0);
+                MemCard_ProcessSet(MemCardGameProcessId_Load_Game, g_SelectedDeviceId, 0, 0);
                 Game_StateStepIncrement(1);
                 break;
             }
@@ -2083,13 +2565,13 @@ void SaveScreen_LoadSave(void) // 0x801E6DB0
 
         case 2:
             memCardStateResult = MemCard_LastMemCardResultGet();
-            if (memCardStateResult == MemCardResult_Success)
+            if (memCardStateResult == MemCardWorkResult_Success)
             {
                 g_SaveScreen_MemCardStateTextTimer = 30;
                 break;
             }
 
-            if (memCardStateResult != MemCardResult_FileIoComplete)
+            if (memCardStateResult != MemCardWorkResult_FileIoComplete)
             {
                 g_SaveScreen_IsLoadError = true;
                 Game_StateStepSet(0, 1);
@@ -2111,7 +2593,7 @@ void SaveScreen_Continue(void) // 0x801E6F38
         case 0:
             MemCard_SysDisable();
 
-            D_800A97D7             = 1;
+            D_800A97D7          = 1;
             g_GameWork.autosave = g_GameWork.savegame;
 
             GameBoot_WorldInit();
@@ -2274,3 +2756,4 @@ void SaveScreen_AutoLoad_SelectSave(void) // 0x801E737C
     // Advance to next autoload state.
     Game_StateStepSet(0, g_GameWork.gameStateSteps[0] + 1);
 }
+

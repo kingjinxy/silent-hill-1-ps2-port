@@ -1,6 +1,7 @@
 #include <psyq/gtemac.h>
 
 #include "bodyprog/bodyprog.h"
+#include "bodyprog/chara/bone.h"
 #include "bodyprog/math/math.h"
 #include "bodyprog/player.h"
 
@@ -809,12 +810,12 @@ void func_800D99E4(s_SubCharacter* monsterCybil, s_Model* modelUpper, s_AnmHeade
     boneCoords[MonsterCybilBone_Root].coord.t[2] = Q12_TO_Q8(monsterCybil->position.vz);
 
     // TODO: Cybil has same skeleton structure as Harry? Check and make separate mask macros just for Cybil.
-    anmHdr->activeBones = HARRY_LOWER_BODY_BONE_MASK;
+    anmHdr->activeBoneFlags = HARRY_LOWER_BODY_BONE_MASK;
 
     animInfo = &MONSTER_CYBIL_ANIM_INFOS[monsterCybil->model.anim.status];
     animInfo->playbackFunc(&monsterCybil->model, anmHdr, boneCoords, animInfo);
 
-    anmHdr->activeBones = HARRY_UPPER_BODY_BONE_MASK;
+    anmHdr->activeBoneFlags = HARRY_UPPER_BODY_BONE_MASK;
 
     animInfo = &MONSTER_CYBIL_ANIM_INFOS[modelUpper->anim.status];
     animInfo->playbackFunc(modelUpper, anmHdr, boneCoords, animInfo);
@@ -1855,7 +1856,7 @@ void func_800DB4CC(s_SubCharacter* monsterCybil, s_Model* modelUpper, GsCOORDINA
             break;
 
         case 6:
-            func_80044F14(&boneCoords[1], 0, 0, -monsterCybilProps.field_118);
+            Bone_ExtraRotationSet(&boneCoords[1], 0, 0, -monsterCybilProps.field_118);
             break;
     }
 

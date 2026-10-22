@@ -136,60 +136,38 @@ extern s32 g_Inventory_DescriptionRollTimer; // 0x800AE1A0
 // This is done until a way to replicate `common`
 // segment behavior is found.
 
-//cam.c
+// cam.c
 
-extern GsCOORD2PARAM D_800C3928;
+extern GsCOORD2PARAM g_ItemScreen_CameraTransform;
 
 /** Packed weapon attack. See `WEAPON_ATTACK`. */
-extern s8 g_Player_WeaponAttack;
+extern s8 g_ItemScreen_PlayerWeaponAttack;
 
 extern s8 __pad_bss_800C3951[3];
 
-extern s32 D_800C3954;
+extern s32 g_ItemScreen_ViewDistance;
 
-extern s32 D_800C3958;
+extern s32 g_ItemScreen_GeomOffsetX;
 
-extern s32 D_800C395C;
+extern s32 g_ItemScreen_GeomOffsetY;
 
-//1.c
+// 2.c
 
-/** `e_MapIdx` */
-extern s8 D_800C3960;
-
-extern s8 D_800C3961;
-
-extern s8 D_800C3962;
-
-extern u8 D_800C3963;
-
-extern s32 __pad_bss_800C3964;
-
-//2.c
-
-extern bool g_Inventory_IsUpClicked; // 0x800C3968
-
-extern bool g_Inventory_IsDownClicked; // 0x800C396C
-
-extern bool g_Inventory_IsLeftClicked; // 0x800C3970
-
-extern bool g_Inventory_IsRightClicked; // 0x800C3974
-
-extern bool g_Inventory_IsUpPulsed; // 0x800C3978
-
-extern bool g_Inventory_IsDownPulsed; // 0x800C397C
-
-extern bool g_Inventory_IsLeftPulsed; // 0x800C3980
-
-extern bool g_Inventory_IsRightPulsed; // 0x800C3984
-
-extern bool g_Inventory_IsLeftHeld; // 0x800C3988
-
-extern bool g_Inventory_IsRightHeld; // 0x800C398C
+extern bool g_Inventory_IsUpClicked;
+extern bool g_Inventory_IsDownClicked;
+extern bool g_Inventory_IsLeftClicked;
+extern bool g_Inventory_IsRightClicked;
+extern bool g_Inventory_IsUpPulsed;
+extern bool g_Inventory_IsDownPulsed;
+extern bool g_Inventory_IsLeftPulsed;
+extern bool g_Inventory_IsRightPulsed;
+extern bool g_Inventory_IsLeftHeld;
+extern bool g_Inventory_IsRightHeld;
 
 /** @brief Used for smooth inventory scrolling if a left/right input is held. */
 extern bool g_Inventory_IsScrolling;
 
-/** Game difficulty. */
+/** `e_GameDifficulty` */
 extern s32 g_Inventory_GameDifficulty;
 
 /** @brief Timer used for the corner borders of the selection box in the inventory.
@@ -218,24 +196,24 @@ extern GsF_LIGHT D_800C3A88[4];
 
 extern GsF_LIGHT D_800C3AC8[2];
 
-extern GsCOORDINATE2 D_800C3AE8; // 0x800C3AE8
+extern GsCOORDINATE2 g_ItemScreen_CameraCoord;
 
 /** Used for displaying the item models.
- * Could also be camera values.
+ * Could also be camera values. @unused Dead code? Only set to 0 by `ItemScreen_CameraSet`.
  */
-extern SVECTOR3 D_800C3B38; // 0x800C3B38
+extern SVECTOR3 g_ItemScreen_CameraRotation;
 
 extern s16 __pad_bss_800C3B3E[5];
 
-extern VbRVIEW D_800C3B48; // 0x800C3B48
+extern VbRVIEW g_ItemScreen_CameraView;
 
 /** Holds the coords for displaying selection box around items and options. */
-extern DVECTOR D_800C3B68[4][4]; // 0x800C3BE8 - Type assumed.
+extern DVECTOR D_800C3B68[4][4]; // Type assumed.
 
 /** @brief Timer used for the transition of selected items
 * when scrolling through the inventory.
 */
-extern s32 g_Inventory_ScrollTransitionTimer; // 0x800AE1A4
+extern s32 g_Inventory_ScrollTransitionTimer;
 
 extern s32 D_800C3BA8;
 
@@ -243,39 +221,40 @@ extern s32 D_800C3BAC;
 
 extern s32 __pad_bss_800C3BB0[2];
 
-extern u8 g_Item_MapLoadableItems[48]; // 0x800C3BB8
+extern u8 g_Item_MapLoadableItems[48];
 
-extern GsCOORD2PARAM g_Items_Transforms[DISPLAYED_ITEM_COUNT_MAX]; // 0x800C3BE8
+extern GsCOORD2PARAM g_Items_Transforms[DISPLAYED_ITEM_COUNT_MAX];
 
 /** Stores item model data. */
-extern GsDOBJ2 g_Items_ItemsModelData[9]; // 0x800C3D78
+extern GsDOBJ2 g_Items_ItemsModelData[9];
 
 extern GsDOBJ2 D_800C3E08;
 
 /** Used to organize the items displaying in the inventory.
  * 7 is the max number of visible items.
  */
-extern s32 D_800C3E18[7]; // 0x800C3E18
+extern s32 D_800C3E18[7];
 
 /** This value is based on the index of the equipped item.
  * If the player has nothing equipped, set to `NO_VALUE`.
  */
-extern s32 g_Inventory_EquippedItemIdx; // 0x800C3E34
+extern s32 g_Inventory_EquippedItemIdx;
 
 extern s32 __pad_bss_800C3E38[2];
 
-extern u8 D_800C3E40;
+// TODO: Unsure about name, depends on certain extra options being enabled.
+extern u8 g_Ranking_ExtraItemFlags;
 
 extern s8 __pad_bss_800C3E41[7];
 
-extern GsCOORDINATE2 g_Items_Coords[DISPLAYED_ITEM_COUNT_MAX]; // 0x800C3E48
+extern GsCOORDINATE2 g_Items_Coords[DISPLAYED_ITEM_COUNT_MAX];
 
 // ==========
 // FUNCTIONS
 // ==========
 
-/** Appears to set the camera for items. */
-void ItemScreen_CamSet(VbRVIEW* view, GsCOORDINATE2* coord, SVECTOR3* vec, s32 arg3); // 0x8004BB4C
+/** Appears to set the camera for items. `itemRot` is always cleared to the identity rotation. */
+void ItemScreen_CameraSet(VbRVIEW* camView, GsCOORDINATE2* camCoord, SVECTOR3* itemRot, s32 unused1); // 0x8004BB4C
 
 void GameFs_TmdDataAlloc(s32* buf); // 0x8004BCBC
 
@@ -283,9 +262,9 @@ void GameFs_TmdDataAlloc(s32* buf); // 0x8004BCBC
  *
  * Name might be inaccurate as it also appears to be used for the camera.
  */
-void ItemScreen_ItemRotate(SVECTOR* arg0, GsCOORDINATE2* arg1); // 0x8004BCDC
+void ItemScreen_ItemRotate(const SVECTOR* itemRot, GsCOORDINATE2* itemCoord); // 0x8004BCDC
 
-void func_8004BD74(s32 displayItemIdx, GsDOBJ2* arg1, s32 arg2); // 0x8004BD74
+void func_8004BD74(s32 displayItemIdx, GsDOBJ2* obj, s32 arg2); // 0x8004BD74
 
 void func_8004BFE8(void); // 0x8004BFE8
 
@@ -337,7 +316,7 @@ void GameState_ItemScreens_Update(void); // 0x8004C9B0
 void Gfx_Results_Save(void); // 0x8004D1A0
 
 /** Function mainly responsible for handling the inventory screen. */
-void Inventory_Logic(void); // 0x8004D518
+void Inventory_Update(void); // 0x8004D518
 
 /** @brief Used for environmental item interactions such as keys, puzzle objects, or
  * events like the Cybil boss fight.
@@ -357,16 +336,18 @@ void Gfx_Inventory_ScrollArrowsDraw(s32* invSelectionId); // 0x8004EC7C
 bool Player_ItemRemove(u8 itemId, u8 count);
 
 /** Sets the possible interaction commands for all items in the inventory. */
-void func_8004EF48();
+void Inventory_ItemCommandSet();
 
+// Returns inventory item slot count.
 s32 func_8004F190(s_Savegame* save);
 
+/** @unused */
 void func_8004F10C(s32* arg0);
 
 /** @brief Draws the two messages that indicate when the player can't open
  * the map in the inventory.
  */
-void Gfx_Inventory_UnavailableMapText(s32 strIdx); // 0x8004F57C
+void Inventory_UnavailableMapTextDraw(s32 strIdx); // 0x8004F57C
 
 void Inventory_DirectionalInputSet(void); // 0x8004F5DC
 
@@ -404,7 +385,7 @@ void Gfx_Primitive2dTextureSet(s32 x, s32 y, s32 otIdx, s32 abr);
 
 /** @brief Toggles the visibility of object while the inventory scrolls.
  *
- * Used in: `Inventory_Logic`
+ * Used in: `Inventory_Update`
  */
 void func_800539A4(s32 arg0, s32 arg1);
 

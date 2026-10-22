@@ -42,9 +42,7 @@ void GameState_LoadScreen_Update(void)
 
 void GameBoot_InGameStartup(void)
 {
-    // It makes up to 5 attemps. If the load fails, it restarts
-    // the entire process by restarting the timer used to check if a demo
-    // should be triggered.
+    // Makes up to 5 attemps. If the load fails, the timer used to check if a demo should be triggered is restarted.
     static s32 demoLoadAttempCount;
 
     #define playerChara g_SysWork.playerWork.player
@@ -228,7 +226,8 @@ void GameBoot_InGameStartup(void)
                 if (AreaLoad_TransitionFlags() & AreaTransitionFlag_SkipFadeIn)
                 {
                     g_GameWork.gameStateSteps[0] = 1;
-                    g_ScreenFade_Status          = SCREEN_FADE_STATUS(ScreenFadeState_ResetTimestep, IS_SCREEN_FADE_WHITE(g_ScreenFade_Status));
+                    g_ScreenFade_Status          = SCREEN_FADE_STATUS(ScreenFadeState_ResetTimestep,
+                                                                      IS_SCREEN_FADE_WHITE(g_ScreenFade_Status));
                 }
             }
             break;
@@ -358,7 +357,7 @@ void GameBoot_WorldInit(void) // 0x80035178
     World_Init();
     WorldGfx_CharaModelsFree();
     WorldGfx_HeldItemModelFree();
-    Anim_BoneInit((s_AnmHeader*)FS_BUFFER_0, g_SysWork.playerBoneCoords);
+    Anim_BonesInit((s_AnmHeader*)FS_BUFFER_0, g_SysWork.playerBoneCoords);
     WorldGfx_PlayerModelProcessLoad();
 
     g_SysWork.unused_229C = NO_VALUE;

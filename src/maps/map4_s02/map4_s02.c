@@ -5,6 +5,22 @@
 #include "maps/map4/map4_s02.h"
 #include "maps/particle.h"
 #include "maps/characters/player.h"
+#include "inline_no_dmpsx.h"
+#include <psyq/gtemac.h>
+#include "bodyprog/player.h"
+#include "maps/characters/air_screamer.h"
+#include "maps/characters/groaner.h"
+#include "maps/characters/romper.h"
+
+#include "../src/maps/particle.c"
+
+#include "../src/maps/characters/player.c"
+
+#include "../src/maps/characters/air_screamer.c" // 0x800D0B24
+
+#include "../src/maps/characters/groaner.c" // 0x800E1B5C
+
+#include "../src/maps/characters/romper.c" // 0x800E6134
 
 #include "../src/maps/map_util.c" // 0x800E9D28
 
@@ -20,8 +36,13 @@ void func_800EA338(void) {}
 
 const char* MAP_MESSAGES[] = {
     #include "maps/shared/map_msg_common.h"
+#if VERSION_REGION_IS(NTSC)
     /* 15 */ "~C3\tgreen_lion ~E ",
     /* 16 */ "~C3\tAlchemilla_Hospital ~E "
+#elif VERSION_REGION_IS(NTSCJ)
+    /* 15 */ "~C3\tｇｒｅｅｎ　ｌｉｏｎ ~E ",
+    /* 16 */ "~C3\tアルケミラ病院 ~E "
+#endif
 };
 
 void Map_WorldObjectsInit(void) // 0x800EA340
