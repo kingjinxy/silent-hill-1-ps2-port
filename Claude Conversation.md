@@ -29817,3 +29817,94 @@ The LRU choice keeps a re-used row at least 8 primitives away from its last use,
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
 
+- tool `AskUserQuestion`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct,collections def load(p):     d=open(p,'rb').read(); out=[]; pos=0     while pos+
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "rgbaq\[i\] *=\|colorMask\|a = (textured" src/port/ps2/gpu_gs.c | head; grep -n "static const u64x MODES
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1095,1100p src/port/ps2/gpu_gs.c; sed -n 1530,1545p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1086,1099p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() s=s.replace("""    u32 filt; /* dithered semi-tran
+
+## Claude
+
+Then the checks: build, and run the synthetic test, the demo 1 replay and the Infirmary replay.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1; unset SH1_FPS; (python3 tools/port/port_link.py > build/port/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gpu_test.py'; s=open(p).read() s=s.replace('''        def col():             ret
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() s=s.replace("""            big |= rgb[i] & 0x80808
+
+## Claude
+
+To judge the trick I need the same `--dark` test without it. I'll build once with it disabled and compare.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|    if (gouraud \&\& textured \&\& !raw \&\& (!p.semi|    if (0 \&\& gouraud \&\& textured \&\& !raw \
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct,collections def ld(p): return struct.unpack('<524288H',open(p,'rb').read()) a=ld
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git checkout src/port/ps2/gpu_gs.c; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (python3 tools
+
+## Claude
+
+I tried the gouraud rounding and didn't keep the change. The renderer is unchanged from fca05b3c9 and `build/port/sh1_ps2.iso` is the 60 fps console build without the experiment. The only commit is a test option, `gpu_test.py --dark` (8d2b6e609).
+
+**What I found:**
+- In demo 1, 83% of the remaining differing pixels come from textured gouraud polygons, mostly the ground-fog layers. They're almost all exactly one level darker, spread evenly over the dither pattern, so dither isn't the cause.
+- The cause is the order of operations. The PS1 rounds the interpolated colour and then multiplies by the texel. The GS truncates the colour, then multiplies, and has no hook to round in between.
+
+**What I tried:** sending vertex colours as 2c + 1 and halving the result in the blend unit. That should reproduce the PS1's rounding to within a fraction of a level.
+- With colours up to 127 it improved demo 1 by about 400 pixels (5%). But it broke bright texels, because the GS clamps the modulated colour to 255 before the blend can halve it.
+- At the safe limit (colours up to 63) it applies so rarely that demo 1 only improved by about 50 pixels.
+
+That's not worth an extra rendering path, so I removed it.
+
+**Real options from here:**
+1. **Accept it:** a one-level difference on some fog and gouraud pixels; everything else is now close.
+2. **Untextured gouraud exactly:** draw those polygons as textured with a constant texel, which can be exact. It's a smaller share of the remaining pixels.
+3. **Exact textured gouraud:** rasterize on the PS2's vector unit (VU1) or CPU instead of the GS. That's a large project with a real performance cost.
+
+The remaining blend-mode item (subtract and quarter-add) is also still open. Which of these, if any, do you want next?
+
+## User
+
+Let’s accept it and move on to the blend modes
+
+## Claude
+
+Understood: the gouraud rounding stays as it is, and I'll move on to the blend modes. First, how often each semi-transparent blend mode actually appears in game frames, so effort goes where it shows:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1546,1640p src/port/ps2/gpu_gs.c; grep -n "^static void emit_poly" -A30 src/port/ps2/gpu_gs.c | head -40
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^static void fill_rect" -A75 src/port/ps2/gpu_gs.c | sed -n 20,75p; grep -n "s_CacheSlots *=\|CACHE_SLO
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() # reserve the last cache slot in the default layou
+
+## Claude
+
+It's in. Now the synthetic test (DuckStation already captured) and the demo replays:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1; unset SH1_FPS; (python3 tools/port/port_link.py > build/port/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 tools/port/gpu_test.py --skip-ps1 --skip-ps2 --show 8 2>&1 | tail -48 | head 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "set(R_TEXA" src/port/ps2/gpu_gs.c | head -3; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).rea
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct ld=lambda n: struct.unpack("<%dH"%(1024*512),open('build/port/cap/'+n,'rb').read
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() old="""        blend_exact(&p, prim, rgbaq, uv, xy
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() old="""                if (blend_exact_box(x + i, 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
+

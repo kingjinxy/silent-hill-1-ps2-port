@@ -364,7 +364,7 @@ typedef struct
 } Slot;
 
 static Slot s_Slots[CACHE_SLOTS];
-static s32  s_CacheSlots = CACHE_SLOTS; /* in use (fewer with a 2x shadow buffer) */
+static s32  s_CacheSlots = CACHE_SLOTS - 1; /* in use (fewer with a 2x shadow buffer; the last is blend_exact's) */
 
 /** GS block address of page cache slot i. */
 static u32 slot_tbp(s32 i)
@@ -1408,6 +1408,114 @@ static void sr_summary(void)
 }
 #endif
 
+/* Exact blending for semi-transparency modes 0, 2 and 3 (blend_exact). The PS1 dithers a polygon's
+ * colour down to 5 bits and blends in 5 bits; the GS blends in 8 bits and dithers the result (1-2
+ * levels off in these modes: gpu_test.py). The source is drawn first into a scratch area (the last
+ * page cache slot, 256x128 PSMCT16), dithered as on the PS1, then composited onto the frame buffer:
+ * a source in exact multiples of 8 makes the GS's blend equal the PS1's in all four modes. Mode 1
+ * keeps the direct path (exact but for faint colours: filt_get). */
+#define BX_W 256
+#define BX_H 128
+#define BX_ADDR ((CACHE2_ADDR + (CACHE_SLOTS - 1 - 15) * CACHE_SLOT))
+
+/** Whether the polygon's clipped bounding box fits the scratch area (origin aligned to 4 pixels, so
+ * the dither pattern lines up); its box. */
+static int blend_exact_box(const s32* x, const s32* y, s32 nv, s32* bx, s32* by, s32* bw, s32* bh)
+{
+    s32 i, x0 = x[0], x1 = x[0], y0 = y[0], y1 = y[0];
+    for (i = 1; i < nv; i++)
+    {
+        x0 = x[i] < x0 ? x[i] : x0;
+        x1 = x[i] > x1 ? x[i] : x1;
+        y0 = y[i] < y0 ? y[i] : y0;
+        y1 = y[i] > y1 ? y[i] : y1;
+    }
+    x0 = x0 > s_AreaX1 ? x0 : s_AreaX1;
+    y0 = y0 > s_AreaY1 ? y0 : s_AreaY1;
+    x1 = x1 < s_AreaX2 ? x1 : s_AreaX2;
+    y1 = y1 < s_AreaY2 ? y1 : s_AreaY2;
+    if (x1 < x0 || y1 < y0)
+    {
+        return 0;
+    }
+    *bx = x0 & ~3;
+    *by = y0 & ~3;
+    *bw = x1 + 1 - *bx;
+    *bh = y1 + 1 - *by;
+    return *bw <= BX_W && *bh <= BX_H;
+}
+
+static void blend_exact(const Prim* p, u64x prim, const u64x* rgbaq, const u64x* uv, const u64x* xyz, const s32* x,
+                        const s32* y, s32 nv, s32 bx, s32 by, s32 bw, s32 bh)
+{
+    static const u64x MODES[4] = {
+        0 | (1 << 2) | (2 << 4) | (1 << 6) | (0x40ULL << 32), /* (Cs - Cd) * 0.5 + Cd */
+        0 | (2 << 2) | (2 << 4) | (1 << 6) | (0x80ULL << 32), /* Cs + Cd */
+        1 | (0 << 2) | (2 << 4) | (2 << 6) | (0x80ULL << 32), /* Cd - Cs */
+        0 | (2 << 2) | (2 << 4) | (1 << 6) | (0x20ULL << 32), /* Cs * 0.25 + Cd */
+    };
+    u64x test  = s_Reg[R_TEST] & ~(u64x)0xFFFF; /* the depth test bits, no alpha or destination test */
+    u64x plain = prim & ~(u64x)(1 << 6);        /* no ABE */
+    s32  sx0, sy0, sx1, sy1;
+
+    if (p->textured)
+    {
+        /* 1. Texels without the semi-transparency bit (alpha 0x40): drawn as they are. */
+        set(R_TEST, test | 1 | (4 << 1) | (0x40 << 4) | ((u64x)(s_CheckMask != 0) << 14));
+        emit_poly(1, plain, rgbaq, uv, xyz, x, y, nv);
+    }
+
+    /* 2. The rest into the scratch area, dithered as on the PS1, bit 15 set where drawn. */
+    sx0 = (s_AreaX1 > bx ? s_AreaX1 : bx) - bx;
+    sy0 = (s_AreaY1 > by ? s_AreaY1 : by) - by;
+    sx1 = (s_AreaX2 < bx + bw - 1 ? s_AreaX2 : bx + bw - 1) - bx;
+    sy1 = (s_AreaY2 < by + bh - 1 ? s_AreaY2 : by + bh - 1) - by;
+    set(R_FRAME, (u64x)(BX_ADDR / 8192) | ((u64x)(BX_W / 64) << 16) | ((u64x)PSM_CT16 << 24));
+    set(R_XYOFFSET, (u64x)((2048 + bx) << 4) | ((u64x)((2048 + by) << 4) << 32));
+    scissor(0, 0, bw - 1, bh - 1);
+    set(R_TEST, test);
+    set(R_FBA, 0);
+    set(R_DTHE, 0);
+    ad(R_PRIM, 6);
+    ad(R_RGBAQ, 0x3F800000ULL << 32);
+    ad(R_XYZ2, (u64x)((2048 + bx) << 4) | ((u64x)((2048 + by) << 4) << 16));
+    ad(R_XYZ2, (u64x)((2048 + bx + bw) << 4) | ((u64x)((2048 + by + bh) << 4) << 16));
+    scissor(sx0, sy0, sx1, sy1);
+    set(R_TEST, p->textured ? test | 1 | (4 << 1) | (0x80 << 4) : test);
+    set(R_FBA, 1);
+    set(R_DTHE, p->dither);
+    emit_poly((int)p->textured, plain, rgbaq, uv, xyz, x, y, nv);
+
+    /* 3. The scratch area composited onto the frame buffer: the PS1's blend, exact. */
+    ad(R_TEXFLUSH, 0);
+    set(R_FRAME, (u64x)VRAM_FBP | ((u64x)VRAM_BW << 16) | ((u64x)PSM_CT16 << 24));
+    set(R_XYOFFSET, (u64x)(2048 << 4) | ((u64x)(2048 << 4) << 32));
+    scissor(s_AreaX1, s_AreaY1, s_AreaX2, s_AreaY2);
+    set(R_TEST, test | 1 | (7 << 1) | ((u64x)(s_CheckMask != 0) << 14)); /* drop alpha 0: not drawn */
+    set(R_FBA, s_SetMask);
+    set(R_DTHE, 0);
+    set(R_ALPHA, MODES[p->semiMode]);
+    set(R_PABE, 0);
+    set(R_TEX1, 0);
+    set(R_CLAMP, 0);
+    set(R_TEX0, (u64x)(BX_ADDR / 256) | ((u64x)(BX_W / 64) << 14) | ((u64x)PSM_CT16 << 20) | (8ULL << 26) | (7ULL << 30) |
+                    (1ULL << 34) | (1ULL << 35)); /* 256x128, TCC, DECAL */
+    if (!p->textured)
+    {
+        set(R_TEXA, 0x40 | (1 << 15) | ((u64x)0x40 << 32)); /* untextured: bit 15 not written (as the PS1) */
+    }
+    ad(R_PRIM, 6 | (1 << 4) | (1 << 6) | (1 << 8));
+    ad(R_RGBAQ, 0x80808080ULL | (0x3F800000ULL << 32));
+    ad(R_UV, 0);
+    ad(R_XYZ2, (u64x)((2048 + bx) << 4) | ((u64x)((2048 + by) << 4) << 16));
+    ad(R_UV, (u64x)(bw << 4) | ((u64x)(bh << 4) << 16));
+    ad(R_XYZ2, (u64x)((2048 + bx + bw) << 4) | ((u64x)((2048 + by + bh) << 4) << 16));
+    set(R_TEXA, 0x40 | (1 << 15) | ((u64x)0x80 << 32)); /* back to init()'s */
+    s_Epoch++; /* every memo of the registers set above */
+    s_StateGen++;
+    s_RegValid[R_TEX0] = 0;
+}
+
 /** A GP0 polygon; `under`: a fog pair's underlay to draw first (GpuGs_Commands), or NULL. `shape`:
  * the command's gouraud, quad and textured bits (cmd & 0x1C), a constant in each copy (polygon()), so
  * the vertex loops unroll and the per-vertex branches go. */
@@ -1420,7 +1528,7 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
     u32  raw      = (cmd & 1) && textured;
     s32  words    = nv * (1 + (s32)textured) + (gouraud ? nv : 1);
     u32  rgb[4], clut = 0, tpage = s_TexPage, colorMask = 0xFFFFFF;
-    s32  x[4], y[4], i, k = 0;
+    s32  x[4], y[4], i, k = 0, bxx, byy, bww, bhh;
     u64x rgbaq[4], uv[4], xyz[4], prim, a;
     Prim p;
 #ifdef SH_PORT_SCREENREAD
@@ -1555,7 +1663,33 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
     LP_BEGIN(LP_POLY_EMIT)
     s_StDate += s_CheckMask * (nv == 4 ? 2 : 1);
     s_StRtTex += (textured && ((tpage >> 7) & 3) >= 2) * (nv == 4 ? 2 : 1);
-    if (nv == 4 && quad_fits(x, y))
+    if (p.semi && p.semiMode != 1 && !under && s_HrLayout == 0 && !s_Sh &&
+        blend_exact_box(x, y, nv, &bxx, &byy, &bww, &bhh))
+    {
+        for (i = 0; i < nv; i++)
+        {
+            rgbaq[i] = (u64x)(rgb[i] & colorMask) | a;
+            xyz[i]   = (u64x)(HR_X(x[i]) << 4 & 0xFFFF) | ((u64x)(HR_Y(y[i]) << 4 & 0xFFFF) << 16);
+        }
+        if (nv == 3)
+        {
+            blend_exact(&p, prim, rgbaq, uv, xyz, x, y, 3, bxx, byy, bww, bhh);
+        }
+        else
+        {
+            /* A quad as the PS1 draws it, triangle (0, 1, 2) then (1, 2, 3), each blended on its own:
+             * where they overlap, the PS1 blends twice. */
+            for (i = 0; i < 2; i++)
+            {
+                if (blend_exact_box(x + i, y + i, 3, &bxx, &byy, &bww, &bhh))
+                {
+                    prim = prim_state(&p); /* the composite left the scratch area as the texture */
+                    blend_exact(&p, prim, rgbaq + i, uv + i, xyz + i, x + i, y + i, 3, bxx, byy, bww, bhh);
+                }
+            }
+        }
+    }
+    else if (nv == 4 && quad_fits(x, y))
     {
         /* The common case: the quad as one strip, written straight into the packet; a fog pair's
          * underlay first, in the same (textured) register layout so both share one GIF tag. The
@@ -2514,7 +2648,7 @@ void GpuGs_HiresLayout(int mode)
     s_HrLayout         = mode;
     s_HrSh             = mode & 1;
     s_HrPsm            = (mode & 2) ? PSM_CT32 : PSM_CT16;
-    s_CacheSlots       = mode == 1 ? 27 : mode == 3 ? 7 : CACHE_SLOTS;
+    s_CacheSlots       = mode == 1 ? 27 : mode == 3 ? 7 : mode == 2 ? CACHE_SLOTS : CACHE_SLOTS - 1;
     s_TexGen++;
     s_Epoch++;
     s_RegValid[R_TEX0] = 0;
