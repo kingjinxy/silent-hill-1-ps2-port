@@ -642,7 +642,7 @@ void PuppetNurse_Control8(s_SubCharacter* nurse)
     s32    controlState;
     q19_12 speed;
 #if !defined(M2CTX)
-    register q19_12 angle asm("v1"); // @hack forced register for a match. Doesn't affect code logic.
+    register q19_12 angle MATCH_REG("v1"); // @hack forced register for a match. Doesn't affect code logic.
 #else
     q19_12 angle;
 #endif
