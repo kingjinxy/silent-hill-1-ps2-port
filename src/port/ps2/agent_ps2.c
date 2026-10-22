@@ -13,7 +13,7 @@
  * main loop), "NG" start a New Game (normal difficulty). Commands run in the agent thread, so they
  * also work in a kept crashed state.
  * In PCSX2 there's no ministack, so the module doesn't load; the agent thread runs anyway, for the
- * in-game reset combo (libpad_ps2.c: Port_AgentRequest).
+ * in-game reset combo (input_ps2.c Port_InputFilter: Port_AgentRequest).
  */
 
 #include <kernel.h>

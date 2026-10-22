@@ -7,15 +7,31 @@
 #include "bodyprog/screen/screen_draw.h"
 #include "bodyprog/sys/joy.h"
 
+#ifdef SH_PORT
+#include "port/pad.h"
+#endif
+
 void Joy_Init(void) // 0x8003441C
 {
+#ifdef SH_PORT
+    // Port: the PS2's pads (src/port/ps2/pad_ps2.c). Their data is copied in by `Joy_ReadP1`, not
+    // written into these buffers by the BIOS every vertical blank.
+    Port_PadInit();
+#else
     PadInitDirect(&g_GameWork.rawController, g_Controller1);
     PadStartCom();
+#endif
 }
 
 void Joy_ReadP1(void) // 0x80034450
 {
     s_ControllerData* cont;
+
+#ifdef SH_PORT
+    // Port: the pads' last data (polled once per vertical blank), where the PS1 BIOS would have put it.
+    Port_PadRead(0, &g_GameWork.rawController);
+    Port_PadRead(1, &g_Controller1->analogController);
+#endif
 
     cont = &g_GameWork.controllers[0];
 

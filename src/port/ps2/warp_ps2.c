@@ -143,7 +143,7 @@ int Port_MapLoadWarp(int mapIdx, int demoBoot)
     return mapIdx;
 }
 
-/** Buttons for libpad_ps2.c to press (PS1 bit order, set = pressed): L2 for half a second once the
+/** Buttons for Port_InputFilter (input_ps2.c) to press (PS1 bit order, set = pressed): L2 for half a second once the
  * current warped map has run for `seconds=N`, to end the demo. */
 unsigned int Port_WarpButtons(void)
 {

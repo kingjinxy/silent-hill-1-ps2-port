@@ -1,6 +1,6 @@
 /** @brief Scripted input for testing: `host:input.txt` (next to the disc image, with PCSX2's host file
- * system on) is a timeline of button presses the port feeds to the game through the pad (libpad_ps2.c),
- * one per line, in emulated seconds since boot:
+ * system on) is a timeline of button presses the port feeds to the game through the pad
+ * (Port_InputFilter, below), one per line, in emulated seconds since boot:
  *
  *     12.5 start 6      hold Start for 6 frames (vertical blanks) at 12.5 s
  *     14   cross down   press Cross and Down together (default 6 frames)
@@ -107,7 +107,7 @@ static void load(void)
     }
 }
 
-/** Buttons to press now (called from the pad poll, once per vertical blank). */
+/** Buttons to press now (called from Port_InputFilter, once per vertical blank). */
 unsigned int Port_InputButtons(void)
 {
     unsigned int cycles;
@@ -169,4 +169,52 @@ void Port_InputCrashCheck(void)
         s_Crash = 0;
         (void)*(volatile unsigned int*)8; /* TLB load fault (a real PS2; PCSX2 lets it pass) */
     }
+}
+
+/** Applied to every pad read (pad_ps2.c, once per vertical blank) before the game sees it. `data` is
+ * the PS1 controller record (include/port/pad.h). */
+void Port_InputFilter(int port, unsigned char* data)
+{
+    extern void         Port_AgentRequest(const char* cmd); /* agent_ps2.c */
+    extern unsigned int Port_WarpButtons(void);             /* warp_ps2.c */
+    static int          resetHeld;
+    unsigned int        held, press;
+    int                 k;
+
+    /* Sticks resting near the centre read as exactly 80h, as PS1 pads (and DuckStation) report: the
+     * game reads the live sticks even during the attract demo, and a PS2 pad at rest (7Fh) changed
+     * Harry's run animation speed there. The game's own dead zone is larger. */
+    for (k = 4; k < 8; k++)
+    {
+        int d = (int)data[k] - 0x80;
+        if (d >= -8 && d <= 8)
+        {
+            data[k] = 0x80;
+        }
+    }
+    if (port != 0)
+    {
+        return;
+    }
+
+    /* In-game reset: L1+L2+R1+R2+Select+Start held for a second exits to the PS2 browser (the RESET
+     * button doesn't under Neutrino). PS1 bit order, active low. */
+    held = ~(data[2] | (data[3] << 8)) & 0xFFFF;
+    if ((held & 0x0F09) == 0x0F09)
+    {
+        if (++resetHeld == 60)
+        {
+            printf("input: reset combo held: exiting to the browser\n");
+            Port_AgentRequest("OS");
+        }
+    }
+    else
+    {
+        resetHeld = 0;
+    }
+
+    /* Test presses from the map warp (warp_ps2.c) and scripted input (above); active low. */
+    press = Port_WarpButtons() | Port_InputButtons();
+    data[2] &= (unsigned char)~(press & 0xFF);
+    data[3] &= (unsigned char)~(press >> 8);
 }

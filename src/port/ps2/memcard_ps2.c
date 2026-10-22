@@ -1,6 +1,6 @@
 /** @brief The PS2 memory cards behind the port's PS1 cards (src/port/psx_card.c).
  *
- * rom0:MCMAN and rom0:MCSERV (the versions that go with the rom0:SIO2MAN/PADMAN that libpad_ps2.c
+ * rom0:MCMAN and rom0:MCSERV (the versions that go with the rom0:SIO2MAN/PADMAN that pad_ps2.c
  * loads) through ps2sdk's libmc. PS1 slot 1 is the PS2 card in port 1, slot 2 the one in port 2.
  * Each holds the PS1 card image in one save folder, with icon.sys and an icon so the PS2 browser
  * shows it as Silent Hill's save:
@@ -28,7 +28,7 @@
 #define MC_O_WRONLY 0x0002
 #define MC_O_CREAT  0x0200
 
-extern void Port_PadModulesLoad(void); /* libpad_ps2.c: rom0:SIO2MAN (MCMAN needs it) and PADMAN */
+extern void Port_PadModulesLoad(void); /* pad_ps2.c: rom0:SIO2MAN (MCMAN needs it) and PADMAN */
 
 static int s_Ready;            /* 1 libmc ready, -1 unavailable */
 static int s_Busy = -1;        /* port of the query in flight, -1 none */

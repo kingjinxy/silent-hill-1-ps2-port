@@ -18,7 +18,7 @@ static volatile int s_CallbackManual;
 volatile int g_PortInInterrupt; /* set while the game's vertical blank callback runs (profilers) */
 static unsigned int s_WaitCycles; /* EE cycles spent waiting in VSync (idle), for the heartbeat */
 
-extern void Pad_Poll(void);        /* libpad_ps2.c */
+extern void Port_PadPoll(void);    /* pad_ps2.c */
 extern int  Display_FrameCount(void); /* display_ps2.c */
 
 static int s_HeartbeatSema = -1;
@@ -354,9 +354,9 @@ static void pad_refresh(void)
     if (polledAt != s_VBlanks)
     {
         polledAt = s_VBlanks;
-        PROF_BEGIN("pad: Pad_Poll")
-        Pad_Poll();
-        PROF_END("pad: Pad_Poll")
+        PROF_BEGIN("pad: Port_PadPoll")
+        Port_PadPoll();
+        PROF_END("pad: Port_PadPoll")
     }
 }
 

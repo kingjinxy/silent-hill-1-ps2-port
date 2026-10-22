@@ -31,7 +31,7 @@ static void stage_color(unsigned int rgb)
     *(volatile unsigned long long*)0x12000000 = 4;   /* PMODE: both read circuits off (CRTMD = 1) */
     *(volatile unsigned long long*)0x120000E0 = rgb; /* BGCOLOR: then the whole screen shows it */
 }
-extern unsigned int Port_PadButtons(void);     /* libpad_ps2.c */
+extern unsigned int Port_PadButtons(void);     /* pad_ps2.c */
 
 static EE_RegFrame s_Frame;
 #ifdef SH_PORT_WATCH_PACKET
@@ -102,7 +102,7 @@ void Port_Restart(void)
 {
     extern void Port_SpuShutdown(void);   /* spu_ps2.c */
     extern void Port_AgentQuiesce(void);  /* agent_ps2.c */
-    extern void Port_PadShutdown(void);   /* libpad_ps2.c */
+    extern void Port_PadShutdown(void);   /* pad_ps2.c */
     unsigned int t0, t;
     int          i;
     printf("port: restarting %s\n", RELAUNCH_ELF);
