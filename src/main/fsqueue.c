@@ -45,6 +45,18 @@ bool Fs_QueueChunksLoad(void)
     {
         isFinished = WorldGfx_ChunkInitCheck() != false;
     }
+#ifdef SH_PORT
+    {
+        // Test option (compare_frames.py --ps1-holds): demo playback with the PS1's load timing, the
+        // chunk load lasting as many frames of its demo step as on the PS1 (capture_ps2.c).
+        extern int Capture_DemoHold(int step, int frames);
+        extern s32 Port_DemoStepFrames(void);
+        if (isFinished && (g_SysWork.sysFlags & SysFlag_DemoActive) && Capture_DemoHold(g_Demo_DemoStep, Port_DemoStepFrames()))
+        {
+            isFinished = false;
+        }
+    }
+#endif
 
     return isFinished;
 }

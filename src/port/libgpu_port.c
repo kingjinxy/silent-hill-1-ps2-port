@@ -65,6 +65,13 @@ static s32 s_CaptureFrameStep = -2;
 static s32 s_CaptureDemoCount;
 static s32 s_CaptureDemoOn;
 
+/** The demo playing (1: the first), as counted for captures. */
+int Capture_DemoCurrent(void)
+{
+    return s_CaptureDemoCount;
+}
+
+
 /** @brief Every GPU command packet (GP0 words) ends up here. */
 static void Gpu_Submit(const u32* words, s32 count)
 {

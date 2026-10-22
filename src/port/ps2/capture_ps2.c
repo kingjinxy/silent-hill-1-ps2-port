@@ -40,7 +40,8 @@ static int   s_StateA = -1, s_StateB = -1; /* `state=A:B`: game state of demo st
 static FILE* s_StateFile;
 static unsigned int s_DumpAddr[64], s_DumpSize[64]; /* `dump=ADDR:SIZE` (hex): globals appended to each state record */
 static int          s_DumpCount;
-static int   s_Walk, s_WalkEnd = -1; /* `walk`: frames counted from the end of joy.c's walk */
+static int   s_Walk, s_WalkEnd = -1;
+static int   s_HoldStep[64], s_HoldFrames[64], s_HoldCount; /* `hold=S:N`: demo step S lasts N frames (PS1 load timing) */ /* `walk`: frames counted from the end of joy.c's walk */
 
 
 static void load(void)
@@ -76,6 +77,11 @@ static void load(void)
         else if (!strncmp(tok, "state=", 6))
         {
             sscanf(tok + 6, "%d:%d", &s_StateA, &s_StateB);
+        }
+        else if (!strncmp(tok, "hold=", 5) && s_HoldCount < 64)
+        {
+            sscanf(tok + 5, "%d:%d", &s_HoldStep[s_HoldCount], &s_HoldFrames[s_HoldCount]);
+            s_HoldCount++;
         }
         else if (!strcmp(tok, "walk"))
         {
@@ -179,6 +185,26 @@ void Capture_State(int step, unsigned int seed, int deltaTime, const void* state
             fwrite((const void*)(unsigned long)s_DumpAddr[i], 1, s_DumpSize[i], s_StateFile);
         }
     }
+}
+
+/** Demo playback with the PS1's load timing (`hold=S:N`, compare_frames.py --ps1-holds): whether demo
+ * step `step`, `frames` frames into it, is still held (the PS1 spent N frames on it, loading). */
+int Capture_DemoHold(int step, int frames)
+{
+    extern int Capture_DemoCurrent(void); /* libgpu_port.c: the demo playing (1: the first) */
+    int        i;
+    if (s_Loaded <= 0 || Capture_DemoCurrent() != s_Demo)
+    {
+        return 0;
+    }
+    for (i = 0; i < s_HoldCount; i++)
+    {
+        if (s_HoldStep[i] == step)
+        {
+            return frames + 4 < s_HoldFrames[i]; /* the step also lasts the frames after the load (measured: 4) */
+        }
+    }
+    return 0;
 }
 
 /** Whether the capture walks first (joy.c), and its end (gameplay vertical blank). */

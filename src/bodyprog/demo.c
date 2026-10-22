@@ -316,6 +316,17 @@ void Demo_DemoRandSeedAdvance(void) // 0x8008F598
 #endif
 }
 
+#ifdef SH_PORT
+static u32 s_PortHeldStep = ~0u;
+static s32 s_PortHeldFrames;
+
+/** Frames the current demo step has lasted so far (fsqueue.c's PS1 load timing option). */
+s32 Port_DemoStepFrames(void)
+{
+    return s_PortHeldFrames;
+}
+#endif
+
 bool Demo_Update(void) // 0x8008F5D8
 {
     s32         prevScreenFadeCpy;
@@ -351,6 +362,14 @@ bool Demo_Update(void) // 0x8008F5D8
         return false;
     }
 
+#ifdef SH_PORT
+    if (s_PortHeldStep != demoStep)
+    {
+        s_PortHeldStep   = demoStep;
+        s_PortHeldFrames = 0;
+    }
+    s_PortHeldFrames++; /* frames at this step so far, this one included */
+#endif
     if (!Gfx_ScreenFadeIn_IsInProgress(prevScreenFadeCpy)   ||
         !Gfx_ScreenFadeIn_IsInProgress(g_ScreenFade_Status) ||
         isLoadingChunks)

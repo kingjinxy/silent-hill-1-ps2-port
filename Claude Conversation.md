@@ -29598,3 +29598,113 @@ The capture tool doesn't touch DuckStation's disc speed settings, so I'll check 
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
 
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git add -A src tools "Claude Conversation.md" && git commit -q -F - <<'EOF' Port: fix func_80080540 (the PS1 inl
+
+- tool `AskUserQuestion`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 319,420p src/bodyprog/demo.c
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; python3 - <<EOF import struct,collections for d 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/capture_ps2.c'; s=open(p).read() s=s.replace("""static int   s_Walk, s_WalkEnd
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/demo.c'; s=open(p).read() a=s.index("#ifdef SH_PORT\n    {\n        // Test op
+
+## Claude
+
+Now I'll build and run demo 4 over its full length with the PS1's holds.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1; unset SH1_FPS; (bash tools/port/ee_compile_check.sh > build/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's/        HOLDS\[:\] = sorted((s, n) for s, n in counts.items() if n > 1)/        HOLDS[:] = sorted((s, 
+
+## Claude
+
+The port side stopped at step 511, out of 2,048. It may have hung at the hold for step 510 (69 frames), or hit the 300-second limit. I'll run the port side alone and look at the end of its log.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; echo "demo=4 state=0:100000 hold=57:99 hold=510:69 hold=554:76 hold=881:30 hold=1159:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 238,275p src/bodyprog/demo.c; grep -n "Demo_ExitDemo()" src/bodyprog/*.c src/bodyprog/*/*.c | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 425,470p src/bodyprog/demo.c
+
+## Claude
+
+A demo exits when a real button is pressed, but nothing is pressed here. I'll search the run's log for the demo's own messages around the exit (step errors, stop reason).
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; echo "demo=4 state=0:100000 hold=57:99 hold=510:69 hold=554:76 hold=881:30 hold=1159:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_Demo_FrameCount" src --include=*.c | head
+
+## Claude
+
+That timer isn't it. Before guessing further, I'll add the missing demo filter, and temporarily log the step and game state whenever a demo exits.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/capture_ps2.c'; s=open(p).read() s=s.replace("""int Capture_DemoHold(int step,
+
+## Claude
+
+The new accessor ended up above the variable's declaration. I'll move it below.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/libgpu_port.c'; s=open(p).read() fn="""/** The demo playing (1: the first), as cou
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "SysState_\w* *= *1[0-9]\|SysState_GameOver" include/game.h | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_Demo_IsLoadingChunks" src --include=*.c | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 20,80p src/main/fsqueue.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 80,140p src/main/fsqueue.c; grep -rn "Fs_QueueWaitForEmpty\|Fs_QueueIsEntryLoaded" src/bodyprog/*.c src/b
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/demo.c'; s=open(p).read() a=s.index("#ifdef SH_PORT\n    // Test option (compa
+
+## Claude
+
+Now I'll build and rerun demo 4 with the PS1's holds.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1; unset SH1_FPS; (bash tools/port/ee_compile_check.sh > build/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import sys,struct,collections; sys.path.insert(0,'tools/port'); import struct_layout sl=struct
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct,collections rec=12+0x2768+0x5D8 for side in ('ps1','ps2'):     b=open('build/por
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "return frames + 1 < s_HoldFrames\[i\];" src/port/ps2/capture_ps2.c; sed -i 's|            return frames
+
+## Claude
+
+That gives 31 frames against 30, one too many. I'll release one frame earlier and check whether Harry's animation then matches through the rest of demo 4.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|            return frames + 3 < s_HoldFrames\[i\]; /\* the step also lasts the 3 frames after the load
+
+## Claude
+
+The hold now matches exactly (30 frames on both). My quick summary flags every step, but unlike `compare_frames` it doesn't skip pointer fields. I'll re-check with the proper comparison.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 tools/port/compare_frames.py --demo 4 --state 0:100000 --ps1-holds --skip-ps1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/compare_frames.py'; s=open(p).read() old='''        if fields:             print
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; for d in 1 2 3 4 5; do echo "== demo $d"; python3 tools/port/compare_frames.py --demo
+
+## Claude
+
+I added the slower loading as a test-only option, and demo 4 now matches the PS1. I'm confirming the other four demos with it in the background.
+
+**How it works** (`compare_frames.py --state A:B --ps1-holds`):
+- DuckStation is captured first, which records how many frames the PS1 spent on each demo step.
+- The port then gets those counts. When a chunk load (`Fs_QueueChunksLoad`) finishes early, the port keeps reporting it as unfinished until the step has lasted as many frames as on the PS1.
+- The game stays in the same loading state the PS1 was in, so it freezes and runs exactly what the PS1 did. That's why Harry's animation keeps going, as it does on the PS1.
+- Without the option, normal play and the console build are unchanged.
+
+Two adjustments were needed:
+- **Map-transition holds** (steps 57, 510, 554) freeze the whole game, so they don't affect the state; the port keeps its own timing there.
+- **The step-881 chunk load** is now released 4 frames early, to leave room for the fade back in. With that it lasts exactly 30 frames on both.
+
+**Result for demo 4:** every field matches over all 2,048 steps except music fade volumes and two load-time fields at step 0. Before, Harry was two keyframes off for about 280 steps.
+
+Once the all-demos run finishes, I'll commit this and start on the renderer exactness work.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bie41xe3b.output
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
+

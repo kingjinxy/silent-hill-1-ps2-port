@@ -47,7 +47,7 @@ import struct_layout  # noqa: E402  (field names for the game state diff)
 def capture_ps2(frames, demo, mode, cont, walk=False):
     open(os.path.join(REPO, "build", "port", "capture.txt"), "w").write(
         ",".join(map(str, frames)) + " demo=%d" % demo + (" mode=%d" % mode if mode is not None else "") +
-        (" load=%s" % cont.replace(",", ":") if cont else "") + (" walk" if walk else "") + (" state=%s" % STATE_RANGE if STATE_RANGE else "") + "".join(" dump=%x:%x" % (g[2], g[3]) for g in GLOBALS) + "\n")
+        (" load=%s" % cont.replace(",", ":") if cont else "") + (" walk" if walk else "") + (" state=%s" % STATE_RANGE if STATE_RANGE else "") + "".join(" dump=%x:%x" % (g[2], g[3]) for g in GLOBALS) + "".join(" hold=%d:%d" % h for h in HOLDS) + "\n")
     try:
         out = subprocess.run([sys.executable, os.path.join(HERE, "pcsx2_run.py"), "--seconds", "300",
                               "--until", "capture: all frames done", ISO], capture_output=True, text=True).stdout
@@ -230,6 +230,7 @@ def compare(n, side2="ps2"):
 LAYOUTS = {}
 STATE_RANGE = None  # --state A:B
 GLOBALS = []        # --globals: (name, PS1 address, port address, size)
+HOLDS = []          # --ps1-holds: (step, frames) the PS1 spent more than a frame on
 
 
 def resolve_globals(spec):
@@ -266,13 +267,22 @@ def compare_states(args):
     """--state: both sides' game state at every demo step of the range; the first steps where they
     differ, field by field (pointers skipped, as compare())."""
     os.makedirs(CAP, exist_ok=True)
-    if not args.skip_ps2:
-        capture_ps2([], args.demo, args.mode, args.cont, args.walk)
-    if not args.skip_ps1:
-        capture_ps1([0], args.demo, args.cont, args.walk)
-    sys_l, game_l = struct_layout.layout("s_SysWork"), struct_layout.layout("s_GameWork")
     extra = sum(g[3] for g in GLOBALS)
     rec = 12 + 0x2768 + 0x5D8 + extra
+    if not args.skip_ps1:
+        capture_ps1([0], args.demo, args.cont, args.walk)
+    if args.ps1_holds:
+        # The PS1's load timing: how many frames it spent on each demo step that took more than one.
+        d = open(os.path.join(CAP, "ps1_state.bin"), "rb").read()
+        counts = {}
+        for pos in range(0, len(d) - rec + 1, rec):
+            step = struct.unpack_from("<i", d, pos)[0]
+            counts[step] = counts.get(step, 0) + 1
+        HOLDS[:] = sorted((s, n) for s, n in counts.items() if n > 1 and s > 0)  # step 0: the start, before gameplay
+        print("state: PS1 holds (step, frames): %s" % HOLDS)
+    if not args.skip_ps2:
+        capture_ps2([], args.demo, args.mode, args.cont, args.walk)
+    sys_l, game_l = struct_layout.layout("s_SysWork"), struct_layout.layout("s_GameWork")
 
     def read(side):
         d, out = open(os.path.join(CAP, "%s_state.bin" % side), "rb").read(), {}
@@ -283,7 +293,7 @@ def compare_states(args):
         return out
 
     a, b = read("ps1"), read("ps2")
-    shown = 0
+    shown, summary = 0, {}
     for step in sorted(set(a) & set(b)):
         fields = []
         if a[step][0][0] != b[step][0][0]:
@@ -309,14 +319,17 @@ def compare_states(args):
                     fields.append("%s.%s: %d vs %d" % (name, path, struct.unpack_from("<h", wa, off)[0], struct.unpack_from("<h", wb, off)[0]))
                 else:
                     fields.append("%s.%s: %s vs %s" % (name, path, wa[off:off + sz].hex(), wb[off:off + sz].hex()))
-        if fields:
+        if fields and shown < 3:
             print("step %d: %d fields differ" % (step, len(fields)))
             for f in fields[:25]:
                 print("    " + f)
             shown += 1
-            if shown >= 3:
-                break
+        for f in fields:
+            name = f.split(":")[0].split("[")[0] if "BoneCoords" in f else f.split(":")[0]
+            summary.setdefault(name, [0, step])[0] += 1
     print("state: %d steps compared (PS1 %d, PS2 %d)" % (len(set(a) & set(b)), len(a), len(b)))
+    for name, (count, first) in sorted(summary.items(), key=lambda kv: kv[1][1]):
+        print("state:   %-60s differs in %5d steps, from step %d" % (name, count, first))
 
 
 def main():
@@ -328,6 +341,8 @@ def main():
     ap.add_argument("--load", dest="cont", metavar="F,D", help="load file F's Data D on card 1 instead of a demo")
     ap.add_argument("--state", metavar="A:B", help="only the game state at every demo step A-B (ps1/ps2_state.bin), "
                     "compared step by step: where the game first diverges")
+    ap.add_argument("--ps1-holds", action="store_true", help="with --state: the port's demo playback holds each step "
+                    "as many frames as the PS1's did (its load timing; captures DuckStation first)")
     ap.add_argument("--globals", help="with --state: also these globals, name[:size],... (symbol names)")
     ap.add_argument("--walk", action="store_true", help="with --load: turn 90 degrees right and walk 1.5 s first; frames count from its end")
     ap.add_argument("--replay", action="store_true", help="replay the DuckStation captures through the port's renderer")
