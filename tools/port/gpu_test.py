@@ -109,7 +109,8 @@ def packets(rng):
         semi = 2 if c["semi"] is not None else 0
 
         def col():
-            return rng.randint(0, 255) | (rng.randint(0, 255) << 8) | (rng.randint(0, 255) << 16)
+            top = 127 if DARK else 255
+            return rng.randint(0, top) | (rng.randint(0, top) << 8) | (rng.randint(0, top) << 16)
 
         def xy():
             return (rng.randint(-6, CELL + 5) & 0xFFFF) | ((rng.randint(-6, CELL + 5) & 0xFFFF) << 16)
@@ -147,6 +148,7 @@ def packets(rng):
 
 
 UV_MODE = False
+DARK = False  # --dark: vertex colours 0-127 only
 
 
 def uv_vram(rng):
@@ -334,9 +336,10 @@ def main():
     ap.add_argument("--skip-ps2", action="store_true")
     ap.add_argument("--show", type=int, help="print a case's first 16 columns (PS1/PS2 values)")
     ap.add_argument("--uv", action="store_true", help="texture coordinate test (see above)")
+    ap.add_argument("--dark", action="store_true", help="vertex colours 0-127 only (as most of the game's)")
     args = ap.parse_args()
-    global UV_MODE
-    UV_MODE = args.uv
+    global UV_MODE, DARK
+    UV_MODE, DARK = args.uv, args.dark
     write_inputs(args.seed)
     if not args.skip_ps1:
         run_ps1()
