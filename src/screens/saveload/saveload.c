@@ -1746,6 +1746,33 @@ void SaveScreen_LogicUpdate(void) // 0x801E649C
                 break;
             }
 
+#ifdef SH_PORT
+            {
+                // Frame captures from a save (tools/port/compare_frames.py --load F,D): file F's Data D on
+                // card 1 selected and confirmed, as the player would.
+                extern int Capture_Load(int* file, int* data);
+                static s32 loadWait;
+                s32        file, data, i;
+                if (Capture_Load(&file, &data) && g_SaveScreen_SaveScreenState != SaveScreenState_Save && ++loadWait == 30)
+                {
+                    s_SaveScreenElement* entries = MemCard_ActiveMemCardSlotGet(0);
+                    for (i = 0; i < g_Savegame_ElementCount0[0]; i++)
+                    {
+                        if (entries[i].type == SavegameEntryType_Save && entries[i].fileIdx == file - 1 &&
+                            entries[i].elementIdx == data - 1)
+                        {
+                            g_SelectedSaveSlotIdx       = 0;
+                            g_SlotElementSelectedIdx[0] = i;
+                            g_Controller0->buttonFlags.clicked |= g_GameWorkPtr->config.controllerConfig.enter;
+                            break;
+                        }
+                    }
+                    printf("capture: loading file %d data %d (entry %d of %d)\n", (int)file, (int)data, (int)i,
+                           (int)g_Savegame_ElementCount0[0]);
+                }
+            }
+#endif
+
             // Memory cards are inserted and user is moving between slots.
             if (g_Savegame_ElementCount0[0] != 0 && g_Savegame_ElementCount0[1] != 0 &&
                 (g_Controller0->buttonFlags.clicked & (ControllerFlag_LStickHighRight | ControllerFlag_LStickHighLeft)))

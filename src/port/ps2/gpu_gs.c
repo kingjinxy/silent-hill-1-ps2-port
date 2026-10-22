@@ -24,7 +24,8 @@
  *  - Semi-transparency modes 0-3: ALPHA (A - B) * FIX / 128 + D with FIX 0x40/0x80/0x80/0x20, colour
  *    clamping on.
  *  - Mask bit: set = FBA, check = destination alpha test (DATE).
- *  - Dithering: DTHE with the PS1's matrix in DIMX, for gouraud and modulated textured polygons.
+ *  - Dithering: DTHE with the PS1's matrix in DIMX, for opaque gouraud and modulated textured polygons
+ *    (the GS dithers after blending, the PS1 before: semi-transparent ones stay undithered).
  *  - Texture window: CLAMP REGION_REPEAT, the same (u & mask) | offset formula.
  *  - Clip area: SCISSOR. Coordinates are offset by 2048 (XYOFFSET) so negative ones fit.
  * Known differences: interpolation and blending rounding, line rasterisation, rectangle flips.
@@ -951,7 +952,12 @@ static u64x state_other(const Prim* p)
     }
     set(R_TEST, test);
     set(R_FBA, s_SetMask);
-    set(R_DTHE, p->dither && !(s_Sh && s_HrPsm == PSM_CT32)); /* 32-bit: no dithering (true colour) */
+    /* Semi-transparent: no dithering. The PS1 dithers the primitive's own colour before blending, the
+     * GS the blended result: an additive black or faint primitive (the flashlight's 000000 quad in
+     * front of Harry) adds nothing on the PS1 but drops the matrix's negative cells a level on the GS
+     * (a dark checkered rectangle). Undithered, the source is truncated, which matches when it's
+     * this faint. 32-bit: no dithering (true colour). */
+    set(R_DTHE, p->dither && !p->semi && !(s_Sh && s_HrPsm == PSM_CT32));
 
     if (p->semi)
     {

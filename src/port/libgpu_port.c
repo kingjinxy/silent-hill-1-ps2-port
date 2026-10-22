@@ -50,23 +50,48 @@ extern void Capture_Packet(int step, const unsigned int* words, int count); /* s
 extern void Capture_Display(int x, int y, int w, int h, const void* state, int stateSize,
                             const void* state2, int state2Size, int deltaTime);
 extern int  Capture_Pending(void);
+extern int  Capture_Demo(void);
+extern int  Capture_Mode(void);
+extern int  Capture_Load(int* file, int* data);
+extern void Capture_Replay(int frame);
+extern int  Capture_LoadStep(int vblank);
 
-/** The first attract demo's id (captures are only of it), -1 until a demo runs. */
-static s32 s_CaptureDemoId = -1;
+/** Save captures: the frame's listed frame, latched at its first packet (-2: not yet). */
+static s32 s_CaptureFrameStep = -2;
+
+/** Demos started so far (counted as the demo flag turns on), and whether one is running. */
+static s32 s_CaptureDemoCount;
+static s32 s_CaptureDemoOn;
 
 /** @brief Every GPU command packet (GP0 words) ends up here. */
 static void Gpu_Submit(const u32* words, s32 count)
 {
-    if (g_SysWork.sysFlags & SysFlag_DemoActive)
+    if (Capture_Load(NULL, NULL))
     {
-        if (s_CaptureDemoId < 0)
+        if (s_CaptureFrameStep == -2)
         {
-            s_CaptureDemoId = g_Demo_DemoId;
+            s_CaptureFrameStep = g_GameWork.gameState == GameState_InGame ? Capture_LoadStep(g_SysWork.gameStateCounter) : -1;
         }
-        if (g_Demo_DemoId == s_CaptureDemoId)
+        if (s_CaptureFrameStep >= 0)
+        {
+            Capture_Packet(s_CaptureFrameStep, words, count);
+        }
+    }
+    else if (g_SysWork.sysFlags & SysFlag_DemoActive)
+    {
+        if (!s_CaptureDemoOn)
+        {
+            s_CaptureDemoOn = 1;
+            s_CaptureDemoCount++;
+        }
+        if (s_CaptureDemoCount == Capture_Demo())
         {
             Capture_Packet(g_Demo_DemoStep, words, count);
         }
+    }
+    else
+    {
+        s_CaptureDemoOn = 0;
     }
     GpuGs_Commands(words, count);
     s_FramePackets++;
@@ -279,6 +304,11 @@ DISPENV* PutDispEnv(DISPENV* env)
         Capture_Display(env->disp.x, env->disp.y, env->disp.w, env->disp.h, &g_SysWork,
                         (int)sizeof(g_SysWork), &g_GameWork, (int)sizeof(g_GameWork), g_DeltaTime);
     }
+    s_CaptureFrameStep = -2;
+    {
+        static s32 frames;
+        Capture_Replay(++frames); /* compare_frames.py --replay */
+    }
 #ifdef SH_PORT_PROF
     {
         static u32 frames;
@@ -305,6 +335,10 @@ DISPENV* PutDispEnv(DISPENV* env)
     {
         extern int g_PortHiresOption; /* display_ps2.c: the 2x renderer */
         g_PortHiresOption = g_GameWork.config.unused_26 & 7; /* Debug Options: Resolution, Color Depth, Video Mode (options.c) */
+        if (Capture_Mode() >= 0)
+        {
+            g_PortHiresOption = Capture_Mode(); /* compare_frames.py --mode */
+        }
         PROF_BEGIN("gs: Display_PresentGs")
         Display_PresentGs(env->disp.x, env->disp.y, env->disp.w, env->disp.h, env->isrgb24, env->isinter);
         PROF_END("gs: Display_PresentGs")

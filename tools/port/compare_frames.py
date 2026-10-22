@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compares frames of the first attract demo between the PS1 game in DuckStation (software renderer,
+"""Compares frames of an attract demo (--demo N: the Nth played, default the first) between the PS1 game in DuckStation (software renderer,
 the reference) and the port in PCSX2 (current build/port/sh1_ps2.iso; build it without SH1_BENCH,
 which desyncs the demo).
 
@@ -10,7 +10,14 @@ build/port/cap/ gets:
 and the report lists pixel differences and the first GP0 packets that differ (same packets but
 different pixels: the renderer; different packets: game logic, GTE, ...).
 
-    python3 tools/port/compare_frames.py [--frames 60,200,400] [--skip-ps1] [--skip-ps2]
+--mode N forces the port's Debug Options rendering bits (1 2x, 2 32-bit, 4 480p); 2x captures are
+read back scaled down to VRAM. --load F,D loads file F's Data D on card 1 instead, through Load Game
+(DuckStation's card 1 must hold the same saves) and frames are vertical blanks of gameplay.
+
+--replay replays the DuckStation captures of --frames (already made) through the port's GS renderer
+(capture_ps2.c) and compares those instead: the renderer alone, with the PS1's exact packets.
+
+    python3 tools/port/compare_frames.py [--frames 60,200,400] [--demo 2 | --load 2,10] [--mode 3] [--skip-ps1] [--skip-ps2]
 """
 import argparse
 import os
@@ -36,8 +43,10 @@ import struct_layout  # noqa: E402  (field names for the game state diff)
 
 # --- Captures --------------------------------------------------------------------------------------
 
-def capture_ps2(frames):
-    open(os.path.join(REPO, "build", "port", "capture.txt"), "w").write(",".join(map(str, frames)) + "\n")
+def capture_ps2(frames, demo, mode, cont):
+    open(os.path.join(REPO, "build", "port", "capture.txt"), "w").write(
+        ",".join(map(str, frames)) + " demo=%d" % demo + (" mode=%d" % mode if mode is not None else "") +
+        (" load=%s" % cont.replace(",", ":") if cont else "") + "\n")
     try:
         out = subprocess.run([sys.executable, os.path.join(HERE, "pcsx2_run.py"), "--seconds", "300",
                               "--until", "capture: all frames done", ISO], capture_output=True, text=True).stdout
@@ -58,7 +67,22 @@ def patch_duckstation():
     return backup
 
 
-def capture_ps1(frames):
+def replay_ps2(frames):
+    open(os.path.join(REPO, "build", "port", "capture.txt"), "w").write(" ".join("replay=%d" % f for f in frames) + "\n")
+    try:
+        out = subprocess.run([sys.executable, os.path.join(HERE, "pcsx2_run.py"), "--seconds", "120",
+                              "--until", "capture: all frames done", ISO], capture_output=True, text=True).stdout
+    finally:
+        os.remove(os.path.join(REPO, "build", "port", "capture.txt"))
+    print("\n".join(l.split("] ", 1)[-1] for l in out.splitlines() if "capture:" in l or l.startswith("pcsx2_run:")))
+    for f in frames:  # the replay draws the PS1's packets: its display area and game state are the PS1's
+        for ext in ("_disp.txt", "_gp0.bin", "_syswork.bin", "_gamework.bin"):
+            src = os.path.join(CAP, "ps1_%d%s" % (f, ext))
+            if os.path.exists(src):
+                shutil.copy2(src, os.path.join(CAP, "ps2r_%d%s" % (f, ext)))
+
+
+def capture_ps1(frames, demo, cont):
     backup = patch_duckstation()
     ds = None
     try:
@@ -67,7 +91,7 @@ def capture_ps1(frames):
         if not warp_sweep.wait_port(2345, 30):
             sys.exit("DuckStation's GDB server didn't start")
         time.sleep(1)
-        env = dict(os.environ, CAP_FRAMES=",".join(map(str, frames)), CAP_OUT=CAP)
+        env = dict(os.environ, CAP_FRAMES=",".join(map(str, frames)), CAP_OUT=CAP, CAP_DEMO=str(demo), CAP_LOAD=cont or "")
         out = subprocess.run(["gdb-multiarch", "-q", "-batch", "-ex", "set architecture mips:3000",
                               "-ex", "target remote localhost:2345", "-x", os.path.join(HERE, "gdb", "capture_ps1.py")],
                              env=env, capture_output=True, text=True, timeout=1800, stdin=subprocess.DEVNULL)
@@ -129,9 +153,9 @@ def normalize(words):
     return tuple(words)
 
 
-def compare(n):
+def compare(n, side2="ps2"):
     a, da, pa = load("ps1", n)
-    b, db, pb = load("ps2", n)
+    b, db, pb = load(side2, n)
     x, y, w, h = da
     x2, y2 = db[0], db[1]  # the PS2's displayed buffer (the double buffer's parity can differ)
     lines = ["frame %d: display PS1 %s, PS2 %s" % (n, da, db)]
@@ -155,16 +179,16 @@ def compare(n):
         row = b"".join(rgb(pa_px(xx, yy)) for xx in range(w)) + b"".join(rgb(pb_px(xx, yy)) for xx in range(w))
         row += b"".join(b"\xff\xff\xff" if (pa_px(xx, yy) ^ pb_px(xx, yy)) & 0x7FFF else b"\0\0\0" for xx in range(w))
         rows.append(row)
-    write_png(os.path.join(CAP, "cmp_%d_display.png" % n), rows)
+    write_png(os.path.join(CAP, "cmp%s_%d_display.png" % (side2[3:], n)), rows)
     rows = [b"".join(rgb(c) for c in src[yy * 1024:(yy + 1) * 1024]) for src in (a, b) for yy in range(512)]
     rows += [b"".join(b"\xff\xff\xff" if (a[i] ^ b[i]) & 0x7FFF else b"\0\0\0" for i in range(yy * 1024, (yy + 1) * 1024))
              for yy in range(512)]
-    write_png(os.path.join(CAP, "cmp_%d_vram.png" % n), rows)
+    write_png(os.path.join(CAP, "cmp%s_%d_vram.png" % (side2[3:], n)), rows)
 
     # Game state (g_SysWork, g_GameWork): differing fields, pointers skipped (PS1 8xxxxxxx vs the port's).
     for struct_name, file_tag in (("g_SysWork", "syswork"), ("g_GameWork", "gamework")):
         sa = os.path.join(CAP, "ps1_%d_%s.bin" % (n, file_tag))
-        sb = os.path.join(CAP, "ps2_%d_%s.bin" % (n, file_tag))
+        sb = os.path.join(CAP, "%s_%d_%s.bin" % (side2, n, file_tag))
         if not (os.path.exists(sa) and os.path.exists(sb)):
             continue
         wa, wb = open(sa, "rb").read(), open(sb, "rb").read()
@@ -182,7 +206,7 @@ def compare(n):
         lines.append("  %s: %d fields differ%s" % (struct_name, len(fields), ":" if fields else ""))
         lines += ["    " + f for f in fields[:30]]
     da_dt = open(os.path.join(CAP, "ps1_%d_disp.txt" % n)).read().split()[4:]
-    db_dt = open(os.path.join(CAP, "ps2_%d_disp.txt" % n)).read().split()[4:]
+    db_dt = open(os.path.join(CAP, "%s_%d_disp.txt" % (side2, n))).read().split()[4:]
     if da_dt and db_dt and da_dt != db_dt:
         lines.append("  g_DeltaTime: %s vs %s" % (da_dt[0], db_dt[0]))
 
@@ -204,17 +228,24 @@ def main():
     ap.add_argument("--frames", default="60,200,400,600")
     ap.add_argument("--skip-ps1", action="store_true", help="reuse the PS1 capture")
     ap.add_argument("--skip-ps2", action="store_true", help="reuse the PS2 capture")
+    ap.add_argument("--demo", type=int, default=1, help="which attract demo (1: the first played)")
+    ap.add_argument("--load", dest="cont", metavar="F,D", help="load file F's Data D on card 1 instead of a demo")
+    ap.add_argument("--replay", action="store_true", help="replay the DuckStation captures through the port's renderer")
+    ap.add_argument("--mode", type=int, help="the port's rendering option bits (1 2x, 2 32-bit, 4 480p)")
     args = ap.parse_args()
     frames = sorted(int(f) for f in args.frames.split(","))
     os.makedirs(CAP, exist_ok=True)
-    if not args.skip_ps2:
-        capture_ps2(frames)
-    if not args.skip_ps1:
-        capture_ps1(frames)
+    if args.replay:
+        replay_ps2(frames)
+    elif not args.skip_ps2:
+        capture_ps2(frames, args.demo, args.mode, args.cont)
+    if not args.skip_ps1 and not args.replay:
+        capture_ps1(frames, args.demo, args.cont)
     LAYOUTS["g_SysWork"] = struct_layout.layout("s_SysWork")
     LAYOUTS["g_GameWork"] = struct_layout.layout("s_GameWork")
-    report = [compare(n) for n in frames
-              if all(os.path.exists(os.path.join(CAP, "%s_%d_vram.bin" % (s, n))) for s in ("ps1", "ps2"))]
+    side2 = "ps2r" if args.replay else "ps2"
+    report = [compare(n, side2) for n in frames
+              if all(os.path.exists(os.path.join(CAP, "%s_%d_vram.bin" % (s, n))) for s in ("ps1", side2))]
     text = "\n".join(report)
     open(os.path.join(CAP, "report.txt"), "w").write(text + "\n")
     print(text)

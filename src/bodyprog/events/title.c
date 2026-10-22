@@ -230,6 +230,21 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
             // Wrap selection.
             g_MainMenu_SelectedEntry %= MainMenuEntry_Count;
 
+#ifdef SH_PORT
+            {
+                // Frame captures from a save (tools/port/compare_frames.py --load F,D): Load Game once the
+                // memory card scan has shown it (saveload.c picks the save).
+                extern int Capture_Load(int* file, int* data);
+                static s32 loadWait;
+                if (Capture_Load(NULL, NULL) && (g_MainMenu_VisibleEntryFlags & (1 << MainMenuEntry_Load)) && ++loadWait == 20)
+                {
+                    g_MainMenu_SelectedEntry            = MainMenuEntry_Load;
+                    g_Controller0->buttonFlags.clicked |= g_GameWorkPtr->config.controllerConfig.enter;
+                    printf("capture: Load Game pressed\n");
+                }
+            }
+#endif
+
             if (g_Controller0->buttonFlags.clicked & g_GameWorkPtr->config.controllerConfig.enter)
             {
                 g_GameWork.gameState = GameState_MainMenu;

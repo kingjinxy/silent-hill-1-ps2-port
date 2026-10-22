@@ -1,5 +1,12 @@
 /** @brief Frame capture for comparing with DuckStation (tools/port/compare_frames.py). `host:capture.txt`
- * (next to the disc image) lists frames of the first attract demo (g_Demo_DemoStep values). For each,
+ * (next to the disc image) lists frames of an attract demo (g_Demo_DemoStep values), plus optional
+ * `demo=N` (the Nth demo played, from 1; default 1) and `mode=N` (the Debug Options rendering bits
+ * forced, g_PortHiresOption: 1 2x, 2 32-bit, 4 480p; default: the saved options). With `load=F:D`,
+ * the save is loaded instead, file F's Data D on card 1 through Load Game (title.c, saveload.c), and frames are vertical blanks of gameplay
+ * (g_SysWork.gameStateCounter in GameState_InGame), each captured at the first frame reaching it.
+ * `replay=N` (one or more) instead replays DuckStation's capture of frame N through the GS renderer:
+ * host:cap/ps1_N_vram.bin loaded into VRAM, ps1_N_gp0.bin's packets drawn, and VRAM written to
+ * ps2r_N_vram.bin (the renderer alone, without game timing differences). For each,
  * writes to host:cap/: ps2_<N>_gp0.bin (every GP0 packet the frame drew: u32 word count, then the
  * words) and, at the next PutDispEnv, ps2_<N>_vram.bin (the 1024x512 VRAM, 16-bit) and
  * ps2_<N>_disp.txt (display x y w h), ps2_<N>_syswork.bin (g_SysWork, to compare game state). Without the file (or on hardware), nothing happens.
@@ -8,8 +15,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <malloc.h>
 
 #define MAX_FRAMES 64
+
+extern void GpuGs_Commands(const unsigned int* w, int n);                          /* gpu_gs.c */
+extern void GpuGs_LoadImage(int x, int y, int w, int h, const unsigned short* src, int stride);
+extern void GpuGs_Flush(void);
+extern void GpuGs_Sync(void);
 
 static int   s_Frames[MAX_FRAMES];
 static int   s_Count;
@@ -17,6 +30,12 @@ static int   s_Loaded = -1;
 static int   s_Done[MAX_FRAMES];
 static FILE* s_Packets;
 static int   s_Open = -1; /* frame whose packets are being written */
+static int   s_Demo = 1;  /* which demo (1: the first played) */
+static int   s_Mode = -1; /* rendering option bits forced, -1 none */
+static int   s_LoadSave;  /* load a save instead of a demo */
+static int   s_LoadFile, s_LoadData; /* its save: File N, Data N as the Load screen numbers them */
+static int   s_Replay[MAX_FRAMES], s_ReplayCount; /* DuckStation frames to replay */
+
 
 static void load(void)
 {
@@ -33,12 +52,35 @@ static void load(void)
     buf[n > 0 ? n : 0] = 0;
     for (tok = strtok(buf, " ,\t\r\n"); tok && s_Count < MAX_FRAMES; tok = strtok(NULL, " ,\t\r\n"))
     {
-        s_Frames[s_Count++] = atoi(tok);
+        if (!strncmp(tok, "demo=", 5))
+        {
+            s_Demo = atoi(tok + 5);
+        }
+        else if (!strncmp(tok, "load=", 5))
+        {
+            s_LoadSave = 1;
+            sscanf(tok + 5, "%d:%d", &s_LoadFile, &s_LoadData);
+        }
+        else if (!strncmp(tok, "replay=", 7))
+        {
+            if (s_ReplayCount < MAX_FRAMES)
+            {
+                s_Replay[s_ReplayCount++] = atoi(tok + 7);
+            }
+        }
+        else if (!strncmp(tok, "mode=", 5))
+        {
+            s_Mode = atoi(tok + 5);
+        }
+        else
+        {
+            s_Frames[s_Count++] = atoi(tok);
+        }
     }
-    s_Loaded = s_Count > 0;
+    s_Loaded = s_Count > 0 || s_ReplayCount > 0;
     if (s_Loaded)
     {
-        printf("capture: %d frames listed\n", s_Count);
+        printf("capture: %d frames listed, %s %d, mode %d\n", s_Count, s_LoadSave ? "load" : "demo", s_Demo, s_Mode);
     }
 }
 
@@ -55,7 +97,57 @@ static int index_of(int step)
     return -1;
 }
 
-/** A GP0 packet drawn while the first demo is at `step`. */
+/** The demo to capture (1: the first played), 0 without a capture file. */
+int Capture_Demo(void)
+{
+    if (s_Loaded < 0)
+    {
+        load();
+    }
+    return s_Loaded > 0 ? s_Demo : 0;
+}
+
+/** Whether the capture loads a save (title.c, saveload.c), and which. */
+int Capture_Load(int* file, int* data)
+{
+    if (s_Loaded < 0)
+    {
+        load();
+    }
+    if (file)
+    {
+        *file = s_LoadFile;
+        *data = s_LoadData;
+    }
+    return s_Loaded > 0 && s_LoadSave;
+}
+
+/** Save captures: the listed frame a frame at gameplay vertical blank `vblank` captures (the
+ * first not yet captured that it has reached), -1 none. */
+int Capture_LoadStep(int vblank)
+{
+    int i;
+    for (i = 0; i < s_Count; i++)
+    {
+        if (!s_Done[i] && s_Frames[i] <= vblank && (s_Open < 0 || s_Open == s_Frames[i]))
+        {
+            return s_Frames[i];
+        }
+    }
+    return -1;
+}
+
+/** The rendering option bits forced for the capture, -1 none. */
+int Capture_Mode(void)
+{
+    if (s_Loaded < 0)
+    {
+        load();
+    }
+    return s_Loaded > 0 ? s_Mode : -1;
+}
+
+/** A GP0 packet drawn while the captured demo is at `step`. */
 void Capture_Packet(int step, const unsigned int* words, int count)
 {
     int i;
@@ -129,6 +221,13 @@ void Capture_Display(int x, int y, int w, int h, const void* state, int stateSiz
         fwrite(state2, 1, (size_t)state2Size, f);
         fclose(f);
     }
+    sprintf(name, "host:cap/ps2_%d_envwork.bin", s_Open);
+    if ((f = fopen(name, "wb")))
+    {
+        extern unsigned char g_WorldEnvWork[]; /* s_WorldEnvWork: the world and flashlight lighting */
+        fwrite(g_WorldEnvWork, 1, 0x150, f);
+        fclose(f);
+    }
     sprintf(name, "host:cap/ps2_%d_disp.txt", s_Open);
     if ((f = fopen(name, "w")))
     {
@@ -145,6 +244,84 @@ void Capture_Display(int x, int y, int w, int h, const void* state, int stateSiz
     {
         printf("capture: all frames done\n");
     }
+}
+
+static void* read_file(const char* name, int* size)
+{
+    FILE* f = fopen(name, "rb");
+    void* buf;
+    if (!f)
+    {
+        return NULL;
+    }
+    fseek(f, 0, SEEK_END);
+    *size = (int)ftell(f);
+    fseek(f, 0, SEEK_SET);
+    buf = memalign(64, (size_t)*size);
+    if (buf)
+    {
+        fread(buf, 1, (size_t)*size, f);
+    }
+    fclose(f);
+    return buf;
+}
+
+/** At PutDispEnv: the replays (`replay=N`), once, after `frame` frames (the GS set up). */
+void Capture_Replay(int frame)
+{
+    extern void GpuGs_StoreImage(int x, int y, int w, int h, unsigned short* dst); /* gpu_gs.c */
+    static int done;
+    int        i, size, gsize, pos, row;
+    char       name[64];
+    if (s_Loaded < 0)
+    {
+        load();
+    }
+    if (done || s_ReplayCount == 0 || frame < 60)
+    {
+        return;
+    }
+    done = 1;
+    for (i = 0; i < s_ReplayCount; i++)
+    {
+        unsigned short* vram;
+        unsigned int*   gp0;
+        FILE*           f;
+        sprintf(name, "host:cap/ps1_%d_vram.bin", s_Replay[i]);
+        vram = read_file(name, &size);
+        sprintf(name, "host:cap/ps1_%d_gp0.bin", s_Replay[i]);
+        gp0 = read_file(name, &gsize);
+        if (!vram || !gp0 || size != 1024 * 512 * 2)
+        {
+            printf("capture: replay %d: capture missing\n", s_Replay[i]);
+            free(vram);
+            free(gp0);
+            continue;
+        }
+        GpuGs_LoadImage(0, 0, 1024, 512, vram, 1024);
+        for (pos = 0; pos + 1 <= gsize / 4;)
+        {
+            int n = (int)gp0[pos];
+            GpuGs_Commands(gp0 + pos + 1, n);
+            pos += 1 + n;
+        }
+        GpuGs_Flush();
+        GpuGs_Sync();
+        sprintf(name, "host:cap/ps2r_%d_vram.bin", s_Replay[i]);
+        if ((f = fopen(name, "wb")))
+        {
+            for (row = 0; row < 512; row += 32)
+            {
+                GpuGs_StoreImage(0, row, 1024, 32, vram + row * 1024);
+            }
+            fwrite(vram, 2, 1024 * 512, f);
+            fclose(f);
+        }
+        printf("capture: replay %d (%d words)\n", s_Replay[i], gsize / 4);
+        free(vram);
+        free(gp0);
+    }
+    printf("capture: all frames done\n");
 }
 
 /** Whether a capture is pending at PutDispEnv (so the caller reads VRAM back first). */

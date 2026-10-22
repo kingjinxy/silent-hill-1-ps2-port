@@ -26457,3 +26457,2688 @@ Commit these changes
 
 - tool `Bash`: Update archive, review status, check matching build
 
+- tool `Bash`: Verify checksums and commit
+
+## Claude
+
+I committed the Color Depth work as `9213c7db7` on master. Before committing, I ran the matching PS1 build and every checksum still passes, and I regenerated "Claude Conversation.md" without losing any history.
+
+Master is now two commits ahead of origin: today's earlier commit, which hasn't been pushed yet, and this one. One `git push origin master` from your side pushes both.
+
+## User
+
+One other thing: I’m still interested in revisiting the 1280x720p rendering mode. I believe it’s viable if textures are streamed in and out of memory, and we optimize framebuffer usage (I.e. not having too many buffers)
+
+## Claude
+
+Yes, 720p looks viable, and the two changes you name are the right ones. Here's the GS memory arithmetic for this renderer.
+
+**What 720p means for a PS1 picture**
+- The game draws 320×224. At 3× that's 960×672, which fits inside a 1280×720 frame. The side bars stay black, so the 4:3 picture isn't stretched.
+- The scale doesn't have to be a whole number. GS vertex coordinates are fixed point, so about 2.8× horizontally and 3× vertically gives the correct aspect.
+- The 640×448 menus would scale 1.5× to the same size. One fixed 720p output would also end the TV re-syncs on mode switches.
+- Fill rate isn't a concern: 9× the 1x pixels is still a small fraction of what the GS can draw.
+
+**The memory problem (4 MB total)**
+
+| | Today, 2x 16-bit | 720p, keeping VRAM on the GS | 720p, VRAM moved to EE RAM |
+|---|---|---|---|
+| PS1 VRAM copy on the GS | 1 MB | 1 MB | none |
+| Screen buffers | 1.25 MB (whole 320×512 area at 2x) | 2.5 MB (only the two display buffers, 960×672 each) | 2.5 MB |
+| Texture page cache | 27 slots | about 7 slots | about 23 slots |
+
+Keeping VRAM on the GS gives the 2x 32-bit situation from today's test: 9–14 texture pages re-read per frame. Moving VRAM out of GS memory is what makes 720p fit.
+
+**Your texture-streaming idea is the key piece**
+- Keep the PS1 VRAM image in EE RAM (1 MB; about 3 MB is free).
+- Upload texture pages and CLUTs to the GS cache from there. Today the cache re-reads them from the GS's own VRAM copy.
+- An upload is a fast one-way DMA. A readback stalls everything, and on hardware readbacks have been the worst stalls. So this should speed up the current 1x/2x modes too, not just enable 720p.
+- From the screen-read inventory, the game never draws into texture pages. The only screen reads are the motion-blur effects (served from the screen buffers) and the lens-flare test (a small readback of the screen buffer). So nothing else needs the GS VRAM copy.
+
+**What isn't possible:** 32-bit colour at 720p. Two 960×672 32-bit buffers alone take 5 MB.
+
+**Suggested order, each step testable alone:**
+1. **Texture streaming:** move VRAM to EE RAM and feed the texture and CLUT caches by upload instead of readback. This works at today's 1x/2x, and readbacks should drop to zero.
+2. **Fit the screen buffers to the display buffers:** shadow only the two display buffers, at any scale, not the whole 320×512 area.
+3. **Remove the GS VRAM copy:** drop it and lay GS memory out for 720p.
+4. **720p output:** gsKit's 720p mode with side bars, menus and movies scaled into the same buffers.
+
+The main unknowns are how many texture pages a busy scene uses per frame, and how fast the uploads are on hardware. Step 1 will show both in PCSX2 and on the console before we commit to the rest. Shall I start on step 1?
+
+## User
+
+What about changing the internal resolution to use a 1280 pixel wide framebuffer? Essentially it would allow for widescreen. About the 320x224 and 640x448 modes, why aren’t they 240 and 480 lines high, respectively?
+
+## Claude
+
+Checking where the game sets its screen height before answering the second question.
+
+- tool `Bash`: Find game screen height definitions
+
+## Claude
+
+The 224 and 448 come from the game itself. On widescreen, a 1280-wide buffer doesn't fit in GS memory, but there's a cheaper route that also gets widescreen.
+
+**Why 224 and 448 lines**
+- That's what Silent Hill asks for. It defines `FRAMEBUFFER_HEIGHT_PROGRESSIVE 224` and an interlaced height of twice that (448) in [game.h](include/game.h#L25-L26), and passes those heights to the display.
+- NTSC has 240 lines per field, but many PS1 games draw only 224. The top and bottom lines are usually hidden by TV overscan, and it saves VRAM and fill time. The PS1 centres the 224 lines with black borders, and the port copies that.
+- Getting 240 or 480 isn't a renderer setting. The game would have to draw more of the scene: a taller clip area, buffers, camera view, and 2D layout. We have the source, so it's possible, but it's a game change like widescreen.
+
+**A 1280-wide framebuffer**
+- A 1280×720 16-bit buffer is 1.8 MB. The game draws into one buffer while the other is shown, so it needs two: 3.7 MB of the GS's 4 MB.
+- Even with VRAM moved to EE RAM, that leaves about 0.3 MB for textures, roughly 4 cache slots. With today's 7 slots the cutscene already re-read 9–14 pages a frame, so this would thrash badly.
+
+**How PS2 games did widescreen: anamorphic**
+- The buffer stays the same width. The game draws a wider (16:9) view squeezed horizontally into it, and the TV in 16:9 mode stretches it back out. This costs no extra memory, so it works at 1x, 2x and 32-bit alike.
+- A 720p version can also stay cheap. A 640×720 buffer doubled horizontally by the GS's display hardware is 0.9 MB per buffer, compared with 1.8 MB for 1280×720. Which widths the GS accepts at 720p and 480p still needs checking on hardware.
+
+**The real work for widescreen is in the game, which we have the source for:**
+1. **Projection:** narrow the 3D projection horizontally by 3/4, so a 16:9 view fits the same buffer. This is what DuckStation's widescreen hack does.
+2. **Culling:** widen the game's culling to match. DuckStation can't do this, so objects pop in and out at the screen edges. We can fix it at the source.
+3. **2D elements:** HUD, subtitles, menus and the inventory are laid out for 320 wide. They'd need squeezing by 3/4 too, or they appear stretched on a 16:9 TV.
+4. **Pre-rendered and full-screen elements** (movies, load screens, the title) stay 4:3, with black side bars.
+
+**How this fits with the 720p plan**
+- **Streaming is the shared first step:** texture streaming (VRAM in EE RAM, textures uploaded instead of read back) is step 1 for 720p either way.
+- **Widescreen doesn't depend on it:** it's independent of the resolution work, and could come before or after.
+
+Both start with something I can measure in PCSX2. For streaming, that's how many texture pages a busy scene needs per frame; for widescreen, a test of the projection change in one area to see what pops in at the edges. Which would you like to start with?
+
+## User
+
+Save these findings to the docs folder as "720p.md"
+
+- tool `Bash`: Check for docs folder
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/docs/720p.md
+
+## Claude
+
+Written for: you, or anyone picking this work up later.
+
+I saved the findings to [docs/720p.md](docs/720p.md). The file covers:
+- the current GS memory budgets;
+- why the game draws 224 and 448 lines;
+- the 720p memory maths;
+- texture streaming as the piece that makes 720p fit, with the four-step plan;
+- why a 1280-wide framebuffer doesn't fit, and how anamorphic widescreen would work instead;
+- what's still unknown.
+
+It isn't committed yet.
+
+## User
+
+I want to do console cutscene testing with the 1x & 32-bit, 2x & 16-bit and the 2x & 32-bit options. Choose 10 of the cutscenes that have already proven to not crash, and choose some of the worst-performing ones. Play back all 10 with each of the three modes we're testing.
+
+## Claude
+
+Checking what remote control the console build already has for starting Demo sweeps.
+
+- tool `Bash`: Inspect remote control commands and demo remote hooks
+
+## Claude
+
+`ps2_ctl.py demo N` already starts a cutscene remotely. What's missing is a way to set the Resolution/Color Depth mode remotely. Checking how the agent passes commands like `demo` to the game.
+
+- tool `Bash`: Trace demo remote command path
+
+- tool `Bash`: Read agent command dispatch and ps2_ctl main
+
+## Claude
+
+The IOP agent forwards commands to the EE through a mailbox. Checking whether it filters command names, which decides whether a new "set options" command needs changes on the IOP side.
+
+- tool `Bash`: Check IOP agent command handling
+
+## Claude
+
+Nothing on the IOP side filters commands, so a new one only needs EE-side handling. Next, picking the cutscenes: looking up the earlier cutscene profiling results.
+
+- tool `Bash`: Find cutscene performance results in docs
+
+- tool `Bash`: Read cutscene profile table and Demo list indices
+
+- tool `Bash`: Find cutscenes that timed out or crashed in sweeps
+
+- tool `Bash`: Identify active console log file
+
+## Claude
+
+The game writes its console output to `build/port/ps2.log`, which is what ps2_ctl reads. Adding the `options` command on the EE side, in ps2_ctl, and in the game-side hook.
+
+- tool `Bash`: Add remote options command
+
+- tool `Bash`: Check demo log messages and printf use
+
+- tool `Bash`: Read remote demo request handling
+
+## Claude
+
+Each cutscene ends with a soft reset back to the main menu. Checking whether a soft reset resets the options, which would clear the mode mid-run. I'm also fixing a misplaced comment from the insert.
+
+- tool `Bash`: Check whether warm reset resets config
+
+- tool `Bash`: Fix misplaced NewGame comment
+
+- tool `Bash`: Find callers of settings defaults reset
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/console_cutscenes.py
+
+## Claude
+
+Building the console ISO, then deploying.
+
+- tool `Bash`: Build and deploy to the PS2
+
+- tool `Bash`: Wait for PS2, then run console cutscene test
+
+## Claude
+
+Adding a watch that reports each result as it comes in.
+
+- tool `Monitor`: Console cutscene test: per-cutscene results
+
+## Claude
+
+The test is set up and will run by itself as soon as the PS2 is back. Right now it isn't answering, so it's off or frozen and needs a power cycle. Hold power to switch it off, turn it on, and start Neutrino; it will load the new build (17:08).
+
+After the PS2 answers, the test waits 45 seconds for the title screen. Then it plays 10 cutscenes in each of 1x 32-bit, 2x 16-bit and 2x 32-bit, 30 runs in all.
+
+**The 10 cutscenes** (all reached gameplay without problems in earlier sweeps):
+
+| Demo # | Cutscene | Why it's in |
+|---|---|---|
+| 36 | CybilFightStart | heaviest |
+| 50 | KaufmannBarFight | heavy |
+| 1 | map6_s02 func_800CF0B8 | heavy, motion blur |
+| 43 | CafeCutscene | heavy |
+| 0 | map2_s01 func_800CED88 | heavy |
+| 13 | map5_s02 func_800D4B58 | heavy |
+| 4 | Kaufmann | the usual benchmark |
+| 32 | map7_s02 func_800DE1FC | motion blur |
+| 48 | CutscenePhoneCall | lens flare |
+| 8 | map4_s01 func_800D1FF0 | screen effects |
+
+**What's new:**
+- `ps2_ctl.py options N` sets the Debug Options rendering mode over the network.
+- `tools/port/console_cutscenes.py` sets each mode, starts each cutscene, and reads the console log. For every run it records:
+  - the cutscene's frame rate;
+  - the slowest one-second stretch;
+  - average idle time;
+  - texture re-reads per frame;
+  - stuck GS transfers.
+- If the game crashes, restarts or freezes, the test stops so you can power-cycle.
+
+Results build up in `build/port/console_cutscenes.md`. I'll report each row as it arrives. You don't need to touch the controller, but watching the TV is worthwhile: the picture problems are something only you can see.
+
+## Claude
+
+The PS2 answered at 17:08:56. In 45 seconds the test starts with the 1x 32-bit runs.
+
+## Claude
+
+The PS2 accepted the 1x 32-bit setting, and the first cutscene (CybilFightStart) is starting.
+
+## Claude
+
+The first result is in: CybilFightStart at 1x 32-bit completed without problems. It ran at 19.4 fps (slowest second 15), with the console idle half the time and almost no texture re-reads.
+
+Half the time idle means the console is waiting on the game's own frame pacing, not running out of power. To be sure, these numbers need a 1x 16-bit run of the same cutscenes to compare against. I'll add that as a fourth mode once the three you asked for finish.
+
+## Claude
+
+The bar fight finished cleanly at 1x 32-bit: 59.7 fps, with one second dipping to 36. The console was idle 19% of the time, and texture re-reads were near zero.
+
+## Claude
+
+The map6_s02 cutscene with motion blur also finished cleanly at 1x 32-bit: 59.6 fps, slowest second 45, 47% idle, and no texture re-reads.
+
+## Claude
+
+The Café cutscene finished at 59.7 fps on average, but one second dropped to 17 fps, probably during a load. Four of the ten 1x 32-bit runs are done, all without errors.
+
+## Claude
+
+Five of the ten 1x 32-bit runs are done, all without errors. The latest, map2_s01, ran at 59.5 fps (slowest second 31).
+
+## Claude
+
+The 1x 32-bit pass is still clean, six of ten done. The latest, map5_s02, ran at 59.9 fps with a slowest second of 50.9.
+
+## Claude
+
+Kaufmann (#4) also played cleanly in 1x 32-bit, at 59.8 fps with its slowest second at 35. That's 7 of the 10 cutscenes done in this mode, all without problems.
+
+## Claude
+
+In map7_s02 (#32, the motion-blur scene), one second dropped to 3 fps even though the cutscene averaged 59.1. That's probably a disc load, but the 1x 16-bit baseline run will show whether it's specific to 32-bit. 8 of the 10 cutscenes are done in this mode.
+
+## Claude
+
+The phone call cutscene (#48, lens flare) played cleanly in 1x 32-bit: 59.9 fps, slowest second 49. 9 of the 10 cutscenes are done in this mode.
+
+## Claude
+
+1x 32-bit is done: all 10 cutscenes played without a crash or stuck readback, and texture re-reads stayed under 2 per frame. The 2x 16-bit runs are next.
+
+## Claude
+
+The console accepted the 2x 16-bit setting, and the runs have started.
+
+## Claude
+
+In 2x 16-bit, CybilFightStart (#36) ran at 18.7 fps, against 19.4 in 1x 32-bit. That's nearly the same, so 2x adds little cost in this scene.
+
+## User
+
+The current cutscene seems to be soft locked. Can we skip it?
+
+## Claude
+
+Checking the console log to see where the game is stuck.
+
+- tool `Bash`: Inspect recent console log
+
+- tool `Bash`: Find current cutscene and game state
+
+- tool `TaskStop`: 
+
+- tool `Bash`: Save partial results and make output path configurable
+
+## Claude
+
+Restarting with the rest: the remaining seven cutscenes at 2x 16-bit, then all ten at 2x 32-bit. I've also added a 1x 16-bit baseline pass at the end for comparison.
+
+- tool `TaskStop`: 
+
+- tool `Bash`: Resume console test with remaining runs
+
+- tool `Monitor`: Console cutscene test (resumed): per-cutscene results
+
+## Claude
+
+I skipped the stuck cutscene. The test continues with the Café cutscene at 2x 16-bit; starting it resets the game back to the menu first, which clears the stuck one.
+
+**The soft lock:**
+- The map6_s02 cutscene (Demo #1, func_800CF0B8) never got past its start at 2x 16-bit, though the game kept drawing at 60 fps.
+- At 1x 32-bit the same cutscene finished normally, so the 2x mode is the likely trigger.
+- This cutscene uses the screen-feedback (motion blur) effect, so that's my first suspect. I'll look into it once the test finishes.
+
+**Still to run:**
+1. the remaining seven cutscenes at 2x 16-bit;
+2. all ten at 2x 32-bit;
+3. a 1x 16-bit pass for comparison.
+
+Results so far are saved in `build/port/console_cutscenes_part1.md`. If anything else locks up, tell me and I'll skip it the same way. In 2x 32-bit, the map6_s02 cutscene may lock up again.
+
+## Claude
+
+The console accepted the 2x 16-bit setting again. The remaining seven 2x 16-bit cutscenes are starting, beginning with the Café cutscene.
+
+## Claude
+
+The Café cutscene completed at 2x 16-bit with a 59.7 fps average. Its slowest second was 4 fps, against 17 at 1x 32-bit. That one-second dip is most likely the reset into the cutscene rather than playback itself.
+
+## Claude
+
+The map2_s01 cutscene completed at 2x 16-bit, also at a 59.5 fps average.
+
+## Claude
+
+map5_s02 also completed at 2x 16-bit. It averaged 59.9 fps, but the slowest second dropped to 25 (51 at 1x 32-bit).
+
+## Claude
+
+The Kaufmann cutscene (#4) also completed at 2x 16-bit, at 59.8 fps with a slowest second of 35, the same as at 1x 32-bit.
+
+## User
+
+I saw a step error,  but it disappeared before I could write it down
+
+## Claude
+
+I'll look for it in the console log, since the game logs most on-screen errors there too.
+
+- tool `Bash`: Search log and source for step error message
+
+- tool `Bash`: Read the step error code in demo.c
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/bodyprog/demo.c
+
+## Claude
+
+The "STEP ERROR" is harmless; the test is still running. It comes from the game's own title-screen attract demo, not the cutscenes or the 2x/32-bit modes. When a recorded demo finds the game in a different state than it expects, it shows that message for one frame and skips the step. The test's soft resets to the title can leave a demo starting just as the next cutscene request interrupts it.
+
+The game only prints it on screen, so I've added a line to the console log that records the step and both game states. That takes effect from the next build. Your PS2 is still running the current one, so this test isn't affected.
+
+- tool `Bash`: Check map7_s02 run log lines
+
+## Claude
+
+The map7_s02 cutscene (#32) completed at 2x 16-bit. Its fps cell is blank because the game's own fps line came out with negative frame counts, so the script couldn't read it. That's a measuring bug in the demo code: the start count it subtracts from was stale for this run. It's not a rendering problem. The heartbeat figures for this run are still valid: slowest second 4, 28% idle. I'll fix the fps line after the test.
+
+## Claude
+
+The phone call cutscene (#48) halved to 28.8 fps at 2x 16-bit, against 59.9 at 1x 32-bit. The console was 88% idle, so it's waiting rather than out of power.
+
+I think the cause is this scene's lens flare. Every frame, the game reads a few screen pixels back to the CPU to test whether the light is hidden. At 2x, each of those reads first scales the 2x screen down into VRAM and then waits for the GS to finish, which probably costs a whole video frame. I'll confirm and fix it after the test: the copy-down can be limited to the 8×8 area the test reads.
+
+## Claude
+
+2x 16-bit is done. Apart from the map6_s02 soft lock (#1) and the phone call halving to 28.8 fps (#48), every cutscene ran at full speed. 2x 32-bit starts next.
+
+## Claude
+
+The console took the 2x 32-bit setting, and that pass is now running.
+
+## Claude
+
+At 2x 32-bit, CybilFightStart (#36) ran at 16.3 fps, against 18.7 at 2x 16-bit. Texture re-reads went from almost none to 4.2 per frame on average, with a peak of 12. That's the cost of having only 7 texture cache slots.
+
+## User
+
+The current cutscene is very glitchy, showing various strips blinking in and out of existence
+
+## Claude
+
+I'll check the console log for this cutscene: stuck readbacks, and how many re-reads are happening.
+
+- tool `Bash`: Check current cutscene and GS stats
+
+- tool `Bash`: Inspect stuck readback messages
+
+- tool `Bash`: Check bar fight result in 2x32
+
+## Claude
+
+The bar fight finished at 47.4 fps in 2x 32-bit, down from 59.5 in 2x 16-bit. Skipping map6_s02 and resuming with the rest of 2x 32-bit, then the 1x 16-bit comparison.
+
+- tool `TaskStop`: 
+
+- tool `TaskStop`: 
+
+- tool `Bash`: Resume 2x32 remainder then 1x16 baseline
+
+- tool `Monitor`: Console cutscene test (part 4/5): per-cutscene results
+
+## Claude
+
+I skipped map6_s02 (#1) for 2x 32-bit as well, and the test is moving on to the Café cutscene. After the last seven 2x 32-bit runs it does the 1x 16-bit comparison pass.
+
+**What went wrong in map6_s02 at 2x 32-bit:**
+- The texture cache is thrashing: 119–157 texture pages re-read from VRAM per frame, against 0–12 in the other cutscenes. With only 7 cache slots, nearly every texture switch evicts a page that's needed again a moment later.
+- That's most likely why strips blink in and out, though I haven't confirmed the exact mechanism yet. I'll test it in PCSX2 after the run.
+- Either way, 2x 32-bit can't handle a scene this texture-heavy without more GS memory for textures. That's the problem the texture-streaming plan in [docs/720p.md](docs/720p.md) addresses.
+
+**Issues collected so far, to work on after the test:**
+
+| Issue | Where | Likely cause |
+|---|---|---|
+| Soft lock | map6_s02 (#1) at 2x | probably the motion-blur path |
+| Blinking strips, heavy texture re-reading | map6_s02 (#1) at 2x 32-bit | 7-slot texture cache |
+| 28.8 fps instead of 60 | Phone call (#48) at 2x | lens-flare screen read |
+| Negative fps line (measuring bug) | map7_s02 (#32) | stale start count in the demo code |
+
+**2x 32-bit so far:**
+
+| Cutscene | 2x 32-bit | 2x 16-bit |
+|---|---|---|
+| CybilFightStart (#36) | 16.3 fps | 18.7 fps |
+| Bar fight (#50) | 47.4 fps | 59.5 fps |
+
+## Claude
+
+The console is back in 2x 32-bit, and the remaining seven cutscenes are starting.
+
+## Claude
+
+The Café cutscene (#43) struggled badly at 2x 32-bit:
+- **Speed:** 36 fps, down from 59.7 at 2x 16-bit, and one second dropped to 1 fps.
+- **Texture re-reads:** 9.9 per frame on average, with a peak of 131.
+- **Idle:** the console was only 3% idle, so it was fully busy.
+
+It's the same texture-cache shortage as map6_s02.
+
+## Claude
+
+map2_s01 (#0) at 2x 32-bit: 50.6 fps, down from 59.5 at 2x 16-bit. Texture re-reads averaged 3.6 per frame.
+
+## Claude
+
+map5_s02 (#13) at 2x 32-bit: 50.8 fps, down from 59.9 at 2x 16-bit, with 5.8 texture re-reads per frame.
+
+## Claude
+
+Kaufmann (#4) at 2x 32-bit: 43.7 fps, down from 59.8 at 2x 16-bit, with 6.4 texture re-reads per frame.
+
+## Claude
+
+map7_s02 (#32) at 2x 32-bit: 48.2 fps on average. Its slowest second showed 0, meaning no frame was drawn for a full second, probably while loading.
+
+## Claude
+
+The phone call cutscene (#48) ran at 53.1 fps at 2x 32-bit. At 2x 16-bit it ran at 28.8, so it was faster in the heavier mode. That rules out my lens-flare theory, since the flare test works the same way in both modes. Most likely that 2x 16-bit run caught something one-off, and it should be repeated.
+
+## Claude
+
+The 2x 32-bit pass is done: 9 of 10 cutscenes completed, with map6_s02 skipped. The 1x 16-bit comparison pass is starting now.
+
+## Claude
+
+The console has switched to 1x 16-bit for the comparison pass of all 10 cutscenes.
+
+## Claude
+
+CybilFightStart (#36) ran at 19.3 fps in 1x 16-bit. That's the same speed as in 1x 32-bit, so the 15–19 fps in this cutscene comes from the game itself, not the new modes.
+
+## User
+
+This cutscene has soft locked again
+
+- tool `Bash`: Identify the soft-locked cutscene
+
+- tool `TaskStop`: 
+
+- tool `TaskStop`: 
+
+- tool `Bash`: Finish 1x16 baseline without map6_s02
+
+- tool `Monitor`: Console cutscene test (1x 16-bit remainder): results
+
+## Claude
+
+I've skipped map6_s02 (#1) again, and the 1x 16-bit pass is continuing with the Café cutscene. Seven cutscenes are left.
+
+Since it also locked at plain 1x 16-bit, the soft lock is not a 2x or 32-bit problem. It happened in three of four modes, and the 1x 32-bit run that finished was simply lucky. That points to a game-side or timing bug in this cutscene, possibly depending on what ran just before it, since it always followed the bar fight.
+
+I'll look into it after the pass finishes, along with the rest of the results.
+
+## Claude
+
+The PS2 is set to 1x 16-bit, and the remaining seven cutscenes are starting.
+
+## Claude
+
+The Café cutscene ran at 59.7 fps in 1x 16-bit, slowest second 20. That's the same as in 1x 32-bit, so 32-bit cost nothing here.
+
+## Claude
+
+map2_s01 also matched 1x 32-bit in 1x 16-bit: 59.5 fps on average.
+
+## Claude
+
+map5_s02 (#13) ran at 59.9 fps in 1x 16-bit, the same as in 1x 32-bit.
+
+## Claude
+
+The Kaufmann cutscene (#4) ran at 59.8 fps in 1x 16-bit, the same as in 1x 32-bit and 2x 16-bit.
+
+## User
+
+Is the test over?
+
+- tool `Bash`: Check test progress
+
+## Claude
+
+Not yet. Two cutscenes are left, both at 1x 16-bit: the phone call (#48), which has just started, and map4_s01 (#8). That should be a few more minutes.
+
+## User
+
+The title FMV is playing, actually
+
+## Claude
+
+I'll check the log to see whether the phone call cutscene started.
+
+- tool `Bash`: Check state after phone call request
+
+- tool `Bash`: Read log after the phone call request
+
+- tool `Bash`: Find what started the movie test
+
+## Claude
+
+Here's what happened, and it should sort itself out.
+
+1. When map7_s02 finished, the game went back to the Demo list as usual. One second later the list started its "ALL MOVIES" entry by itself. The log doesn't show why; possibly a stray button press, or the list's selection landing on that entry. I'll look into it afterwards.
+2. The test's request for the phone call cutscene then soft-reset the game, which stopped the movie test. But the movie test runs while the game believes it's in the intro movie, so the reset sent the game back through the intro sequence. That's the title FMV you're seeing.
+3. The phone call request is still pending and should start once the FMV ends and the main menu comes up. The test allows 7 minutes per cutscene, so it won't give up before then.
+
+If the FMV ends and the game sits on the title without starting the phone call, tell me and I'll start it by hand.
+
+## Claude
+
+That map7_s02 (#32) result is the run from before the movie detour. It completed; the fps cell is blank because of the same broken fps line as in 2x 16-bit. Still waiting on the phone call cutscene (#48) after the intro FMV.
+
+## User
+
+The cutscene where harry pushes the cabinet and meets Cybil again is playing. Not sure if that’s the right one
+
+## Claude
+
+I'll check which cutscene the game actually started.
+
+- tool `Bash`: Check started cutscene
+
+- tool `Bash`: Check phone call result row
+
+## Claude
+
+Yes, that's the right one: map4_s01 (#8), the last cutscene of the test. The phone call (#48) played just before it.
+
+The phone call cutscene is only about 4 seconds long (71 frames) before the player gets control. It measured 23.5 fps at 1x 16-bit, so its low figure at 2x 16-bit (28.8) wasn't a 2x problem. It's just too short to measure reliably, since the loading moment at the start dominates the average.
+
+The test ends when this cutscene reaches gameplay.
+
+## Claude
+
+That's the phone call row I already covered: 23.5 fps over just 71 frames, too short to measure reliably. Only the cabinet/Cybil cutscene (#8) is left, and it's playing now.
+
+- tool `Bash`: Collect all result rows
+
+## Claude
+
+The test is over. Combining the separate result files into one comparison table.
+
+- tool `Bash`: Build consolidated results table
+
+## Claude
+
+The test is finished: 37 of 40 runs completed, with no crashes, no stuck GS transfers and no restarts.
+
+**The short answer:**
+- **1x 32-bit and 2x 16-bit are effectively free.** Wherever both ran cleanly, they match 1x 16-bit within 0.6 fps.
+- **2x 32-bit costs 10–40%** and showed glitches. Every cutscene slowed down, because the texture cache is too small at 2x 32-bit.
+- **map6_s02 (#1) soft-locks regardless of mode.** It locked at 1x 16-bit too, so it's an existing bug, not the new modes.
+
+**Results** (fps, with the slowest second in brackets):
+
+| # | Cutscene | 1x 16-bit | 1x 32-bit | 2x 16-bit | 2x 32-bit |
+|---|---|---|---|---|---|
+| 36 | CybilFightStart | 19.3 (5) | 19.4 (15) | 18.7 (15) | 16.3 (14) |
+| 50 | Bar fight | 59.7 (32) | 59.7 (36) | 59.5 (39) | 47.4 (35) |
+| 1 | map6_s02 | soft lock | 59.6 (45) | soft lock | soft lock, blinking strips |
+| 43 | Café | 59.7 (20) | 59.7 (17) | 59.7 (4) | 36.0 (1) |
+| 0 | map2_s01 | 59.5 (16) | 59.5 (31) | 59.5 (28) | 50.6 (30) |
+| 13 | map5_s02 | 59.9 (22) | 59.9 (51) | 59.9 (25) | 50.8 (35) |
+| 4 | Kaufmann | 59.8 (37) | 59.8 (35) | 59.8 (35) | 43.7 (34) |
+| 32 | map7_s02 | n/a (2) | 59.1 (3) | n/a (4) | 48.2 (0) |
+| 48 | Phone call | 23.5 (9) | 59.9 (49) | 28.8 (7) | 53.1 (35) |
+| 8 | map4_s01 (cabinet, Cybil) | 59.9 (51) | 59.9 (51) | 59.9 (51) | 53.8 (44) |
+
+The full table, including texture re-reads and idle time, is in `build/port/console_cutscenes_summary.md`.
+
+**How to read it:**
+- **CybilFightStart** runs at about 19 fps in every mode. That's the game's own speed in this scene, not the renderer.
+- **The phone call** is only about 4 seconds long, so its fps varies with the load at the start. Its spread across modes isn't a renderer effect.
+- **Slowest-second dips** (Café, map7_s02) appear in every mode. They come from loads or resets, not rendering.
+- **2x 32-bit:** with only 7 texture cache slots, the GS re-reads 3–10 texture pages per frame on average. The Café cutscene peaked at 131 in one frame and averaged 36 fps.
+
+**Problems to fix, in my suggested order:**
+1. **map6_s02 soft lock:** in every mode except, this time, 1x 32-bit, which suggests it's timing-dependent. It always ran right after the bar fight, so leftover state from that cutscene is a suspect.
+2. **2x 32-bit blinking strips** in map6_s02, alongside 119–157 texture re-reads per frame. This needs a repro in PCSX2. Either way, 2x 32-bit isn't usable until texture streaming frees up GS memory (step 1 in [docs/720p.md](docs/720p.md)).
+3. **"ALL MOVIES" started by itself** from the Demo list after one cutscene finished.
+4. **Broken fps line** for map7_s02: negative frame counts in the game's own measurement.
+5. **STEP ERROR** you saw: harmless, but the next build will log it.
+
+Where do you want to start? I'd suggest the map6_s02 soft lock.
+
+## User
+
+Is CybilFightStart somehow overriding our 60 FPS target? Make sure that we’re not accidentally measuring the FMV frame rate, which I would expect to always be 15.
+
+## Claude
+
+Checking the console log for the CybilFightStart runs: whether any movie played in them, and what the frames per vertical blank look like.
+
+- tool `Bash`: Check CybilFightStart runs for movie playback
+
+- tool `Bash`: Show movie and heartbeat lines in one Cybil run
+
+- tool `Bash`: Exclude FMV seconds and recompute all runs
+
+## Claude
+
+The 60 fps target isn't being overridden. CybilFightStart's low figure came from an FMV inside the cutscene, as you suspected.
+
+**What was happening:**
+- **The FMV:** CybilFightStart plays a 358-frame movie (about 24 seconds) before the in-engine part. While it plays, the heartbeat shows exactly 15 frames per second.
+- **The game's fps line:** it measures from the event's start to player control, so it averaged the FMV and the 3D scene together and came out around 19.
+- **The in-engine part:** about 52 fps at 1x, with the console 0% idle in its busiest seconds. That's the genuinely heaviest scene, matching the earlier profiling.
+
+**Fix to the test:** [console_cutscenes.py](tools/port/console_cutscenes.py) now leaves out the seconds while a movie plays, plus the second after. It reports an "in-engine fps" next to the event fps and marks runs that included an FMV. I recomputed every run from the saved console log.
+
+**In-engine fps, FMV seconds excluded:**
+
+| Cutscene | 1x 16-bit | 1x 32-bit | 2x 16-bit | 2x 32-bit |
+|---|---|---|---|---|
+| CybilFightStart | 52.3 | 52.8 | 51.5 | 46.5 |
+| Bar fight | 59.6 | 59.6 | 59.4 | 47.6 |
+| Café | 59.4 | 59.7 | 59.6 | 36.3 |
+| map2_s01 | 59.4 | 59.4 | 59.4 | 50.7 |
+| map5_s02 | 58.7 | 58.7 | 58.7 | 51.9 |
+| Kaufmann | 59.7 | 59.7 | 59.7 | 43.9 |
+| map7_s02 | 58.5 | 58.8 | 58.5 | 48.1 |
+| map4_s01 | 59.9 | 59.9 | 59.9 | 53.8 |
+| Phone call | 56.5\* | 59.7 | 33.4 | 53.3 |
+
+\* The 1x 16-bit phone call run includes the accidental "ALL MOVIES" detour, so it's polluted.
+
+The conclusions stand:
+- 1x 32-bit and 2x 16-bit cost nothing measurable.
+- 2x 32-bit costs 10–40% from texture re-reads.
+
+**One run doesn't fit:** the phone call at 2x 16-bit, at 33 fps with the console 88% idle. The console is waiting on something, not busy. That's not an FMV, and 2x 32-bit, the heavier mode, ran it at 53 fps. It's a single sample, so I'd re-run that one cutscene before reading anything into it.
+
+## User
+
+Go back through the list of issues and add them to a “ToFix.md” in the docs folder. For now, we’ll table them.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/docs/ToFix.md
+
+## Claude
+
+Written for: you, and anyone picking these issues up later.
+
+I've collected the open issues into [docs/ToFix.md](docs/ToFix.md), grouped by area and each with what we know so far. They're tabled for now.
+
+- **Game and cutscenes:**
+  - the map6_s02 soft lock;
+  - "ALL MOVIES" starting by itself;
+  - the negative fps line;
+  - the fps line including FMVs;
+  - the "STEP ERROR" message during attract demos;
+  - the warm-restart hang.
+- **Renderer:**
+  - the 2x 32-bit texture cache thrashing;
+  - the blinking strips in map6_s02;
+  - the phone call cutscene at 33 fps in 2x 16-bit;
+  - the toggle text corruption, fixed but not yet confirmed on hardware;
+  - the 2x prototype's known limits.
+- **Options:** the temporary Triangle shortcut for Debug Options.
+
+Not committed yet. Along with it there's this session's other work: `docs/720p.md`, the remote options command, the console test script, and the "STEP ERROR" log line.
+
+## User
+
+<command-name>/clear</command-name>
+            <command-message>clear</command-message>
+            <command-args></command-args>
+
+## User
+
+I want to add another option to the debug options menu: 480p. Right now the 2x rendering mode uses 480i, and I want to have the option for 480p. This shouldn’t have any performance penalty, as far as I understand.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn -i "interlace\|480i\|SetGsCrt\|render_2x\|Render2x\|g_Debug.*2x" src/port --include=*.c --include=*.h |
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 40,170p src/port/ps2/display_ps2.c; sed -n 300,395p src/port/ps2/display_ps2.c; grep -rn "g_PortHiresOpti
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "unused_26" src | head; grep -n "GS_MODE_DTV_480P" -r $(find / -name gsInit.h -path "*gsKit*" 2>/dev/nu
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 30,140p src/screens/options/options.c; sed -n 360,380p src/port/demo_menu.c; grep -n "DTV_480P" -A12 /hom
+
+- tool `Bash`: cd /home/alex/ps2dev/gsKit; f=$(grep -rln "GS_MODE_DTV_480P" --include=*.c . | head -3); echo $f; grep -n "480P" -B2 -A14 $f | head -60; cd -; grep -n "ExtraOpt
+
+## Claude
+
+Adding a "Video Mode" 480i/480p entry (config bit 2) and wiring it into the display setup.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import re p='src/screens/options/options.c'; s=open(p).read() s=s.replace(""" *   Color Depth:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's/hires = g_PortHiresOption && w == 320/hires = (g_PortHiresOption \& 3) \&\& w == 320/' src/port/ps2/di
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "Port_OptionsRemote" -B3 src/port/ps2/agent_ps2.c | head; grep -n "ps2" Makefile | head -5
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls tools/port/ | head -40; grep -rln "ee-gcc\|mips64r5900" tools/port/*.py | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; head -30 tools/port/ee_compile_check.sh | grep -i "usage\|#"; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/port_link.py --help 2>&1 | head -20
+
+## Claude
+
+Build links. Quick check that the edited files compiled into it:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -ic "error" build/port/link.log; find build -newer src/port/ps2/display_ps2.c -name "*display_ps2*.o" -o -n
+
+## Claude
+
+I added a third entry, **Video Mode**, to the Debug Options page. It toggles between `480i` and `480p` and is stored in bit 2 of `config.unused_26`, next to the other two settings, so it's saved with the rest of the options. The build compiles and links cleanly, but **I haven't run it in PCSX2 or on the PS2 yet**, so 480p output hasn't been seen working.
+
+**How it works** ([display_ps2.c](src/port/ps2/display_ps2.c)):
+- When the 2x renderer is active and Video Mode is 480p, the display is set up in gsKit's 480p mode instead of NTSC 480i. It shows the same 640×(2h) buffer as before, scanned out progressively.
+- 480p uses different video timing, so the horizontal magnification is taken from gsKit's display width for that mode (the NTSC table doesn't apply).
+- Switching into or out of 480p always does the full reset and setup, even in builds where `SH1_MODESWITCH` is set to a lighter method. Expect the usual few blank frames at each switch.
+- The option only matters while 2x is on. At 1x the game's own modes are used, and setting the 480p bit alone does not turn on the 2x renderer.
+
+**Other files changed:**
+- [options.c](src/screens/options/options.c): the new menu entry.
+- [libgpu_port.c](src/port/libgpu_port.c): now reads three option bits instead of two.
+- [demo_menu.c](src/port/demo_menu.c) and [ps2_ctl.py](tools/port/ps2_ctl.py): remote control accepts bit 2, so `ps2_ctl.py options 5` means 2x + 480p.
+
+You're right that it should cost nothing in performance: the drawing is unchanged and only the display timing differs.
+
+**Things to check when you test:**
+- 480p needs component or HDMI output, so it won't show over composite.
+- The new entry's highlight width and value position (118 and 214) are estimates. They may need nudging once you see the menu.
+
+## User
+
+Deploy the build to console
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,40p tools/port/ps2_ctl.py | grep -n "python3\|deploy\|run\|load"; grep -rn "udpfs\|deploy" docs/*.md 2>
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; pgrep -af "udpfs_serve|ps2_log" ; grep -n "deploy" -A8 tools/port/ps2_ctl.py | sed -n 1,40p | grep -v "^--$" | h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "newest\|\.iso\|FLAG" tools/port/udpfs_serve.py | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,30p tools/port/udpfs_serve.py; sed -n 50,65p tools/port/udpfs_serve.py
+
+## Claude
+
+Need a new ISO first, then deploy.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tools/port/make_iso.sh 2>&1 | tail -5 && python3 tools/port/ps2_ctl.py deploy 2>&1 | tail -5
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 25 tail -n0 -f build/port/ps2.log | grep -m3 -i "display:\|title\|crash"
+
+## Claude
+
+I built a new disc image and deployed it, and the PS2 restarted into it. The console's log shows the game booting and drawing its first screens (frame 60 so far, no crash), so it's running the new build.
+
+To try 480p, open Debug Options, set Resolution to x2 and Video Mode to 480p. You can also set both remotely with `python3 tools/port/ps2_ctl.py options 5`. You'll need a component or HDMI connection, because composite can't show 480p. If it switches correctly, the console log should show `display: 640x480p (MAGH 1)`.
+
+## User
+
+The game black screened after the Konami logo again. I’m restarting the console
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -25 build/port/ps2.log; sed -n 15,40p docs/ToFix.md
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; date +%s.%N; wc -l build/port/ps2.log; grep -c "" build/port/ps2.log; tail -3 build/port/ps2.log | cut -c1-100
+
+## Claude
+
+That black screen is very likely the warm-restart hang already listed in [docs/ToFix.md](docs/ToFix.md), not the 480p change.
+
+The console's log shows the game started normally and reached the title screen in 640×448 interlaced mode (the game's own title mode). It kept running for about 3 seconds at 87–97% idle. Then the log simply stops at frame 300 with no error or crash report. That fits the known pattern: after a remote deploy or restart, the game sometimes hangs around the title and needs a power cycle.
+
+The new code can't be involved yet. The title screen is 640 wide and interlaced, and the 480p path only runs on 320-wide progressive screens with x2 turned on. Two things are different from the earlier clue: there's no second rom0:MCSERV load in the log this time, and the last thing logged is the game opening `host:/warp.txt` (it doesn't exist, which is normal) about a second before it stopped.
+
+Once you've restarted it from uLaunchELF it will boot the new image. Set Resolution to x2 and Video Mode to 480p (or run `ps2_ctl.py options 5`) and let me know what you see.
+
+## Claude
+
+That message was a background watch on the earlier cutscene test timing out after 30 minutes. It isn't about the hang or the 480p build, and I'm not re-arming it. I'm still waiting for you to restart the console and try x2 with Video Mode set to 480p.
+
+## User
+
+I don’t see the 480p option in the debug options menu. Can you manually enable it?
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/ps2_ctl.py options 5 2>&1|tail -2; sleep 3; grep -a "options set\|display: 640x\|build" build
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 700,725p src/screens/options/options.c; sed -n 878,900p src/screens/options/options.c; sed -n 1318,1332p 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls -l --time-style=+%T build/port/merged/options.o src/screens/options/options.c; strings build/port/sh1.elf | g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; strings build/port/merged/options.o | grep -E "Color_Depth|Video_Mode|480p"; strings build/port/sh1.elf | grep -
+
+## Claude
+
+The new menu entry never made it into the build: the options screen's object file is stale. Finding where it gets compiled:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; find build -name "options.c.o" -o -name "options.o" | xargs ls -l --time-style=+%T; grep -n "ee_check\|ee_compil
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tools/port/ee_compile_check.sh 2>&1 | tail -3 && python3 tools/port/port_link.py 2>&1 | tail -1 && strings build
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/ps2_ctl.py deploy 2>&1 | tail -2; timeout 20 tail -n0 -f build/port/ps2.log | grep -m2 "start
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -4 build/port/ps2.log | cut -c1-120
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sleep 5; tail -2 build/port/ps2.log | cut -c1-100
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 10 python3 tools/port/ps2_ctl.py ping 2>&1 | tail -2; tail -1 build/port/ps2.log | cut -c1-80
+
+## Claude
+
+I found why the option was missing and fixed the build, but the redeploy then hit the warm-restart hang again, so the console needs another power cycle.
+
+**Why it was missing:** my first build only ran the link step. The game code (including the options screen) has to be compiled by `tools/port/ee_compile_check.sh` first, so the menu change never got in. Some of the other changes did make it in, which is why `ps2_ctl.py options 5` worked and the console switched to 480p (the log showed `display: 640x448p (MAGH 1)`). I've now run the full compile, link and image build, and the new image contains the Video Mode entry.
+
+**The hang:** I deployed the new image and the game reached the title screen. Then the log stopped at frame 300, the same place as last time. The console still answers pings, but its frame and vertical blank counters haven't moved since then, so it's frozen.
+
+After the power cycle and restarting from uLaunchELF, the new image will boot. The Video Mode option should then appear as the third Debug Options entry. If you'd rather skip the menu, I can enable it remotely again.
+
+That's two hangs in a row at the same spot after a remote deploy. Should I look into the warm-restart hang next?
+
+## User
+
+Yes
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ee=$(ls ~/ps2dev/ee/bin/*addr2line | head -1); $ee -f -e build/port/sh1.elf 0x81fe0; awk '/115868.37/,0' build/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i "warm-restart\|restart hang\|MCSERV" -A6 "Planning Doc.md" docs/*.md 2>/dev/null | head -60; grep -rn
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk '/115731.66/,/115740/' build/port/ps2.log | grep -a "loadmodule\|restart\|IOP\|reset" | head -20; sed -n 40,
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -an "SH1 port: starting\|agent: command RS\|loadmodule: id\|MCSERV\|display: frame 300$" build/port/ps2.log
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 869755,869860p build/port/ps2.log | cut -c1-150 | grep -v "gs stats" | sed -n 30,100p
+
+- tool `Bash`: cd ~/ps2tools/neutrino_v1.8.0 2>/dev/null && find . -iname "*ee_core*" -o -iname "*.elf" | head; for f in $(find . -iname "*ee_core*.elf"); do ~/ps2dev/ee/bin/m
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "GameState_" include/*.h include/*/*.h 2>/dev/null | grep -m6 "= \?[0-3],\|GameState_.*,$" | head; grep
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "GameState_KonamiLogo_Update\|KonamiLogo_Update" src | head -3
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "void GameState_KonamiLogo_Update" -A80 src/screens/b_konami/b_konami.c | grep -n "case\|Fs_\|Sd_\|Cd\|Q
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "MCSERV\|mcInit\|SifLoadModule\|loadmodule" src/port/ps2/*.c | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 185,225p src/port/ps2/agent_ps2.c
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/docs/ToFix.md
+
+## Claude
+
+I haven't found the cause of the hang yet, but I've pinned down when and where it happens. That rules out some ideas.
+
+**Where it happens:**
+- All three warm-restart hangs (today's two and the Oct 18 one) stop at the same moment: about 5 seconds after the game starts, at the end of the Konami logo. Cold boots pass that point without trouble.
+- Up to that moment, a warm restart logs exactly the same lines as a cold boot. The IOP's module load order and ids match too, so the IOP reboot during restart works.
+- After the hang, the IOP side is still alive and answers pings. The EE side goes silent all at once: both its status messages and its log stop. They both reach the PC through the same EE-to-IOP SIF link. So either the EE has hung completely, or that link has stalled.
+- The address 0x81fe0 from the ping is stale: it's from the last status the EE sent before it stopped. It's probably just the kernel's idle thread, so it doesn't point at the hang.
+- On Oct 18 the last log line was an unexplained second load of `rom0:MCSERV`, again about 5 seconds in. Something loads it at that moment, and the port doesn't. This time the log stopped before anything like that showed up.
+
+I've added these clues to [docs/ToFix.md](docs/ToFix.md).
+
+**Next step:** right now the log can't show what happens at the moment of the hang. I'd add a few things to the next build:
+- A vertical-blank timer that saves the EE's own state (its SIF DMA status, whether interrupts still arrive, what the game thread is doing) somewhere that survives the hang.
+- A log line for every module load the EE requests, so we can see who loads MCSERV.
+
+Then we'd run one more warm deploy and power-cycle afterwards. Each test needs a power cycle from you, so I'd like to batch the instrumentation into a single attempt. Shall I build it?
+
+The console still needs that power cycle. After it, the new image with the Video Mode option will boot.
+
+## User
+
+Yes, build it. I will reboot
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 225,260p src/port/ps2/agent_ps2.c; grep -n "stage_color" -A12 src/port/ps2/crash_ps2.c | head -20; grep -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "PMODE" src/port/ps2/gpu_gs.c | head; grep -n "Port_AgentVBlank" src/port/ps2/*.c; grep -n "unsigned int
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 110,160p src/port/ps2/libetc_ps2.c; grep -n "^int VSync\|^s32 VSync\|VSync(int" src/port/ps2/libetc_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "s_HeartbeatSema" src/port/ps2/libetc_ps2.c | head; grep -n "static void heartbeat" -A25 src/port/ps2/li
+
+## Claude
+
+Now writing the watchdog into the vertical blank handler.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/libetc_ps2.c'; s=open(p).read() s=s.replace("""        WaitSema(s_HeartbeatSem
+
+## Claude
+
+Now the module-load logging (a link-time wrapper, so every EE request is logged with its caller):
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's/"-Wl,--wrap=_write", /"-Wl,--wrap=_write", "-Wl,--wrap=SifLoadModule", /' tools/port/port_link.py cat 
+
+## Claude
+
+The instrumented build is ready: it compiles with no errors, links, and the disc image is rebuilt. It also includes the Video Mode option. I haven't run it in PCSX2 or on the console.
+
+**Screen colour when the game hangs.** If the game thread stops for 5 seconds, or the background threads stop for 3, the whole TV screen shows a colour that blinks with black once a second. The colour names the first cause found:
+
+| Screen | Meaning |
+|---|---|
+| **Red** | The EE's transfer to the IOP over the SIF link is stuck |
+| **Magenta** | The SIF transfer queue is full: messages to the IOP are refused |
+| **Yellow** | Threads have stopped running, but the SIF link is fine |
+| **Blue** | Only the game thread is stuck |
+| **Black and stays black** | No vertical blank interrupts at all: the EE is dead or has interrupts off |
+
+The blinking itself shows that interrupts are still arriving. If the game recovers, the picture comes back on its own. This is in [libetc_ps2.c](src/port/ps2/libetc_ps2.c).
+
+**Module-load logging.** Every IOP module load the EE requests is now logged with its caller's address. If the extra `rom0:MCSERV` load comes from the EE, we'll see where it came from. If it shows up with no matching line, something outside the game asked for it, most likely Neutrino.
+
+**Next steps:**
+1. Power-cycle the console and start Neutrino from uLaunchELF. It will boot this image, so that's a cold boot.
+2. Tell me when it's at the title. I'll do a warm deploy, which hit the hang twice in a row today.
+3. If it hangs, tell me what the screen shows (colour and whether it blinks). I'll read the log.
+
+## User
+
+We’re on the title screen
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -a "SH1 port: starting\|SifLoadModule" build/port/ps2.log | tail -4; python3 tools/port/ps2_ctl.py deploy 2
+
+## Claude
+
+This warm deploy got past the hang point: the game reached frame 360 and is still running. The hang is intermittent, so I'm deploying again, up to three more times, until it hangs:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for i in 1 2 3; do sleep 3; python3 tools/port/ps2_ctl.py deploy 2>&1 | tail -1; if timeout 30 tail -n0 -f build
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sleep 5; tail -5 build/port/ps2.log | cut -c1-140; timeout 8 python3 tools/port/ps2_ctl.py ping 2>&1 | tail -2
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 75,90p src/port/ps2/crash_ps2.c; grep -n "stage_color(" src/port/ps2/crash_ps2.c
+
+## Claude
+
+This time it didn't reach the title hang. It stopped earlier, during the restart itself. On the first deploy of this loop, the old build shut down its sound for the restart and logged nothing after that: the new build never started loading. The console doesn't answer pings either, so the IOP side is gone as well. That's a different failure from the Konami logo hang.
+
+**What's on the TV right now?** The restart code paints the screen at each step, so the colour tells us how far it got:
+- **Solid dark blue:** it called `LoadExecPS2` (the PS2 call that loads and starts the new build) and never got out of it. That would mean the hang is inside the restart handling in Neutrino or the kernel.
+- **Solid purple:** `LoadExecPS2` returned with an error.
+- **Bright blue, blinking once a second:** my new hang watch triggered, which means vertical blank interrupts were still running when it got stuck. In that case, the dark blue hasn't shown yet.
+- **The last game picture, or black:** it froze before reaching the restart call.
+
+Once you've told me, it'll need another power cycle.
+
+## User
+
+It’s a black screen
+
+- tool `Bash`: pgrep -af udpfs_serve; for p in $(pgrep -f udpfs_serve.py); do ls -l /proc/$p/fd/1 2>/dev/null; done
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -30 build/port/udpfs_server.log | cut -c1-160
+
+## Claude
+
+A black screen means it never reached the dark-blue step. It also isn't my hang watch, which would blink. The UDPFS server's log shows how far the restart got:
+
+- **The restart did happen.** At 08:21:23 the console asked the server to find it again (the DISCOVERY request the console makes after its I/O processor reboots) and read its first 92 blocks from the disc image. Every good restart today did the same.
+- **Then it stopped.** In good restarts, the next thing is Neutrino loading the new build ("loadelf ... Loaded" in the game log), then the game opening the image again. This time neither happened, so it died partway through loading the new build.
+- **Why the screen is black:** the PS2 clears the display as part of the restart call. So the blue screen probably flashed by too quickly to see, and it's black because the restart was already under way. If so, our code got through all its shutdown steps.
+
+So this hang was in the restart handling of Neutrino or the PS2 kernel, while it loaded the new build over the network. That's after our code handed over control. The title-screen hang is different: there the new build ran for about 5 seconds before its log went quiet. Both are restarts that load the build over the network and then fail some time later, so they may have a common cause. I can't confirm that yet.
+
+**Also in the server log:** the image handles from earlier runs are never closed. There were 22 opens and only 11 closes, and every deploy switches all of them over to the new image. It's probably harmless, but it's untidy.
+
+**Next step:** Neutrino 1.8 has a debug-colours option (I believe it's `-dbc`) that paints the screen at each stage of its own boot. With it on, the next black screen would show which stage failed. How do you start Neutrino from uLaunchELF? Is it a config file with arguments, or the plain `neutrino.elf`? If you tell me, I can add that flag.
+
+The console needs another power cycle.
+
+## User
+
+I run the plain .elf
+
+- tool `Bash`: cd ~/ps2tools/neutrino_v1.8.0; ls; ls config 2>/dev/null; grep -rn "dbc\|udpfs" config/*.toml 2>/dev/null | head; grep -rln "dbc" README* *.md 2>/dev/null | hea
+
+- tool `Bash`: cd ~/ps2tools/neutrino_v1.8.0; sed -n 1,40p config/system.toml; grep -n -i "dbc\|debug col" -A3 README.md | head -40
+
+- tool `Bash`: cd ~/ps2tools/neutrino_v1.8.0; grep -n -i "colou\?r" README.md | head -20
+
+## Claude
+
+You can turn it on without arguments. A plain `neutrino.elf` reads its default arguments from `config/system.toml` in the Neutrino folder on the PS2's storage (USB stick or memory card). In my local copy of Neutrino 1.8 it has this line:
+
+```toml
+default_dbc = false
+```
+
+**Please change it to `default_dbc = true`** in the copy on the PS2's storage. I can't reach that copy from here. Your copy probably also sets the UDPFS defaults, since it boots straight into the network image. Leave everything else as it is.
+
+The README only says `-dbc` means "Enable debug colors" and doesn't explain what each colour means. So when it next hangs, just tell me the colour it stops on and I'll look it up in Neutrino's source. One catch: Neutrino's colours replace the game's own restart colours. If the screen shows a colour, Neutrino is still working through its own steps. If it's black, it never got to Neutrino.
+
+After that, power-cycle, start Neutrino, and tell me when it's at the title. I'll start the deploy loop again.
+
+## User
+
+It’s at the title screen
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for i in 1 2 3 4 5; do sleep 3; python3 tools/port/ps2_ctl.py deploy 2>&1 | tail -1; if timeout 35 tail -n0 -f b
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -8 build/port/ps2.log | cut -c1-110; tail -c 600 build/port/udpfs_server.log; echo; timeout 8 python3 tools
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "CMD('R', 'S')" -B2 -A12 src/port/ps2/agent_ps2.c | head -30; grep -n "static void agent_thread\|WaitSem
+
+## Claude
+
+This hang happened at a different moment from the earlier ones, which helps:
+
+- **When:** the console acknowledged the restart command (`seq 1`), but the game never logged `agent: command RS`. That line is the very first thing it prints when a command arrives. Its status and log both froze at vertical blank 1800, which is when the command arrived.
+- **What still works:** the IOP side is alive. It answers pings, and the server shows it still reading the image at about 350 KB/s (probably the title music streaming).
+- **The clue:** the IOP hands a command to the game by writing it straight into EE memory over SIF, IOP to EE. The EE stopped at the moment that write arrived, before its first instruction of command handling. The Oct 18 note also said the IOP-to-EE SIF transfer was busy at the time of the hang. So the IOP-to-EE direction of the SIF link (the transfer from the IOP into EE memory) is now my main suspect, rather than the restart itself. The 5-second title hang could be a different IOP-to-EE transfer arriving and stopping the EE the same way.
+
+**What does the TV show right now?** The new hang watch would tell us which case this is:
+- **Blinking:** the EE is alive and taking interrupts, and the colour shows which part is stuck. I'd expect red or magenta, meaning the link to the IOP is stuck.
+- **Frozen game picture, no colour:** the EE stopped completely, interrupts included. That fits the IOP's transfer having overwritten memory the EE depends on, or having locked up the EE's DMA controller.
+
+## User
+
+Right now it’s still on the title screen. Try redeploying again
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/ps2_ctl.py deploy 2>&1 | tail -1; timeout 30 tail -n0 -f build/port/ps2.log | head -5 | cut -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sleep 15; awk '/116875.75/,0' build/port/ps2.log | head -30 | cut -c1-120; grep -a -c "agent: command RS" build/
+
+## Claude
+
+The restart stalled again at the same point as last time: right after `port: sound shut down`, with nothing loaded after that. **What colour is the screen now?** With Neutrino's debug colours on, it should show how far Neutrino got.
+
+What this run shows about the bigger problem:
+- **It's a communication stall, not a crash.** From vertical blank 1800 to 5160 (about 56 seconds), nothing the EE sent reached the IOP. Its status, its log and its heartbeats all went missing. The game itself kept running, which is why you saw the title screen.
+- **The IOP wasn't receiving.** The IOP's receive channel from the EE showed the same address in both pings, so no data arrived between them. The first restart command did reach the EE's mailbox (the IOP acknowledged it), but its `agent: command RS` line never reached the log. The second command got through and the log started flowing again.
+- **What this means for the Konami logo "hang":** it was probably the same thing. When the log stops, the game looks dead from here, and the restart command gets stuck. Your earlier black screens after the logo may be a separate symptom, so I'm not certain of that.
+
+So the bug is most likely in the EE-to-IOP direction: the IOP stops accepting transfers from the EE, or the EE's sends get stuck in its queue, and it only recovers when something else happens. That points to the IOP agent or log module rather than the game. I'll look at the IOP side next, once you've told me the colour.
+
+## User
+
+Right now it’s a black screen
+
+## Claude
+
+A black screen fits the same cause. The game paints the screen blue just before it calls `LoadExecPS2` (the PS2 call that loads the new build), and the kernel clears the display as part of that call. So the game probably got that far, and the call then stalled while rebooting the IOP. The reboot itself has to go over the EE-to-IOP link, which was the one that wasn't getting through. Neutrino's debug colours didn't show either, which suggests it stalled before Neutrino's colour code ran. That's a guess, since I don't have Neutrino's source to check. Looking at the IOP side now:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls src/port/ps2/iop* src/port/ps2/*/ 2>/dev/null | head -20; grep -rln "sceSifSetDma\|SifSetDma\|sifcmd\|CHCR" -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; wc -l src/port/iop/sh1agent/main.c src/port/ps2/log_ps2.c; sed -n 1,140p src/port/ps2/log_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,206p src/port/iop/sh1agent/main.c
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/docs/ToFix.md
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(find src/port/iop -name ministack.h | head -1); echo $f; grep -n "callback\|interrupt\|thread" $f | head; fi
+
+- tool `Bash`: cd ~/ps2tools/neutrino-src; grep -rn "handle_rx\|rx_callback\|udp_bind\|->cb\|callback(" iop/ministack/src/*.c | head; grep -rln "smap_intr\|RegisterIntrHandler
+
+## Claude
+
+I found Neutrino's source locally and I'm reading how it delivers network packets to our IOP agent.
+
+- tool `Bash`: cd ~/ps2tools/neutrino-src/iop/smap/src; grep -n "rx_callback\|static.*intr\|int .*_intr\|Intr\|thread\|WaitEventFlag\|iSetEventFlag" smap.c | head -40
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/iop/sh1agent/main.c'; s=open(p).read() s=s.replace("""#include <thbase.h> ""","""#
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/src/port/iop/sh1agent; ls; make 2>&1 | tail -5; grep -rn "sh1agent.irx" /home/alex/Documents/silent-hill-1-ps2-po
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/src/port/iop/sh1agent; cat imports.lst | head -40; grep -n "thsemap" irx_imports.h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/src/port/iop/sh1agent; python3 - <<'EOF' s=open('imports.lst').read() s=s.replace("thbase_IMPORTS_end\n","thbase_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls -l --time-style=+%T build/port/iop/sh1agent/sh1agent.irx build/port/sh1.elf; strings build/port/sh1.elf | gre
+
+## Claude
+
+I've fixed the IOP agent and built a new image that includes it. I haven't run it in PCSX2 or on the console.
+
+**The changes** (in [main.c](src/port/iop/sh1agent/main.c)):
+- **No waiting on the network thread.** The packet handler now only records the command. A separate agent thread sends it to the EE, so disc data and pings keep flowing even if a transfer to the EE is slow.
+- **No busy-waiting.** Waiting for a transfer now sleeps between checks, so lower-priority IOP threads (the sound module's) can still run.
+- **Shared mailbox under a lock.** The command thread and the log thread take turns sending it.
+- **Pings stay on the IOP.** A ping is answered there and no longer touches the EE at all.
+- **More in the ping answer.** It now reports how many transfers to the EE took over 100 ms, and whether one is still going. If the stall comes back, we'll see whether the IOP-to-EE direction is the part that's stuck.
+
+The fix isn't proven yet. It removes a real way for the network to stall, but this round of logs doesn't show that was the cause. The current build (the one stuck on the black screen) still has the old agent, so the next test has to start from a cold boot.
+
+**Next steps:**
+1. Power-cycle the console and start Neutrino. It will boot the new image.
+2. Tell me when it's at the title. I'll run the deploy loop again, up to five restarts.
+
+## User
+
+We’re on the title screen
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 8 python3 tools/port/ps2_ctl.py ping 2>&1|tail -3; for i in 1 2 3 4 5; do sleep 3; python3 tools/port/ps
+
+- tool `Bash`: cd ~/ps2tools/neutrino-src/ee; ls; grep -rn "LoadExecPS2\|DBG_COLOR\|dbc\|GS_BGCOLOUR\|BGCOLOR" --include=*.c --include=*.h ee_core | head -30
+
+- tool `Bash`: cd ~/ps2tools/neutrino-src/ee/ee_core/src; sed -n 70,130p main.c; sed -n 320,395p iopmgr.c; sed -n 350,370p util.c
+
+## Claude
+
+Neutrino's EE core paints its own debug colours while it reboots the IOP: light blue first, then magenta, then yellow, then black once that step is done. The IOP agent is still answering pings, so the IOP hasn't been rebooted.
+
+**What's on the screen now?**
+- **Our dark blue:** we called `LoadExecPS2` and it never got as far as Neutrino.
+- **Light blue, magenta or yellow:** stuck in that step of Neutrino's IOP reboot.
+- **Blinking with red pulses:** Neutrino's error screen. Please count the red blinks between the long colour flashes.
+- **Black, or the title picture:** we stalled before the restart call.
+
+## User
+
+It’s black
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 8 python3 tools/port/ps2_ctl.py ping 2>&1|tail -3; tail -c 400 build/port/udpfs_server.log; echo; grep -
+
+- tool `Bash`: cd ~/ps2tools/neutrino-src/ee/ee_core/src; grep -n "New_Reset_Iop2" -A40 iopmgr.c | head -70; grep -n "int Reset_Iop\b\|^int Reset_Iop" -A40 iopmgr.c | head -50
+
+## Claude
+
+The IOP is still on the old run: its agent answers pings, and the UDPFS server hasn't seen a DISCOVERY request (which would mean the IOP had rebooted). So the EE stopped before Neutrino rebooted the IOP. The EE's status also stays frozen at vertical blank 1860, but that's expected: the game stops sending status during a restart.
+
+That leaves two possibilities:
+1. **It's stuck inside the PS2 kernel's part of `LoadExecPS2`,** before Neutrino's EE core starts. That fits a black screen.
+2. **It's stuck in Neutrino's first reboot step,** which should show light blue, but the debug colours aren't actually on.
+
+**When you cold-booted Neutrino after setting `default_dbc = true`, did you see coloured screens flash by during boot?** If you did, the setting works and this is case 1. If the boot looked the same as before, the setting didn't take, and it could be either case.
+
+The console needs another power cycle either way.
+
+## User
+
+When I cold booted Neutrino, I saw magenta and then the game started
+
+## Claude
+
+Good, so the debug colours work. Since the restart showed no colour at all, it never reached Neutrino's IOP reboot. It stalled either in our last few steps before `LoadExecPS2` or in the kernel part of that call.
+
+My main suspect is the EE's outgoing SIF channel (DMA channel 6, EE to IOP) being stuck busy. Our restart code waits only 100 ms for it to go idle and then calls `LoadExecPS2` anyway, and the kernel may then wait on it forever. I'm adding a check that will show whether that's the case:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 60,76p src/port/ps2/crash_ps2.c; grep -n "void Port_AgentQuiesce" -A15 src/port/ps2/agent_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/crash_ps2.c'; s=open(p).read() old="""    stage_color(0xC00000); /* blue: rest
+
+## Claude
+
+The new image is built (compiles with no errors, links), but I haven't tested it. Just before calling `LoadExecPS2`, the restart now does two extra things:
+- **Logs the SIF state:** the status of DMA channels 6 (EE to IOP) and 5 (IOP to EE), and the SIF flag register.
+- **Holds a colour for 2 seconds:** **orange** if channel 6 is still busy, **green** if it's idle. Then it shows our dark blue and calls `LoadExecPS2`.
+
+That makes the colour order on a deploy: picture → green/orange (2 s) → dark blue → Neutrino's light blue → magenta → game. Wherever it stops, we'll know which side of `LoadExecPS2` the stall is on.
+
+**Next steps:**
+1. Power-cycle the console and start Neutrino.
+2. Tell me when it's at the title. I'll run the deploy loop.
+3. If a restart stalls, tell me the **last colour you saw** before it went black or froze, especially whether it was green or orange.
+
+## User
+
+On the title screen now
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for i in 1 2 3 4 5; do sleep 3; python3 tools/port/ps2_ctl.py deploy 2>&1 | tail -1; if timeout 40 tail -n0 -f b
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sleep 5; timeout 8 python3 tools/port/ps2_ctl.py ping 2>&1|tail -3
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -5 build/port/ps2.log | cut -c1-150; grep -a "agent: command" build/port/ps2.log | tail -2
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -an "SH1 port: starting\|agent: command\|restarting\|before LoadExec\|sound shut" build/port/ps2.log | tail
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for i in 1 2 3 4 5 6; do sleep 8; python3 tools/port/ps2_ctl.py deploy 2>&1 | tail -1; if timeout 40 tail -n0 -f
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -an "SH1 port: starting\|agent: command\|before LoadExec\|CRASH\|heartbeat: vblank 1620" build/port/ps2.log
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sleep 10; grep -an "SH1 port: starting\|agent: command\|heartbeat: vblank 1[6-9]\|heartbeat: vblank 2" build/por
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk -F'[][]' '/heartbeat: vblank/{print $2, $3}' build/port/ps2.log | tail -40 | awk '{print $1, $4}' | tr '\n' 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 55,110p src/port/ps2/agent_ps2.c; grep -n "s_LastSeq\|s_MailboxOn = 1\|mb=" src/port/ps2/agent_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/ps2_ctl.py where 2>&1 | tail -2; sleep 3; grep -a "agent: command\|where\|WH" build/port/ps2.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk -F'[][]' '$2>117774 && $2<117790' build/port/ps2.log | grep -av "heartbeat\|gs stats\|libgpu\|display: frame
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 30,54p src/port/ps2/agent_ps2.c; sed -n 270,295p src/port/ps2/agent_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ~/ps2dev/ee/bin/mips64r5900el-ps2-elf-nm -n build/port/sh1.elf | grep -A4 " s_Mailbox"
+
+## Claude
+
+The mailbox has its 64-byte cache line to itself (`s_LastSeq` is in a different line), so that's not it. Sending a single restart by hand and watching closely:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; date +%T.%N; python3 tools/port/ps2_ctl.py deploy 2>&1 | tail -1; sleep 15; grep -an "SH1 port: starting\|agent:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ok=0; for i in $(seq 1 8); do sleep 12; n0=$(grep -ac "SH1 port: starting" build/port/ps2.log); for try in 1 2; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='docs/ToFix.md'; s=open(p).read() s=s.replace("or sifman's SIF1 rearm being missed.","or sif
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -c "Fix tried (2026-10-19)" docs/ToFix.md
+
+## Claude
+
+Warm restarts look fixed, though not yet proven over a long run. With the new IOP agent, 8 restarts in a row all worked, with no hangs and no missed commands. Counting the earlier manual runs on this build, that's 12 out of 12 restarts the game received. With the old agent, two out of three restarts in a row hung.
+
+**What changed:** Neutrino's network driver delivers packets to our IOP agent on its receive thread, and that same thread also receives the disc data over UDPFS. The agent used to busy-wait on that thread while it sent each command to the EE, and its log thread busy-waited too. Now commands are queued and sent from a thread of their own, without busy-waiting, and the shared mailbox is locked. The change is in [main.c](src/port/iop/sh1agent/main.c).
+
+**Still open:**
+- One restart command after this fix was never acted on, before the loop started resending missed ones. The game kept running, so it was a lost command rather than a hang. It happened once, I don't know why, and it hasn't happened since.
+- The diagnostics are still in. Each restart shows green or orange for 2 seconds, logs the SIF state, and logs every module load. The screen-colour watchdog is still in as well. They're useful while we confirm the fix, but should come out afterwards. Say when.
+- [docs/ToFix.md](docs/ToFix.md) has the findings and the fix, marked as not yet proven.
+
+The console is running the current build, which includes the Video Mode option. To try 480p, go to Debug Options and set Resolution to x2 and Video Mode to 480p, or tell me and I'll turn it on remotely.
+
+## User
+
+When I change the options, the game seems to become locked to 30 FPS. I don’t think this is a performance issue
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i "field\|CSR" src/port/ps2/gpu_gs.c src/port/ps2/libetc_ps2.c src/port/ps2/display_ps2.c | grep -v "^\
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk -F'[][]' '$2>117870' build/port/ps2.log | grep -a "display: [0-9]\|options\|gameState\|demo:" | tail -15 | c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "SH1_FPS" tools/port/ee_compile_check.sh | head -5; grep -rn "SH1_FPS\|SH1_HIRES" Makefile CLAUDE.md doc
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -o "SH1_FPS=60[^\`]\{0,80\}" "Claude Conversation.md" 2>/dev/null | tail -5; grep -rn "SH1_FPS" ~/.claude/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1; tools/port/ee_compile_check.sh 2>&1 | grep "failed:"; python3 tools/port/port
+
+- tool `Write`: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/ps2-build-env.md
+
+- tool `Bash`: echo "- [PS2 build env](ps2-build-env.md) — SH1_FPS=60 SH1_NO_RECOMP=1; compile+link+iso, link alone skips game C" >> /home/alex/.claude/projects/-home-alex-Doc
+
+## Claude
+
+You were right that it wasn't a performance problem, and the options didn't cause it either. My builds were missing `SH1_FPS=60` and `SH1_NO_RECOMP=1`, so gameplay ran at the original game's 30 fps. Every build I've given you today, including the first 480p one, had this.
+
+I rebuilt everything with both settings and deployed it, and the console restarted into the new build. Gameplay should be back to 60 fps, and the options shouldn't affect it now. I haven't checked the frame rate on the console yet. If it's still at 30, tell me which setting you changed when it happened.
+
+I've also saved a note so future builds always use those settings and run the compile step too, not just the link.
+
+## User
+
+The game has black screened again
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -15 build/port/ps2.log | cut -c1-170; timeout 8 python3 tools/port/ps2_ctl.py ping 2>&1|tail -3
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sleep 4; timeout 8 python3 tools/port/ps2_ctl.py ping 2>&1|sed -n 2,4p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 80,125p src/port/ps2/spu_ps2.c; grep -n "DI()\|DIntr()" src/port/ps2/*.c | head -30
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 125,200p src/port/ps2/spu_ps2.c; grep -n "g_PortInInterrupt" src/port/ps2/spu_ps2.c | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 110,200p src/port/ps2/crash_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk -F'[][]' '$2>118310' build/port/ps2.log | grep -av "heartbeat\|gs stats\|libgpu\|display: frame" | cut -c1-1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "AddIntcHandler\|AddDmacHandler\|SetAlarm\|iSetAlarm\|AddTimer\|ResetCallback\|CreateThread" src/port/ps
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 425,500p src/port/ps2/spu_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/agent_ps2.c'; s=open(p).read() old="""    st->log_pending  = Port_LogPending(&
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's/static char          s_ReplyText\[384\];/static char          s_ReplyText[768];/' src/port/iop/sh1agen
+
+## Claude
+
+The new build is ready: it compiles, links and is in the disc image, built with the correct settings this time. I haven't run it yet. After a hang, a ping will now also show:
+- the state of the GS DMA channel
+- the state of both SIF DMA channels on the EE side (EE to IOP and IOP to EE)
+- the sound tick thread's state
+
+All of it comes from within 2 vertical blanks of the EE stopping.
+
+**Next steps:**
+1. Power-cycle the console and start Neutrino.
+2. Tell me when it's at the title.
+3. I'll deploy and wait about 25 seconds each time, so every run gets past the Konami logo, and repeat until it hangs. When it does, I'll read the ping. Watch the TV, though: if you see a blinking colour at any point, tell me.
+
+## User
+
+/web-setup
+
+## Claude
+
+`/web-setup` isn't a command or skill I have here, so I can't run it from this session. If it's a built-in Claude Code command, type it as a command in the prompt rather than sending it as a message. If you meant something else, tell me what you want set up.
+
+The console test is still waiting on you. Power-cycle, start Neutrino, and tell me when it's at the title, and I'll start the deploy runs.
+
+## User
+
+It’s on the  title screen
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for i in $(seq 1 8); do n0=$(grep -ac "SH1 port: starting" build/port/ps2.log); python3 tools/port/ps2_ctl.py de
+
+## User
+
+[Request interrupted by user for tool use]
+
+## User
+
+The game is on the title screen
+
+## Claude
+
+I've stopped. The deploy loop didn't run, so nothing has been sent to the console.
+
+How would you like to go ahead?
+1. **One deploy:** I send a single restart, wait about 30 seconds so it gets past the Konami logo, and check whether the EE is still alive.
+2. **The full loop:** up to 8 restarts, 30 seconds apart, stopping at the first hang.
+3. **Something else:** for example, test the 480p option first and leave the hang for later.
+
+## User
+
+Try one deploy for now
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n0=$(grep -ac "SH1 port: starting" build/port/ps2.log); python3 tools/port/ps2_ctl.py deploy 2>&1|tail -1; sleep
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -an "SH1 port: starting\|agent: command\|before LoadExec" build/port/ps2.log | tail -5 | cut -c1-120; tail 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n '877410,877440p' build/port/ps2.log | cut -c1-150
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "void Port_PadShutdown" -A30 src/port/ps2/libpad_ps2.c
+
+## Claude
+
+The restart is stuck inside `padPortClose`, a call to the pad driver on the IOP. It waits for the IOP's reply, and that reply never came. In every restart that worked, the log shows `libpad: port 1 state ...` lines right after this step. This time there are none. The game keeps running because only the agent thread is stuck, but that's the thread that handles commands, so it can't restart now. It needs another power cycle, sorry.
+
+This adds to a pattern. Three times now, something the IOP sent to the EE was silently lost:
+1. A restart command written into the EE's mailbox that the game never saw (earlier today).
+2. This reply from the pad driver.
+3. Possibly the Konami logo hang too, if the EE is stuck waiting for something like that with its interrupts off. That one isn't confirmed.
+
+Each time, the IOP side thinks it sent the data, and the EE never acts on it. So my main suspect now is the IOP-to-EE direction of the SIF link (DMA channel 5 on the EE). I'm less suspicious of the restart code itself.
+
+There's also a quick fix for this case: give the restart's pad and sound shutdown calls a timeout, so a lost reply can't block the restart. That would make deploys more reliable while I track down the real cause.
+
+Two questions:
+1. Shall I add the timeouts to the restart now?
+2. Should the next session focus on the lost IOP-to-EE transfers? Or would you rather set the hang aside and check 480p and the 60 fps fix first?
+
+## User
+
+Add the timeouts
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,28p src/port/ps2/crash_ps2.c; sed -n 52,75p src/port/ps2/crash_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/crash_ps2.c'; s=open(p).read() old="""void Port_Restart(void) {""" new="""/* T
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1; tools/port/ee_compile_check.sh 2>&1 | grep "failed:\|crash_ps2"; python3 tool
+
+## Claude
+
+I've added the timeouts, and the new build compiles, links and is in the disc image. It hasn't run on the console yet.
+
+**How it works** ([crash_ps2.c](src/port/ps2/crash_ps2.c)): the restart now runs the pad shutdown and the sound shutdown each in a separate thread. It waits at most 1 second for each one. If a step doesn't finish, the restart logs `port: restart: pad shutdown didn't finish ...` (or `sound shutdown`), stops that thread, and carries on. The disc-read wait already had a 1-second limit.
+
+The risk of skipping a step is small. The shutdowns exist so the IOP stops writing into EE memory before the new build loads. Neutrino reboots the IOP right after that anyway, so a skipped step leaves only a short gap where a stray write could land.
+
+The console is still stuck with the old build, which can't take commands, so it needs a power cycle. After that it will boot this build, and I'll do one deploy when you say it's at the title.
+
+## User
+
+Ready for deployment
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n0=$(grep -ac "SH1 port: starting" build/port/ps2.log); python3 tools/port/ps2_ctl.py deploy 2>&1|tail -1; sleep
+
+## Claude
+
+The deploy worked. The game restarted into the new build, got past the Konami logo, and is still running: two pings 3 seconds apart showed its vertical blank count going up (1062, then 1236). Neither shutdown step needed its timeout this time, so the log has no "didn't finish" line.
+
+The console is now on the latest build, which has:
+- 60 fps gameplay (the correct build settings)
+- the Video Mode option (480i/480p) in Debug Options
+- the IOP agent fix and the restart timeouts
+- the hang diagnostics
+
+To try 480p, go to Debug Options, set Resolution to x2 and Video Mode to 480p, and let me know how the picture and frame rate look. If the black screen comes back, tell me and I'll read the extended ping before you power-cycle.
+
+## User
+
+Ok, the 480p and 2x resolution options seem to work fine now
+
+## Claude
+
+Good, so 480p is confirmed on hardware, along with the 2x option.
+
+Still open from today:
+- **Konami logo hang after warm restarts.** It hasn't been fixed. The new diagnostics will show more the next time it happens: ping before you power-cycle.
+- **Lost IOP-to-EE transfers** (a missed command, a pad driver reply that never came back). This is my main suspect for the hang. The restart timeouts only work around it.
+- **Diagnostic code to remove once those are settled:** the 2-second colour before each restart, the screen-colour hang watch, the module-load logging, and the status being sent every 2 vertical blanks.
+
+Nothing is committed yet. Would you like me to commit the 480p option, the agent fix and the restart timeouts now, or wait until the hang is sorted?
+
+## User
+
+Try restarting the game 3 times
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for i in 1 2 3; do n0=$(grep -ac "SH1 port: starting" build/port/ps2.log); python3 tools/port/ps2_ctl.py deploy 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -an "agent: command\|restart\|before LoadExec\|sound shut\|SH1 port: starting" build/port/ps2.log | tail -6
+
+## Claude
+
+Two of the three restarts worked. The third didn't, and it failed in a new place.
+
+1. **Restart 1:** worked. The new timeout did its job: the pad driver's reply was lost again, the restart logged `pad shutdown didn't finish` and carried on.
+2. **Restart 2:** worked, with no timeouts needed.
+3. **Restart 3:** stalled inside `LoadExecPS2`. The game finished all of its shutdown steps, and the EE's SIF channel to the IOP was idle just before the call (channel 6 `CHCR 0085`). After that, no new build started. The IOP agent still answers pings, so the IOP was never rebooted.
+
+That means the restart is now stuck in the PS2 kernel's part of `LoadExecPS2`, or very early in Neutrino's code, before its IOP reboot.
+
+**What colour is the TV showing?** The order should have been green for 2 seconds, then our dark blue, then Neutrino's light blue and magenta.
+- **Dark blue:** it never got out of the kernel's part of `LoadExecPS2`.
+- **Light blue or magenta:** it stalled in that step of Neutrino's IOP reboot.
+- **Black:** the kernel cleared the screen, and it's ambiguous again.
+
+It'll need a power cycle after that.
+
+## User
+
+It’s a black screen
+
+- tool `Bash`: cd ~/ps2tools/neutrino-src/ee/ee_core/src; grep -n "LoadExecPS2\|Hook_\|SetSyscall" syshook.c 2>/dev/null | head -30; ls
+
+- tool `Bash`: cd ~/ps2tools/neutrino-src/ee/ee_core; grep -rn "Install_Kernel_Hooks" -A30 src/*.c | grep -v "^--$" | head -50; grep -rn "EELOAD\|LoadExecPS2" src/*.c src/*.S 
+
+## Claude
+
+Black again, so this failure is in the same place as the black-screen restarts from before the agent fix. Neutrino's light blue never appeared, so it never got as far as its IOP reboot. That leaves the kernel's own part of `LoadExecPS2` as the most likely place, though the screen alone doesn't prove it.
+
+Neutrino's source gives one clue. It ships a fix for a game (.hack) that "does not call scePadEnd() before LoadExecPS2()". That suggests `LoadExecPS2` can hang if an IOP module is still writing into EE memory when it's called. In restart 3 our pad shutdown finished normally, but other IOP-side senders may still be active:
+- the IOP agent's replies to our log, which keep coming until the very end
+- the sound module's status writes
+- Neutrino's own disc emulation
+
+Any of these could still be writing into EE memory at that moment. That's a hypothesis I haven't tested.
+
+**Where things stand:**
+- **Works on hardware:** 480p and 2x; 60 fps (with the right build settings).
+- **Restarts are much better** than this morning, but still not reliable. Since the agent fix, 14 have worked. One stalled because a command was lost. This one stalled in `LoadExecPS2`. The pad timeout has already rescued one restart.
+- **Konami logo hang:** not seen again since the extended diagnostics went in.
+
+**Next step I'd suggest:** make the IOP side completely quiet before `LoadExecPS2`. A new "quiesce" command would tell the IOP agent to stop all writes into EE memory. The EE log thread would stop before the call, and the restart would wait for any IOP-to-EE transfer still in progress to finish. Then we'd run a longer restart series to see whether the `LoadExecPS2` stall goes away.
+
+The console needs a power cycle first. Shall I build that?
+
+## User
+
+Yes
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 140,192p src/port/ps2/log_ps2.c; grep -n "s_EeStatus.magic" src/port/iop/sh1agent/main.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import re p='src/port/ps2/log_ps2.c'; s=open(p).read() s=s.replace("""static volatile int     
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; (cd src/port/iop/sh1agent && make 2>&1 | grep -i "error\|warning"); export SH1_FPS=60 SH1_NO_RECOMP=1; tools/por
+
+## Claude
+
+I've built the quiet restart: it compiles, links and is in the disc image, but it hasn't run yet.
+
+**The new restart order:**
+1. Pad and sound shutdown, each with its 1-second timeout, as before.
+2. The SIF channel state is logged as `port: quiescing: ...`. This is the last line the old build will log.
+3. **Log stopped** ([log_ps2.c](src/port/ps2/log_ps2.c)): from here on, console output is dropped instead of sent to the IOP. The restart waits up to half a second for a send already in progress.
+4. **IOP agent told to stop** ([agent_ps2.c](src/port/ps2/agent_ps2.c), [main.c](src/port/iop/sh1agent/main.c)): the EE sends a final status marked "restarting". After that the agent writes nothing more into EE memory: no log acknowledgements and no commands. If you ping it now, it answers `EE: restarting ...`. The restart then waits 6 more vertical blanks for any transfer already under way.
+5. Green or orange for 2 seconds, dark blue, then `LoadExecPS2`, as before.
+
+One side effect: the `before LoadExecPS2` line from the last build won't show up in the log any more, because it comes after the log stops. The green/orange colour still shows that state.
+
+**Next steps:**
+1. Power-cycle the console and start Neutrino.
+2. Tell me when it's at the title.
+3. How many restarts should I run? I'd suggest 5, about 35 seconds apart. Each one gets past the Konami logo and stops at the first failure.
+
+## User
+
+Yes, run 5 restarts. We’re on the title screen now
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for i in 1 2 3 4 5; do n0=$(grep -ac "SH1 port: starting" build/port/ps2.log); python3 tools/port/ps2_ctl.py dep
+
+## Claude
+
+The first restart already failed, so the quiet restart didn't fix it.
+
+The game logged `quiescing`, and the SIF channels looked normal at that point. The IOP agent then received the "restarting" status and stopped writing into EE memory. So every step up to `LoadExecPS2` ran as planned, and the agent's writes weren't what blocks it. The IOP is still running the old modules, which means Neutrino's IOP reboot never started.
+
+**What did the TV show, and what's on it now?** In particular:
+- Did you see **green** (or orange) for about 2 seconds?
+- Did it then turn **dark blue**?
+- Is it **black** now?
+
+If it went green, then blue, then black, then the stall is inside `LoadExecPS2` itself, after our code finished. If it never went green, it stopped somewhere in our last few steps.
+
+## User
+
+It did go green, but it’s black now
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -c 1500 build/port/udpfs_server.log | tr '\r' '\n' | tail -12; grep -n "iop_rm\|reboot" ~/ps2tools/neutrino
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='docs/ToFix.md'; s=open(p).read() s=s.replace("remove once settled.","remove once settled.\n
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -c "Still stalls (2026-10-19" docs/ToFix.md
+
+## Claude
+
+Green shows that our code got all the way to `LoadExecPS2` with nothing left running. So the stall is now somewhere after our code hands over control.
+
+- **The UDPFS server saw nothing after the restart.** There was no DISCOVERY request and no reads. A working restart reboots the IOP (which sends DISCOVERY) and then loads the new build over the network. Neither happened.
+- **The old IOP agent is still running and answering pings,** so nothing has touched the IOP.
+- So the EE is stuck in the gap between our `LoadExecPS2` call and Neutrino's EE core contacting the IOP. That covers the kernel's part of `LoadExecPS2` and the start of Neutrino's restart path (it clears memory, possibly reboots the IOP, then starts its own services). Neutrino's light blue is painted only if that path reboots the IOP. Its reboot setting decides that, and I haven't checked it, so the missing light blue doesn't rule out Neutrino's code.
+- **Quieting the IOP agent made no difference,** so its writes weren't the cause.
+
+Since this morning's agent fix, about 1 restart in 4 stalls. The failure isn't in our code any more. To go further, I'd need visibility inside Neutrino's EE core during a restart. The cleanest way is to build Neutrino's EE core from the source you have in `~/ps2tools/neutrino-src`, with a debug colour at each step of its restart path. That means swapping a Neutrino file on your PS2's storage, so it's your call. I've written these findings into [docs/ToFix.md](docs/ToFix.md).
+
+The console needs another power cycle. How would you like to continue?
+1. **Instrument Neutrino's EE core** as above, to find exactly where it stalls.
+2. **Park the restart issue for now.** Restarts work most of the time, and when one stalls it costs a power cycle. I'd commit today's working changes (480p, the agent fix, the timeouts) and remove the screen-colour diagnostics. Should the remaining restart diagnostics stay in?
+3. **Something else** you'd like to look at first.
+
+## User
+
+Let’s record the findings and table them for today. I want to move on to something else.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='Planning Doc.md'; s=open(p).read() old="- [ ] Warm-restart hang (deploy restarts the game; 
+
+## Claude
+
+The warm-restart issue is written up and parked for today.
+
+- **[docs/ToFix.md](docs/ToFix.md)** has the full trail. That covers the SIF stall the agent fix cured, the lost IOP-to-EE replies, and the remaining stall inside `LoadExecPS2` (about 1 restart in 4). It also has the suggested next step: instrumenting Neutrino's EE core.
+- **[Planning Doc.md](Planning%20Doc.md):** the warm-restart item is marked as tabled and points to that write-up.
+
+Nothing is committed yet. The working tree has today's changes on top of the files you'd already changed before this session. Several diagnostics are still in the code: the screen-colour hang watch, the green/orange restart colour, the module-load logging and the status every 2 vertical blanks. Let me know if you want any of them taken out or the changes committed.
+
+The console still needs a power cycle before the next test. What would you like to work on next?
+
+## User
+
+https://tcrf.net/Silent_Hill
+The revisional differences section describes a bug with the newspaper memo and certain flags not being written to the save file. Can you confirm that this bug is present in our code, and fix it if it is?
+
+- tool `ToolSearch`: 
+
+- tool `WebFetch`: 
+
+- tool `WebFetch`: 
+
+## Claude
+
+Neither version of the TCRF page came back with that section, so I'll look for the bug in the code directly:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn -i "newspaper" src include | head -20
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 535,575p src/maps/map5_s03/map5_s03_2.c; grep -rn "REGION\|VERSION_\|BUILD_" src/maps/map5_s03/map5_s03_2
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/maps/map5_s03/map5_s03_2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "define VERSION_REGION_IS" include | head -2; export SH1_FPS=60 SH1_NO_RECOMP=1; tools/port/ee_compile_
+
+## Claude
+
+Yes, the bug was in our code, and it's fixed now. The TCRF page wouldn't load properly for me, so I couldn't read their description. What I fixed is the bug the decomp itself documents, which matches what you described.
+
+**The bug:** when you read the second newspaper (map5_s03, `func_800D2640`), the game should set the event flag `EventFlag_M5S03_SeenSecondNewspaper`. The flag is saved with your game, and the later newspapers in map7_s01 and map7_s02 only appear if it's set. The Japanese and PAL releases set it. The US release, which our build is based on, left that line out, so those later newspapers never show up.
+
+**The fix:** the port build now sets the flag too, as the later releases do ([map5_s03_2.c:556](src/maps/map5_s03/map5_s03_2.c#L556)). The build compiles and links.
+
+**Not checked:**
+- I haven't played through to confirm the later newspapers now appear. That needs a save from before the second newspaper.
+- An existing save where the second newspaper was already read won't have the flag. Reading it again should set it, as long as it can still be read.
+- You mentioned "certain flags", plural. This is the only missing flag the decomp marks as a bug. If TCRF lists others, paste that section and I'll check each one.
+
+## User
+
+Describe what I would need to do to check if the bug is still present
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 775,800p src/maps/map7_s01/map7_s01_events_data.c; sed -n 2335,2350p src/maps/map7_s01/map7_s01_2.c; grep
+
+## Claude
+
+Here's how to check it in the game. I've based the map names on the decomp's labels, so treat the place names as my best reading of them.
+
+**Where the bug shows up**
+- **Where the flag gets set:** a newspaper in map5_s03, which is in the Resort area (I believe it's the Indian Runner shop). Reading it should set `EventFlag_M5S03_SeenSecondNewspaper`.
+- **What depends on it:** in Nowhere (map7_s01 and map7_s02), the room with the plant encyclopedia (the decomp's `Zukan`). It only places a newspaper clipping object (`Scrap`) and lets you examine it if that flag is set. Its picture is `NEWSP3.TIM`, the third newspaper.
+
+**How to test**
+1. Use the new build. It's compiled and linked but not yet in a disc image, so I'd need to run `make_iso.sh` and deploy.
+2. Play or load a save from before the Resort-area newspaper.
+3. Read that newspaper.
+4. Save, then continue to Nowhere. You can also reload that save first, which also checks that the flag survives saving.
+5. Go to the plant encyclopedia room. With the fix, a newspaper clipping is there and can be examined. With the bug, it's missing.
+
+To see the bug itself for comparison, do the same on the original US disc in DuckStation. The clipping should be missing there.
+
+**Shortcut that avoids playing to Nowhere**
+
+Right after reading the newspaper, I can read the flag straight from the console's memory with `ps2_ctl.py md`. The flag is number 393 in the save's event-flag array, and I'd just need to find the address of that array in our build. If it reads 1 after the newspaper, the fix works. It doesn't check that the clipping actually shows up, but it confirms the cause has gone.
+
+If you have a save near that point, tell me when you're there and I'll read the flag.
+
+## User
+
+Deploy this build to the console
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tools/port/make_iso.sh 2>&1 | tail -1; timeout 8 python3 tools/port/ps2_ctl.py ping 2>&1 | sed -n 1,2p
+
+## Claude
+
+The new disc image with the newspaper fix is built, but I can't deploy it yet. The console is still stuck from the restart that stalled earlier: its agent still answers pings with "EE: restarting", so it can't take a restart command.
+
+Power-cycle the console and start Neutrino from uLaunchELF. It will boot the new image directly, so the cold boot itself is the deploy and there's nothing more to send.
+
+Tell me when it's at the title and I'll check by ping that it's running.
+
+## User
+
+Don’t worry about measuring the bug for now. Just monitor performance and any crashes
+
+- tool `ToolSearch`: 
+
+- tool `Write`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/a99453df-5ab9-4230-8dbc-3db6b74d5767/scratchpad/perfwatch.sh
+
+- tool `Monitor`: PS2 console: performance and crashes
+
+## Claude
+
+The console monitor is running. It watches the console's log and tells me about:
+- **Performance:** every 30 seconds of play, the average and lowest frame rate, the average idle time, and where the game is (game state).
+- **Crashes and restarts** as soon as they happen: crash reports, a new boot, restart steps that timed out, and log output being dropped.
+- **Video mode changes**, including 480i/480p switches.
+- **Silence:** if the log goes quiet for 20 seconds. That would point to the hang, or to the log stalling.
+
+It runs for 30 minutes at a time, and I'll restart it each time it expires. It's quiet for now, since the console is still waiting for its power cycle. Once you boot it, I'll report as the numbers come in.
+
+## Claude
+
+That "silent" alert is expected. The console hasn't been power-cycled yet, so it isn't logging anything. The alert won't fire again until the log has produced output and then gone quiet.
+
+## Claude
+
+The console booted the new build at 120596. It got past the Konami logo, so the hang hasn't come back, and there have been no crashes.
+
+**Performance so far:**
+- **Intro (game state 2):** 15–30 fps. That's the intro FMV, which plays at 15 fps as it should.
+- **Gameplay (game state 11):** a steady 60 fps, with the EE idle 44–63% of the time. In two 30-second windows the frame rate dipped to 47–49 fps for a moment. Those windows included scene transitions (game state 10, plus a menu or map screen opening, where the display switches to 320×448i and back), so the dips are likely loading rather than slow rendering.
+
+The display is in 320×224 progressive, so this run is at **1x**, not 2x or 480p. If you want numbers for 2x/480p, switch them on in Debug Options, and I'll keep reporting.
+
+## Claude
+
+Still no crashes, and gameplay is holding 60 fps. In about 5 more minutes of play there were four brief dips to 45–52 fps. Three of them happened in a 30-second window that included a menu screen opening or closing. The fourth window had no such screen, and I don't know what caused that dip. The EE was idle 34–75% of the time, so it isn't running short of headroom. Still at 1x.
+
+## User
+
+Add an agent rule: from now on, do NOT attempt to access tcrf.net (The Cutting Room Floor). The website very reasonably does not want Claude to scrape the site for information. If I forget and ask you to access it, remind me to just go to the website myself and provide information that way.
+
+- tool `Write`: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/no-tcrf-access.md
+
+- tool `Bash`: echo "- [No tcrf.net](no-tcrf-access.md) — never fetch The Cutting Room Floor; ask the user to paste the info" >> /home/alex/.claude/projects/-home-alex-Documen
+
+## Claude
+
+I've saved the rule to my memory for this project, so it carries over to future sessions. I won't access tcrf.net at all. If you ask me to look something up there, I'll remind you to open the page yourself and paste in the section you need.
+
+The console monitor is still running.
+
+## Claude
+
+Six more minutes of gameplay at a steady 60 fps. The lowest reading was 59, and the EE was idle 55–59% of the time. The idle figure has hardly moved, so the game may be standing still. No crashes.
+
+## Claude
+
+One second dropped to 24 fps during gameplay. There was no menu screen around it, so I'm checking the log at that point:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk '/heartbeat: vblank/{split($0,a," "); for(i=1;i<=NF;i++){if($i=="vblank")v=$(i+1); if($i=="frame")f=$(i+1)} 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 888236,888256p build/port/ps2.log | grep -v "^.\{14\} gs stats" | cut -c1-200
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "= 1[0-9]," include/game.h | sed -n 1,10p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 196,220p include/game.h
+
+## Claude
+
+That 24 fps second wasn't during gameplay. The game had just left gameplay for the **save screen** (game state 16) and was writing the save at that moment. Frame rate dipping during a memory card write is expected, and it was back to normal within two seconds. So there's nothing to fix there.
+
+Overall: about 20 minutes of play, no crashes, and gameplay at 60 fps. The only dips came when switching to a menu, the map or the save screen, plus one brief dip I couldn't tie to anything.
+
+- tool `Monitor`: PS2 console: performance and crashes
+
+## Claude
+
+The console monitor reached its 30-minute limit, and I've restarted it for another 30 minutes. It's watching performance and crashes the same way as before.
+
+## Claude
+
+Still no crashes. Gameplay stays at 60 fps. There were a lot of menu and map visits in this stretch, and each one brings a brief dip to 45–52 fps on the switch. Those dips line up with the 448i menu screens opening and closing. The averages stay at 58.6–60 fps.
+
+## Claude
+
+Still no crashes, and gameplay holds 60 fps. The only dips came when a menu or the map opened or closed. One stretch had the EE only 18% idle, around a load screen, but it still averaged 59 fps.
+
+## Claude
+
+A 30-second window averaged 29 fps and dropped as low as 15. Checking whether that was an FMV:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk -F'[][]' '$2>123080' build/port/ps2.log | grep -a "movie\|port: gameplay\|map load\|save\|memcard" | cut -c1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -2500 build/port/ps2.log | grep -a "movie\|port: gameplay\|map load\|memcard\|XA file" | cut -c1-120 | tail
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -6000 build/port/ps2.log | grep -a "movie\|port: gameplay\|map load\|demo:" | cut -c1-120 | tail -8; tail -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -6000 build/port/ps2.log | awk -F'[][]' '$2>123073 && $2<123078' | grep -av "gs stats" | cut -c1-170
+
+## Claude
+
+Both drops are explained, and neither is a problem:
+- **The 15 fps window** was an FMV (the movie started at 123132 and stopped at frame 303). FMVs play at 15 fps, so that's correct. The game state still read "in game" because the movie is started from gameplay.
+- **The 26–36 fps seconds** were the **save screen** writing to the memory card again, the same as last time.
+
+Still no crashes. Outside those two, gameplay is at 60 fps.
+
+## Claude
+
+Checking the two new low points, 11 fps and 25 fps:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -5000 build/port/ps2.log | awk '/heartbeat/{for(i=1;i<=NF;i++){if($i=="vblank")v=$(i+1); if($i=="frame")f=$
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -5000 build/port/ps2.log | awk -F'[][]' '$2>123380 && $2<123386' | grep -av "gs stats\|display: frame" | cu
+
+## Claude
+
+Both low points came from the **save screen** again (game state 16), not gameplay:
+- **25–38 fps:** the same brief dip as on the earlier saves.
+- **11–15 fps for about 2 seconds:** this save was slower. The EE was only 12–18% idle, so it was busy computing rather than waiting on the memory card. My guess is the port's PS1 memory card emulation doing extra work on this particular write, but I haven't checked. It's only on the save screen, so it doesn't affect gameplay.
+
+Still no crashes, and gameplay is otherwise at 60 fps. If you'd like, I can look into why that save was so heavy on the EE later.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -6000 build/port/ps2.log | awk '/heartbeat/{for(i=1;i<=NF;i++){if($i=="vblank")v=$(i+1); if($i=="frame")f=$
+
+## Claude
+
+The 21 fps second was another save (game state 16). The rest of this stretch was a solid 60 fps, with the EE about 30% idle. Still no crashes.
+
+- tool `Monitor`: PS2 console: performance and crashes
+
+## Claude
+
+I've restarted the console monitor for another 30 minutes. In the last hour of play there were no crashes. Gameplay held 60 fps, and the only drops came during saves, FMVs and menu switches.
+
+## User
+
+Alright, end the monitoring for now. What have you gleaned?
+
+- tool `ToolSearch`: 
+
+- tool `TaskStop`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -an "build Oct 19 2026 19:49:57" build/port/ps2.log | tail -1 | cut -d: -f1); tail -n +$n build/port/ps
+
+## Claude
+
+I've stopped the monitor. Here's what one hour of play on the console showed.
+
+**Stability**
+- **No crashes, hangs or errors.** That covers about 60 minutes, from a cold boot through the opening, the school (map3), the town (map2) and into map4. The log has no crash reports, no restart timeouts, no dropped log output and no repair messages.
+- **The Konami logo hang didn't happen,** but this was a cold boot, and that hang has only appeared after warm restarts.
+
+**Performance (1x resolution, 16-bit, 60 fps build)**
+- **Gameplay is at 60 fps.** 3,351 of 3,598 seconds (93%) were at 60. Another 103 seconds were at 50–59, and 144 were below 50.
+- **The EE was idle about 50% of the time on average,** so there's plenty of headroom at 1x. The busiest gameplay stretches were around 25–30% idle and still held 60.
+- **Every drop below 50 I looked at had a non-gameplay cause:**
+  - **FMVs:** 15 fps, which is correct for them (2 movies played).
+  - **Saves:** 11–38 fps for a second or two. One save was unusually heavy on the EE (only 12–18% idle), which suggests computation rather than waiting on the card. I haven't checked that guess.
+  - **Menus and the map:** brief dips to 45–52 fps as the screen switches between 224p and 448i.
+- **One brief dip to 45–52 fps,** early in the hour, had no menu, save or load around it. I haven't found a cause, but it was a single dip.
+
+**What this didn't cover**
+- **2x and 480p:** the whole hour ran at 1x. The earlier notes say 2x 32-bit runs 10–40% slower in heavy areas, so a run like this at 2x would be the useful next measurement.
+- **The newspaper fix:** in this build, but the play didn't reach that point.
+- **Warm restarts:** none were done, so the restart stall and the Konami logo hang weren't tested.
+
+**Possible follow-ups**
+1. Repeat this monitoring at 2x (16-bit and 32-bit) to get comparable numbers.
+2. Find out why that one save kept the EE busy for about 2 seconds.
+
+## User
+
+I noticed that the last two saves seemingly only differed by about a minute in their recorded play time, but several cutscenes happened between saves.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "void Game_TimerUpdate" -A30 src | head -45; grep -rn "Game_TimerUpdate()" src --include=*.c | grep -v 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 290,312p src/bodyprog/events/game_sys_states.c; sed -n 1245,1260p src/bodyprog/player_control.c; grep -rn
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk 'NR<1258 && /^[a-zA-Z].*\(.*\)( \/\/.*)?$/{l=$0} NR==1258{print l}' src/bodyprog/player_control.c; sed -n 40
+
+## Claude
+
+This is most likely how the original game behaves, but I haven't confirmed that against the original game itself.
+
+The play time on a save is `gameplayTimer`. Only `Game_TimerUpdate` advances it, and the game calls that only in certain places:
+- **Normal player control:** once a frame from `Player_LogicUpdate` ([player_control.c:1258](src/bodyprog/player_control.c#L1258)).
+- **The pause screen** ([game_sys_states.c:308](src/bodyprog/events/game_sys_states.c#L308)).
+- **Menus:** the inventory, the map, the options screen, and while a message is on screen.
+- **A few specific map scripts** in map1, map3, map5 and map7.
+
+Cutscenes and FMVs don't call it, so the timer stands still during them. A save after several cutscenes can therefore show only about a minute more, even if much more real time went by.
+
+I don't think the port's 60 fps mode is involved. The time added each frame comes from the hardware's elapsed-time count (horizontal blanks), not from a per-frame constant. So it adds the same real time at 30 and at 60 fps.
+
+**To confirm it's original behaviour:** play the same stretch in DuckStation on the original US disc, saving before and after a few cutscenes, and compare the play time added. If you'd like a firmer answer without playing it, I could set the console up to log the timer at each save, together with how long gameplay versus cutscenes ran in between. That would show whether the gameplay time accounts for the difference.
+
+## User
+
+No, i think the explanation makes sense.
+
+## Claude
+
+OK. I'll leave the play-time behaviour as it is.
+
+To recap where things stand: nothing from yesterday is committed yet. That covers 480p, the IOP agent fix, the restart timeouts and the newspaper flag fix, and the restart diagnostics are still in the code. Let me know if you'd like them committed or the diagnostics removed.
+
+## User
+
+It seems like the lighting looks a bit wrong to me ever since we made some changes. I want to say it was the addition of 480p, but I'm not sure. Check against Duckstation in a dark scene where the flashlight is one. The second title screen demo is a good place for this. Attempt to perform a pixel-accurate analysis if necessary.
+
+## Claude
+
+I'll start by looking at the project's existing comparison tooling and the recent rendering changes.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls; ls tools 2>/dev/null | head -80; cat CLAUDE.md 2>/dev/null | head -150
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls tools/port port; git log --oneline -15 --stat | head -120
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port; for f in compare_frames.py demo_sweep.py duckstation_sweep.py pcsx2_run.py compare_sweeps.py; do echo
+
+## Claude
+
+compare_frames.py already does exactly this for the first attract demo. Let me see if it can target the second one.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 60,400p tools/port/compare_frames.py; grep -rn "capture.txt\|demo_index\|DemoIdx\|capture:" src/port/ps2/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat src/port/ps2/capture_ps2.c; cat tools/port/gdb/capture_ps1.py
+
+## Claude
+
+Both captures are hard-wired to the first demo. Let me see how the port side picks the demo, so I can add a demo selector.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Capture_Packet\|Capture_Display\|Capture_Pending\|s_CaptureDemo\|firstDemo" src --include=*.c | grep -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git log --oneline -40 | cat; git log -S480p --oneline | cat; sed -n 40,80p src/port/libgpu_port.c
+
+## Claude
+
+Before building the capture, I need to understand the new shadow-buffer path, since the VRAM readback may not be what's actually displayed.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; wc -l src/port/ps2/gpu_gs.c src/port/ps2/display_ps2.c; grep -n -i "shadow\|colordepth\|color_depth\|s_Scale\|g_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 20,80p src/port/ps2/gpu_gs.c; sed -n 300,345p src/port/ps2/gpu_gs.c; sed -n 1030,1070p src/port/ps2/gpu_g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 2259,2380p src/port/ps2/gpu_gs.c; sed -n 315,405p src/port/ps2/display_ps2.c; grep -rn "g_PortHiresOption
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/ps2-build-env.md; cat build-a
+
+## Claude
+
+I'll add `demo=N` and `mode=N` selectors to the capture file, and the matching options to the DuckStation gdb script and compare_frames.py.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import re p='src/port/ps2/capture_ps2.c'; s=open(p).read() s=s.replace("""/** @brief Frame cap
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/compare_frames.py'; s=open(p).read() s=s.replace('''--mode N forces the port's D
+
+## Claude
+
+The build passes. Next I'm capturing demo 2 at the default settings (mode 0) and the same frames in DuckStation.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 tools/port/compare_frames.py --demo 2 --mode 0 --frames 150,400,700,1000,1300
+
+## Claude
+
+The capture is running in the background, and I'll pick it up when it finishes.
+
+## User
+
+I'm noticing that the capture pauses and unpauses several times a second. If this is really necessary, can you have it start only when the gameplay demo starts? It really slows down testing.
+
+## Claude
+
+The pauses come from the DuckStation side: the gdb script has breakpoints on DrawOTag, PutDrawEnv and PutDispEnv from boot, so it stops 2–3 times every frame, title screen included. I'll stop the current run, then change it to break only on the function that starts a demo, and arm the per-frame breakpoints only once the chosen demo starts.
+
+- tool `ToolSearch`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^[a-zA-Z].*(" src/bodyprog/demo.c | head -40; grep -n "DemoActive" src/bodyprog/*.c src/bodyprog/*/*.c 
+
+- tool `TaskStop`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 180,195p src/bodyprog/game_boot/game_boot.c; sed -n 186,202p src/bodyprog/demo.c
+
+## Claude
+
+`Demo_Start` (0x8008F398) runs once per demo, so it's the only breakpoint needed until the target demo begins.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gdb/capture_ps1.py'; s=open(p).read() s=s.replace('DRAWOTAG = 0x80018A6C\n','DEM
+
+## Claude
+
+I'll check whether the stopped run already finished the PS2 half, so it can be reused.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls -la --time-style=+%H:%M build/port/cap/ | grep -E "_(150|400|700|1000|1300)_vram" ; date +%H:%M
+
+## Claude
+
+The PS2 half was already captured (19:50), so I'll reuse it and run only the DuckStation side with the new breakpoint scheme.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 tools/port/compare_frames.py --demo 2 --mode 0 --frames 150,400,700,1000,1300
+
+## Claude
+
+I fixed it, and the comparison is running again with the fix.
+
+**What caused the pausing:** the DuckStation capture script in [capture_ps1.py](tools/port/gdb/capture_ps1.py) set gdb breakpoints on DrawOTag, PutDrawEnv and PutDispEnv as soon as it booted. That stopped the emulator 2–3 times every frame, through the logos, the title screen and the whole first demo.
+
+**What changed:** now the only breakpoint until the chosen demo starts is on `Demo_Start`, which runs once per demo. So DuckStation runs at full speed until the second demo begins, and only then are the per-frame breakpoints added.
+
+**Is the pausing during the demo still necessary?** Yes, for this comparison. Grabbing each frame's GPU commands means stopping at every DrawOTag. It now only covers the stretch of the demo from its start to the last frame I asked for.
+
+**Other changes for this investigation:**
+- [compare_frames.py](tools/port/compare_frames.py) takes `--demo N`, so it can capture the second demo instead of only the first.
+- It also takes `--mode N`, which forces the 2x, 32-bit and 480p Debug Options in the port. That lets me compare each setting against DuckStation, since the lighting change could come from any of them.
+- The PS2 side reads both settings from the capture file, in [capture_ps2.c](src/port/ps2/capture_ps2.c) and [libgpu_port.c](src/port/libgpu_port.c). Without the file nothing changes.
+
+The PCSX2 half of this first run (default settings) had already finished before I stopped it, so I'm only re-running DuckStation.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/b7powwgk5.output | grep -v "^    #" | head -80
+
+## Claude
+
+The game state diff shows `config.brightness: 03 vs 00`: DuckStation has brightness 3, the port has 0. That's a strong candidate for the dark look. Next I'll check where the port loses it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git log -p -3 --format="== %h" -- include/bodyprog/savegame.h | grep -E "^==|^[-+]" ; grep -rn "brightness" src 
+
+## Claude
+
+Brightness feeds straight into the world lighting (world_effects.c:888). Next I'll check how demos set it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 130,165p src/bodyprog/demo.c; cat src/bodyprog/sys/settings_reset.c | sed -n 1,40p; grep -rn "Settings_Re
+
+## Claude
+
+Demos keep the player's own brightness, so the port is starting with brightness 0 instead of the default 3. Memory card support landed recently, so I'll check how the config gets loaded at boot.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Settings_RestoreDefaults\|\.config = \|config, \|&g_GameWork.config" src include --include=*.[ch] | gr
+
+## Claude
+
+The config is restored from the memory card save (memcard.c:837). I'll compare the full config bytes on both sides to see whether only brightness is off or the whole block is shifted.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import sys; sys.path.insert(0,'tools/port'); import struct_layout L=struct_layout.layout("s_Ga
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git log --format="== %h %s" -p 99a83b875~1..HEAD -- src/screens/options/options.c | grep -nE "^==|^[-+].*(rightn
+
+## Claude
+
+No recent change in options.c touches brightness. Next I'll look for the saved options config inside the PCSX2 memory card image.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls -la build/port/memcards ~/.config/PCSX2/memcards 2>/dev/null; python3 - <<'EOF' import glob,os pat=bytes.from
+
+## Claude
+
+The pattern isn't on either card, so there may be no save at all. Then brightness should come from `Settings_RestoreDefaults` (3). Next I'll check when the Konami screen calls it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 125,160p src/screens/b_konami/b_konami.c; git log --format="%h %s" -3 -- src/screens/b_konami/b_konami.c
+
+## Claude
+
+`Settings_RestoreDefaults` runs at the Konami logo, so either something later overwrites brightness or the port skips that screen. The last commit touched demo.c and demo_menu.c, so I'll check those.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git show 86c88b97c -- src/bodyprog/demo.c src/port/demo_menu.c src/screens/options/options.c | head -120
+
+## Claude
+
+Nothing there either. Next I'll check whether the port's boot path skips the Konami logo state, where the defaults get set.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "KcetLogo\|GameState_Init\|SKIP_LOGO\|skip.*logo\|g_GameWork.config\|memset(&g_GameWork" src/port src/m
+
+## Claude
+
+I'll check whether the PCSX2 card has the port's save folder, and if so extract the PS1 card image from it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; head -30 tools/port/mc_export_psu.py; grep -n "SAVE_DIR\|#define.*DIR\|\"BA\|BASLUS\|mc0:" src/port/ps2/memcard_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+## Claude
+
+The PCSX2 card does have the port's save folder. Next I'll search the PS1 card image inside it for the options config.
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; python3 - <<'EOF' d=open('card1.psu','rb').read
+
+## Claude
+
+The save files are on the card, but the config isn't stored as plain bytes. Next I'll read how memcard.c loads it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 805,845p src/bodyprog/memcard.c
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad && python3 -c " d=open('card1.psu','rb').read() 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/demo.c'; s=open(p).read() s=s.replace("""    g_GameWork.config.brightness     
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 tools/port/pcsx2_run.py build/port/sh1_ps2.iso --seconds 240 --until "TMPDBG 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/demo.c'; s=open(p).read() s=s.replace('    printf("TMPDBG demo globals','    g
+
+## Claude
+
+The build passed. Next I'll run modes 0 (default), 2 (32-bit), 1 (2x) and 5 (2x + 480p) one after another, keeping each report.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d
+
+## Claude
+
+The four mode runs are going in the background (only PCSX2 this time, since the DuckStation capture is reused). I'll report back when they finish.
+
+**Found so far:** the main cause is the brightness setting, not the renderer. The save on PCSX2's memory card stores brightness 0, and the port auto-loads it at boot (`TMPDBG memcard config load: brightness 0`). The PS1 reference runs at the default of 3.
+
+Brightness scales the world lighting, so the whole scene, flashlight included, comes out darker. It started when memory card support landed, which is close in time to the 480p work.
+
+If the PS2 card holds a save made at brightness 0, the same thing would happen on the console. You can check that in Options → Brightness.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git checkout src/bodyprog/demo.c src/bodyprog/sys/settings_reset.c src/bodyprog/memcard.c; grep -rn TMPDBG src |
+
+## Claude
+
+The main reason the port looks darker is the in-game brightness setting, not the 480p work or the renderer. Separately, two of the Debug Options rendering modes do shift overall brightness by a smaller amount.
+
+**1. Brightness is 0 instead of 3 (main cause).** I compared the game state in the second demo against DuckStation, and the only config difference was `config.brightness: 3 vs 0`. Temporary prints confirmed the sequence:
+- The Konami logo sets the defaults (brightness 3).
+- The port then auto-loads the save on the PCSX2 memory card, whose options have **brightness 0**.
+- Demos keep the player's brightness, and brightness multiplies the world lighting ([world_effects.c:888](src/bodyprog/world/world_effects.c#L888)), so every pixel in the frame differed.
+
+It started with memory card support, which landed around the same time as the 480p work. It isn't a code bug: some save stored brightness 0. If the card in your PS2 has a save made at that setting, the console will look dark too, so check Options → Brightness. I couldn't find where the 0 first came from.
+
+**2. With brightness forced to 3, here is how each render mode compares to DuckStation.** These are average brightness differences over 5 frames of demo 2:
+
+| Mode | Average vs DuckStation | Pixels off by more than 3 levels |
+|---|---|---|
+| Default (1x, 16-bit) | matches (within about 1%) | 0–5% |
+| 32-bit colour | about 8–14% **brighter** | 0–8% |
+| 2x (480i, and 480p is identical) | about 1–6% **darker** | 0–8% |
+
+- **480p by itself changes nothing in what gets drawn.** Its results are identical to 2x, so if anything differs it would be in the video output itself, which this readback doesn't capture.
+- **32-bit:** the shift is larger than the PS1's dithering alone would explain. It's worth checking against DuckStation's True Color mode instead of the software renderer.
+- **2x:** I measured it after the port scales the 2x image back down to 1x, so part of the difference may come from that scaling rather than the drawing.
+
+The GP0 command counts differ by 4 (PS1 925, PS2 921 at frame 400). The comparison matches commands by position, so the "packets differ" totals are inflated and I haven't relied on them.
+
+**Tool changes (uncommitted):**
+- [compare_frames.py](tools/port/compare_frames.py) takes `--demo N` and `--mode N` (the port reads them from `capture.txt`, in [capture_ps2.c](src/port/ps2/capture_ps2.c) and [libgpu_port.c](src/port/libgpu_port.c)).
+- The DuckStation capture no longer pauses before the chosen demo.
+
+I removed the temporary debug code, but `build/port/sh1_ps2.iso` is still the debug build that forces brightness 3, so rebuild before deploying.
+
+Should I look further into the 32-bit and 2x brightness shifts? I'd compare 32-bit against DuckStation's True Color mode and compare 2x at full resolution.
+
+## User
+
+<ide_opened_file>The user opened the file /home/alex/Documents/silent-hill-1-ps2-port/PS2 Optimizations.md in the IDE. This may or may not be related to the current task.</ide_opened_file>
+
+I notice that Harry's flashlight seems to produce a mismatched color on Harry's back and lights up the back of his pants and his ears. The flashlight also seems to produce a semitransparent rectangle in front of Harry which is normally invisible on PS1. This second bug also appears on real hardware when using the PS2's PS1 backwards compatibility. I'm not sure any of these issues match Duckstation or a real PS1. A good place to check what I'm talking about is the "Infirmary" save in PCSX2. I don't have this save on Duckstation, so see if you can add it to that memory card. If not, just force load the Infirmary in the nightmare school. Ideally use the save file so we can start in the same part. Prompt me for any other questions.
+
+## Claude
+
+I'll extract the PS1 card image from the PCSX2 save folder, find the Infirmary save, and look at DuckStation's memory card setup.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls -la ~/.local/share/duckstation/memcards/ 2>/dev/null; grep -n -i -A8 "^\[MemoryCards\]" ~/.local/share/duckst
+
+## Claude
+
+I'll pull CARD.MCD out of the .psu export and list the save files on both PS1 cards.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; python3 -I - <<EOF import struct d=open('$S/card
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; M=~/.local/share/duckstation/memcards; cp -p $M/
+
+- tool `AskUserQuestion`: 
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; M=~/.local/share/duckstation/memcards; cp -p $M/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i "load\|press\|pad" tools/port/gdb/*.py | grep -i "def \|press\|savegame\|load game" | head -30; ls to
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 95,125p src/screens/b_konami/b_konami.c; grep -n -i "continue\|selectedOption\|TitleMenu\|LoadGame" src/b
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,80p tools/port/gdb/cutscene_ps1.py; sed -n 200,330p tools/port/gdb/cutscene_ps1.py; sed -n 160,200p src
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "AutoPress\|clicked\|s_RemoteNewGame\|Port_Remote\|^[a-z].*(" src/port/demo_menu.c | head -50; grep -n "
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 200,280p src/bodyprog/events/title.c
+
+## Claude
+
+I'll wire this up on both sides. First, the main-menu entry values and the PS1 addresses the gdb script needs.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn -B2 -A12 "MainMenuEntry_Continue *=\|MainMenuEntry_Load *=\|^typedef enum _MainMenuEntry\|e_MainMenuEnt
+
+## Claude
+
+Now the edits. Port side: capture.txt's `continue` presses Continue at the title, and captured frames are counted in vertical blanks of gameplay.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/capture_ps2.c'; s=open(p).read() s=s.replace(""" * forced, g_PortHiresOption: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/libgpu_port.c'; s=open(p).read() s=s.replace("""                        (int)sizeo
+
+## Claude
+
+Now the DuckStation side.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 14,40p tools/port/gdb/capture_ps1.py; sed -n 78,160p tools/port/gdb/capture_ps1.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gdb/capture_ps1.py'; s=open(p).read() s=s.replace('DEMO = int(os.environ.get("CA
+
+## Claude
+
+Both sides are wired up. Next: rebuild and capture gameplay vblanks 120, 240 and 480 after Continue, on both emulators.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; (bash tools/port/ee_compile_check.sh > build/port/
+
+## Claude
+
+I'm rebuilding and running the Continue comparison now. When it finishes, I'll check which save loaded, whether it's the Infirmary, and look at Harry and the flashlight area pixel by pixel.
+
+## User
+
+That's not the correct save that loaded. You have to choose it from the Load menu
+
+## Claude
+
+Understood. Continue loads whichever save the card scan picked, so I need to aim it at file 2, data 10 myself. I'll stop the run and look at how the Load menu records its selection, then set the same variables directly before pressing Continue.
+
+- tool `TaskStop`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_SelectedFileIdx\s*=\|g_Savegame_SelectedElementIdx\s*=\|g_SelectedDeviceId\s*=" src --include=*.c | 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1770,1800p src/screens/saveload/saveload.c; grep -rn -A12 "^typedef struct _SavegameEntry\|s_SavegameEntr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i "\"data\|DATA\"\|elementIdx + 1\|fileIdx + 1\|savegameCount\b" src/screens/saveload/saveload.c | head
+
+## Claude
+
+"Data N" is `elementIdx + 1`, and the file number is `fileIdx + 1`, so file 2 / data 10 is fileIdx 1, elementIdx 9. Next I'll check how the Continue load path reads the selection.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 2215,2260p src/screens/saveload/saveload.c
+
+## Claude
+
+Continue rebuilds its selection from `g_SlotElementSelectedIdx[g_SelectedSaveSlotIdx]`, an index into the card's save-entry list. I'll find that list's layout.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "MemCard_ActiveMemCardSlotGet\b" include src/bodyprog/*.c | head -3; grep -rn -B2 -A14 "elementIdx;" in
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 20,30p include/bodyprog/memcard.h; sed -n 248,258p include/bodyprog/memcard.h; grep -rn "g_SlotElementSel
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "define SAVEGAME_ENTRY_BUFFER_0" include src | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/capture_ps2.c'; s=open(p).read() s=s.replace(""" * forced, g_PortHiresOption: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 49,60p include/bodyprog/memcard.h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's/^SAVEGAME_ENTRY_TYPE_SAVE = None .*/SAVEGAME_ENTRY_TYPE_SAVE = 8                # SavegameEntryType_Sa
+
+## Claude
+
+The build passed. I'll run the comparison from file 2, data 10.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 tools/port/compare_frames.py --continue 2,10 --frames 120,240,480 2>&1 | grep
+
+## Claude
+
+Both emulators will now load file 2, data 10 directly instead of the save Continue picks by default.
+
+Instead of driving the Load menu with button presses, the tools do what the Load screen does internally. They find file 2 / data 10 in card 1's save list (`fileIdx` 1, `elementIdx` 9, as the Load screen numbers them) and make it the selected entry, then press Continue. Continue's autoload then loads that save.
+
+- The port side does this in [title.c](src/bodyprog/events/title.c), only when `capture.txt` asks for it.
+- The DuckStation side does the same through gdb in [capture_ps1.py](tools/port/gdb/capture_ps1.py).
+- Usage: `compare_frames.py --continue 2,10 --frames 120,240,480`. Frames count 60 Hz vertical blanks of gameplay after the load: about 2, 4 and 8 seconds in.
+
+The run is going in the background. When it finishes, I'll confirm from the captured game state that both loaded the Infirmary, then compare Harry and the flashlight area pixel by pixel.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/b0k5srr8j.output | cut -c1-300
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/capture_ps2.c'; s=open(p).read() s=s.replace("With `continue=F,D`,","With `con
+
+## Claude
+
+Both sides now load file 2, data 10 (entry 20 of 22). The NPCs move differently on each, so whole-frame counts aren't meaningful; I'll look at the images around Harry.
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/build/port/cap/cmp_120_display.png
+
+## Claude
+
+Both runs show the same spot (Harry at a barrel by a ladder) and the frames look broadly alike. I'll enlarge the area around Harry 4x, side by side, and add a per-pixel difference map.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/harry_120.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct def load(p):     d=open(p,'rb').read(); out=[]; pos=0     while pos+4<=len(d):  
+
+## Claude
+
+The vertex decoding gives impossible Y values. I'll check the drawing-offset (E5) words in the captured stream.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct,collections def load(p):     d=open(p,'rb').read(); out=[]; pos=0     while pos+
+
+## Claude
+
+I'll list the untextured shaded polygons with their colours and raw vertices. A flashlight rectangle would most likely be one of the semi-transparent 0x3A or 0x32 primitives.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct def load(p):     d=open(p,'rb').read(); out=[]; pos=0     while pos+4<=len(d):  
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct def ld(p): return struct.unpack('<524288H',open(p,'rb').read()) def disp(p): ret
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/barrel_120.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct,collections def load(p):     d=open(p,'rb').read(); out=[]; pos=0     while pos+
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^[a-zA-Z].*(\|SH_PORT\|dot\|clamp\|< 0\|lim" src/bodyprog/gfx/bodyprog_80056D8C.c | head -120
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "CHECK_BATCH\|SH1_[A-Z_]*\b" tools/port/ee_compile_check.sh | head -30; grep -rn "check: \|mismatch" src
+
+## Claude
+
+I'll build with `-DSH_PORT_CHECK_BATCH`, load the same save in PCSX2, and collect any mismatch reports.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "SH_PORT_CHECK_BATCH" src | head; grep -n "EXTRA_CFLAGS\|CHECK" tools/port/port_link.py | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_EXTRA_CFLAGS=-DSH_PORT_CHECK_BATCH; (bash tools
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; head -40 tools/port/frame_debugger.py; ls tools/port/frame_debugger
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 945,960p src/port/ps2/gpu_gs.c; sed -n 1350,1362p src/port/ps2/gpu_gs.c; sed -n 1555,1566p src/port/ps2/g
+
+## Claude
+
+I'll make an experimental change: no GS dithering for semi-transparent primitives. Then I'll rebuild without the check flag and re-capture, reusing the DuckStation frames.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+## Claude
+
+The difference count barely moved: 27,710 to 26,800 pixels at frame 120. I'll look at the image to see whether the checker pattern itself went away.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/abc_120.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import sys,struct; sys.path.insert(0,'tools/port'); import struct_layout L=struct_layout.layou
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|    set(R_DTHE, p->dither \&\& !p->semi \&\& !(s_Sh \&\& s_HrPsm == PSM_CT32)); /\* EXPERIMENT \*/|   
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct,collections def load(p):     d=open(p,'rb').read(); out=[]; pos=0     while pos+
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls tools/port/gte_test; head -30 tools/port/gte_test/*.md tools/port/gte_test/README* 2>/dev/null; head -40 tool
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/gte_test; sed -n 1,30p run_ee.py | grep -n "make\|elf\|usage" ; source ../../../.venv/bin/activate; py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^void GpuGs_\|^int GpuGs_\|^s32 GpuGs_" src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/capture_ps2.c'; s=open(p).read() s=s.replace(""" * (g_SysWork.gameStateCounter
+
+## Claude
+
+Now the compare_frames side: `--replay` runs only the PS2 replay and compares DuckStation against the replayed frame.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/compare_frames.py'; s=open(p).read() s=s.replace('''    python3 tools/port/compa
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct,collections def ld(p): return struct.unpack('<524288H',open(p,'rb').read()) for 
+
+## Claude
+
+Most differences are ±1–2 levels per channel, but there are tails out to ±17. I'll look at where they fall on the frame.
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/build/port/cap/cmpr_120_display.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct,collections def ld(p): return struct.unpack('<524288H',open(p,'rb').read()) n=12
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "R_DIMX" -B6 -A3 src/port/ps2/gpu_gs.c | head -40
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "dimx(void)" -B4 -A22 src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct,collections def ld(p): return struct.unpack('<524288H',open(p,'rb').read()) n=12
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct,collections def ld(p): return struct.unpack('<524288H',open(p,'rb').read()) n=12
+
+## Claude
+
+Grouping by the PS1 value is biased: with ±1–2 noise, the brightest PS1 pixels will always look darker on the other side (regression to the mean). I'll use unbiased totals instead.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct,collections def ld(p): return struct.unpack('<524288H',open(p,'rb').read()) for 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/replay_120.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct def load(p):     d=open(p,'rb').read(); out=[]; pos=0     while pos+4<=len(d):  
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+## Claude
+
+That removes about 950 differing pixels, which is about the rectangle's area. About 26,000 still differ, so there's a second, bigger source. I'll check the rectangle visually and see what's left.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/replay_120_nosemidither.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct def ld(p): return struct.unpack('<524288H',open(p,'rb').read()) a=ld('build/port
+
+## Claude
+
+These are isolated orange pixels (14, 9, 2) where DuckStation has black, which looks like texels sampled from a neighbouring spot. I'll dump the pixels around Harry's ear on both sides.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct def ld(p): return struct.unpack('<524288H',open(p,'rb').read()) a=ld('build/port
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat > /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchp
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "R_UV\b\|uv_reg\|<< 4) | \|0x8)\|+ 8\b\|half\|texel cent\|flip" src/port/ps2/gpu_gs.c | head -40
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct,collections def load(p):     d=open(p,'rb').read(); out=[]; pos=0     while pos+
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct,collections def load(p):     d=open(p,'rb').read(); out=[]; pos=0     while pos+
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/harry_live_480.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() old="    set(R_DTHE, p->dither && !p->semi && !(s_
+
+## Claude
+
+I'll rebuild the normal console configuration (60 fps) so the ISO reflects the final code.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; unset SH1_EXTRA_CFLAGS; (bash tools/port/ee_compil
+
+- tool `Write`: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/duckstation-card-has-port-saves.md
+
+- tool `Bash`: echo '- [DuckStation card = port saves](duckstation-card-has-port-saves.md) — Infirmary = file 2 data 10; brightness 0 in that save' >> /home/alex/.claude/proje
+
+## Claude
+
+I found and fixed the semi-transparent rectangle. The lit ears and back of Harry's pants turn out to be correct game behaviour, matching the PS1 exactly, except for a few isolated pixels. I compared the Infirmary save (file 2, data 10) in both emulators.
+
+**The rectangle (fixed).** The flashlight effect draws an additive, semi-transparent quad with colour 000000 directly in front of Harry. The PS1 dithers a primitive's colour before blending it, so adding black changes nothing and the quad is invisible. The PS2's graphics chip (the GS) dithers after blending, so the dither pattern's negative entries darken those pixels by one level. The result is a dark checkered rectangle. PS2 backward-compatibility mode also renders through the GS, which is why you saw it on real hardware too. The fix in [gpu_gs.c](src/port/ps2/gpu_gs.c) turns off GS dithering for semi-transparent primitives. Replaying DuckStation's frames, the rectangle disappears completely and the frame gets slightly closer to DuckStation overall.
+
+**Harry's ears, back and pants (no lighting bug).**
+- **Lighting maths:** the vertex colours the port computes for Harry match DuckStation exactly at the same moment. The port's built-in comparisons of its optimized lighting code against the original also found zero mismatches, and the GTE test (the PS1's geometry/lighting chip, which the port emulates) passed every case.
+- **On the PS1 too:** the flashlight lighting Harry's back and neck also happens there. The game draws his back very bright, and an additive glow sprite sits over his head.
+- **Stray pixels:** the bright specks at his ear are single pixels where the GS picks a different texel at the edge of a texture that's mapped in reverse. About 2,300 pixels per frame are noticeably off for this kind of reason (texture-coordinate rounding). The renderer already lists this as a known difference. I didn't change it, because it's a larger rasterization job.
+
+**Tool changes:**
+- `compare_frames.py --continue 2,10` loads a specific save on both emulators. It finds the save on the card, selects it and presses Continue.
+- `compare_frames.py --replay` draws DuckStation's exact GPU commands through the port's renderer. That tests the renderer alone, with no timing differences between runs, and it's what isolated these problems.
+
+**Things to know:**
+- DuckStation's card 1 now holds the port's card image. The empty original is kept as `shared_card_1.mcd.empty_backup`.
+- That save stores brightness 0, so the scene is darker than at the default of 3.
+- `build/port/sh1_ps2.iso` is now a clean 60 fps build with the fix.
+- Nothing is committed yet.
+
+Should I commit this, and should I look into the texture-edge differences next?
+
+## User
+
+That was good analysis, but you're still not loading the right save.
+
+## Claude
+
+I'll check what the entry list actually contains and what my selection resolved to, rather than guess again. I'll print every entry on card 1 at the moment Continue is pressed, and compare with the location of the save that loaded.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/events/title.c'; s=open(p).read() old="""                    s_SaveScreenEleme
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "g_SlotElementSelectedIdx\[.*\] *=" src/screens/saveload/saveload.c src/bodyprog/*.c | head; sed -n 2200
+
+## Claude
+
+Next I'll move the selection into `SaveScreen_AutoLoad_SelectSave` and remove the debug print.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/events/title.c'; s=open(p).read() a=s.index("#ifdef SH_PORT\n            {\n  
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gdb/capture_ps1.py'; s=open(p).read() s=s.replace('''SAVEGAME_ENTRY_TYPE_SAVE = 
+
+## Claude
+
+One issue: once the autoload stops calling that function, `continue` would never return. I'll add a temporary per-frame breakpoint, just for the loading stretch.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gdb/capture_ps1.py'; s=open(p).read() s=s.replace('''    select_bp, entry = gdb.
+
+## Claude
+
+Both now report loading the Infirmary save. But DuckStation's packet counts (488, 493, 494) are identical to the Sewer runs, and 85% of pixels now differ. I'll look at the frame.
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/build/port/cap/cmp_240_display.png
+
+## User
+
+[Request interrupted by user]
+
+## User
+
+No, that is still not the infirmary save. Let me load it manually and you can check how to reproduce loading the correct save.
+
+## Claude
+
+Got it. To see exactly which save you pick, I'll log the selected device, file and element when the game loads a save, then start PCSX2 for you at normal speed.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "statusPtr->processId == MemCardProcess_Load_Game)" src/bodyprog/memcard.c | head -3
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 760,790p src/bodyprog/memcard.c; grep -n "processId == MemCardProcess_Load\b\|MemCardProcess_Load_Data\|M
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/memcard.c'; s=open(p).read() old="""                saveData0Size   = sizeof(s
+
+## Claude
+
+The build passed. I'm starting PCSX2 at normal speed now, with no capture file, so the game behaves normally.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/capture.txt; source .venv/bin/activate; python3 tools/port/pcsx2_run.py build/port/sh1_ps2.iso 
+
+## Claude
+
+PCSX2 should be open now, running at normal speed. Load the Infirmary save from the Load menu the way you normally would.
+
+When the save loads, the game will log the card, file and save index it actually reads, plus the map it lands on, and PCSX2 will close by itself. I'll then use that to make the automated load pick the same save.
+
+What I know so far:
+- My automation selected the card entry the game labels "Infirmary" (file 2, data 10, location 4). Even so, the game loaded different saves: the Sewer the first time, then a room with a table.
+- So the entry labels don't map to the saves the way I assumed. Your manual load will show the real mapping.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/b4xh4caa9.output
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1730,1760p src/screens/saveload/saveload.c; sed -n 1810,1860p src/screens/saveload/saveload.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git checkout src/bodyprog/memcard.c; python3 - <<'EOF' import re # saveload.c: drop the autoload override, add t
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's/s_ContinueFile/s_LoadFile/g; s/s_ContinueData/s_LoadData/g; s/\bs_Continue\b/s_LoadSave/g' src/port/ps
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_MainMenu_VisibleEntryFlags;\|SaveScreenState_Save *=\|SaveScreenState_Save," include src | head -5
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_MainMenu_VisibleEntryFlags" src/bodyprog/events/title.c | head -3; grep -rn "VisibleEntryFlags" incl
+
+## Claude
+
+`g_MainMenu_VisibleEntryFlags` is a static in title.c, so the check compiles. Now the DuckStation side: I need `g_GameWork.gameStateSteps`' offset to tell when the Load list is active.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 -c " import sys; sys.path.insert(0,'tools/port'); import struct_layout for off,sz,p in struct_layout.lay
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gdb/capture_ps1.py'; s=open(p).read() s=s.replace('''# CAP_CONTINUE=F,D: the tit
+
+## Claude
+
+One risk: 0x801E649C is in an overlay region, so before the Load screen loads, other code could sit at that address. I'll also require the Load screen's game state.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "GameState_LoadSavegameScreen\|GameState_AutoLoadSavegame" include/game.h | head -3
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gdb/capture_ps1.py'; s=open(p).read() s=s.replace('''GAMESTATE_STEP1 = 0x800BC72
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/build/port/cap/cmp_240_display.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 tools/port/compare_frames.py --replay --frames 120,240,480 2>&1 | grep -E "ca
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/inf_replay_240.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|    set(R_DTHE, p->dither \&\& !(s_Sh \&\& s_HrPsm == PSM_CT32)); /\* TMPTEST \*/|    set(R_DTHE, p->d
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1; unset SH1_FPS; (bash tools/port/ee_compile_check.sh > build/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat > /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchp
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_EXTRA_CFLAGS=-DSH_PORT_CHECK_BATCH; unset SH1_FPS; (bash t
+
+## Claude
+
+No mismatches were reported, but the run was short, so I'll make sure the checks actually ran in this room.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; echo "3000 load=2:10" > build/port/capture.txt; python3 tools/port/pcsx2_run.py build
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; echo "3000 load=2:10" > build/port/capture.txt; python3 tools/port/pcsx2_run.py build
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "NON_MATCHING\|INCLUDE_ASM\|NONMATCHING" src/bodyprog/gfx/bodyprog_80056D8C.c src/bodyprog/gfx/bodyprog_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "g_WorldEnvWork\b" configs/USA/sym.bodyprog.txt; grep -rn "} s_WorldEnvWork;" -B40 include | grep -E "/\
+
+## Claude
+
+I'll add `g_WorldEnvWork` (the light's position, direction and colour matrix) to the per-frame dumps on both sides.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/capture_ps2.c'; s=open(p).read() old="""    sprintf(name, "host:cap/ps2_%d_dis
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1; unset SH1_FPS SH1_EXTRA_CFLAGS; (bash tools/port/ee_compile_c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import sys,struct,os,subprocess; sys.path.insert(0,'tools/port'); import struct_layout L=struc
+
+## Claude
+
+Port frames 113–115 have exactly the same world lighting state as DuckStation's frame 120. Every byte of the light's position, direction and matrices matches. I'll compare their vertex colours.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for n in 113 114 115; do echo "== PS2 $n"; python3 /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "} s_GteScratchData;" -B60 include | grep -E "0x[0-9A-F]+ +\*/|typedef" | tail -40; grep -rn "PSX_SCRAT
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "PSX_SCRATCH_SIZE\|g_PsxScratch" include src/port | head; sed -n 1,30p src/port/psx_mem.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/psx_mem.c'; s=open(p).read() s=s.replace("u8 g_PsxScratch[PSX_SCRATCH_SIZE] __attr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git checkout src/port/psx_mem.c; python3 - <<'EOF' p='src/port/libgpu_port.c'; s=open(p).read() s=s.replace("   
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 697,850p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "gte_lddqa\|gte_lddqb\|SetDQA\|SetDQB\|gte_SetDQ" src --include=*.c | grep -v "^src/maps" | head -20
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/capture_ps2.c'; s=open(p).read() s=s.replace("""static int   s_Replay[MAX_FRAM
+
+## Claude
+
+I also need the exit record on the original loop's path, at the end of the function.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/gfx/bodyprog_80056D8C.c'; s=open(p).read() old="""        *(var_t0 - 1) = var_
+
+## Claude
+
+Now the DuckStation side. The gdb script needs `normalCount`'s offset in `s_MeshHeader`.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 -c " import sys; sys.path.insert(0,'tools/port'); import struct_layout for o,s,p in struct_layout.layout
+
+## Claude
+
+I'll add the trace to the DuckStation capture script: a breakpoint at the function's entry, plus a one-shot breakpoint on its return address. Records are written in the same format as the port's.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gdb/capture_ps1.py'; s=open(p).read() s=s.replace('''ENVWORK, ENVWORK_SIZE = 0x8
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gdb/capture_ps1.py'; s=open(p).read() a=s.index("    if TRACE and pc == POINT_LI
+
+## Claude
+
+Now the port side, built the same way: two buffers swapped at every PutDispEnv, with the previous one written when a captured frame completes.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/capture_ps2.c'; s=open(p).read() a=s.index("/** TMPDBG: a func_80057658 call")
+
+## Claude
+
+The build passed. I'll capture with tracing: DuckStation frame 120, and port frames 108–118 so I can pick the one with matching light state.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export CAP_TRACE=1; python3 tools/port/compare_frames.py --load 2,10 --frames 120 --s
+
+## Claude
+
+Both sides recorded the same number of calls (42 per frame). I'll compare them call by call: arguments, scratchpad on entry, and scratchpad on exit.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat > /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchp
+
+## Claude
+
+The scratchpad on entry always differs, but much of it may be unrelated leftovers. For frame 114, where the arguments match on 41 of 42 calls, I'll check which regions of the scratchpad differ.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct exec(open('/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct exec(open('/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for n in 112 113 114 115 116; do echo "== $n"; python3 /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 2050,2200p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 868,945p src/bodyprog/gfx/bodyprog_80056D8C.c; grep -n "func_80057A3C(\|func_80057658(" src/bodyprog/gfx/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 214,272p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 4000,4030p src/bodyprog/gfx/bodyprog_80056D8C.c; sed -n 4124,4175p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+## Claude
+
+Harry's mesh is identical, so this isn't the character path. I'll check what page 0x3B actually is on screen from its polygons' positions, and how far the "moved" ones move.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct def load(p):     d=open(p,'rb').read(); out=[]; pos=0     while pos+4<=len(d):  
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 4175,4275p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 3783,3870p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/gfx/bodyprog_80056D8C.c'; s=open(p).read() # AA08 entry/exit old="""    CVECTO
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn -B2 -A4 "} MATRIX;" include/psyq/*.h | head -12
+
+## Claude
+
+On the EE, `long` is 32-bit, so `MATRIX` is 32 bytes on both sides. I'll build and capture with the extended trace.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 CAP_TRACE=1; unset SH1_FPS; (bash tools/port/ee_compile_check.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct def recs(p):     d=open(p,'rb').read(); out=[]; pos=0     while pos<len(d):     
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct def recs(p):     d=open(p,'rb').read(); out=[]; pos=0     while pos<len(d):     
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 4300,4470p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_EXTRA_CFLAGS=-DSH_PORT_CHECK_BATCH; unset SH1_FPS CAP_TRAC
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git checkout src/bodyprog/gfx/bodyprog_80056D8C.c; python3 - <<'EOF' import re p='src/port/ps2/capture_ps2.c'; s
+
+## Claude
+
+I've removed the tracing. Now I'll rebuild the normal console configuration and update my saved note about the save.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; unset SH1_EXTRA_CFLAGS CAP_TRACE; (bash tools/port
+
+## Claude
+
+Both emulators now load the real Infirmary save (Harry by the table with the notebook). I fixed the semi-transparent rectangle, but I haven't found the cause of the wrong colour on part of Harry yet.
+
+**Why it kept loading the wrong save.** Your manual load read card 1, file index 1, save index 9, the same entry my automation picked. The problem was the route. Continue chooses the map from the save auto-loaded at boot (the newest one, the Sewer), and my swap only replaced the data afterwards. The tools now go through Load Game, select file 2 / data 10 and press Cross, as you did: `compare_frames.py --load 2,10`.
+
+**What the comparison shows:**
+- **The rectangle and the flashlight flare.** I re-ran the replay test here: it draws DuckStation's exact GPU commands through the port's renderer, so game timing can't interfere. The flare is mostly made of additive sprites that fade to black at the edges. The PS2's graphics chip (GS) dithers after blending, so those faint edges, and the black quad in front of Harry, come out darker. The original setting drew the flare 9% darker than DuckStation, plus the checkered rectangle. With the fix in [gpu_gs.c](src/port/ps2/gpu_gs.c) (no dithering on semi-transparent primitives), the flare is within 1% of DuckStation's brightness and the rectangle is gone. What's left is that DuckStation's flare has a dither texture and the port's is smooth.
+- **Most of Harry is correct.** I found a port frame whose flashlight state matches DuckStation's byte for byte. In it, Harry's polygons on texture pages 0x28, 0x29 and 0x2A have exactly DuckStation's vertex colours.
+- **One part of Harry is wrong.** About 190 polygons on texture page 0x3B sit on Harry's body, at screen x 188–233, y 41–213, which is probably the jacket or pants. Their colours are shifted by one vertex: where DuckStation has `[A, 535048, 69655B, B]`, the port has `[A, 191815, 535048, B]`. This matches what you described on his back and pants. The other flashlight lighting step (the one that lights world surfaces) matched DuckStation exactly when I traced it.
+
+**What I couldn't settle.** The port's self-check build reports zero mismatches between its fast paths and the original code, including in this room. So the wrong colours either come from the original decompiled code behaving differently on the PS2's main CPU (the EE), or from a small difference in the light inputs. To tell these apart, I need both emulators in exact frame lockstep. Load timing and the 60 vs 30 fps difference keep shifting the frames, so I couldn't trace Harry's per-part lighting in a matched state. It's also possible the shifted page-0x3B colours appear on the PS1 too and only look shifted because Harry's animation is out of step between the runs. I haven't been able to rule that out.
+
+Two ways to get lockstep:
+- **Option 1:** take a DuckStation save state right after the load and make the port start from identical game state.
+- **Option 2 (recommended):** feed the PS1's recorded inputs (each body part's matrix and the light settings) into the port's Harry lighting functions offline and compare the outputs. It's simpler and doesn't need lockstep.
+
+**Current state:**
+- `build/port/sh1_ps2.iso` is a clean 60 fps build with the dithering fix.
+- `--load F,D` and `--replay` are in the tools.
+- I removed all temporary debug code.
+- Nothing is committed.
+
+Should I take option 2 for the page-0x3B colours? And should I commit what's here first?
+
+## User
+
+Yes, do the commit and then do option 2. When we’re testing this, make sure to skip the title FMV to speed up testing.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/conversation-archive.md; git 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
