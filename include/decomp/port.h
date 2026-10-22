@@ -27,6 +27,15 @@
 #define MATCH_CONST const
 #endif
 
+/** @brief Pins a local to a register (`register s32 x MATCH_REG("t0");`) in the matching build only.
+ * A matching hack with no effect on the code's logic; the port leaves the choice to the compiler.
+ */
+#ifdef SH_PORT
+#define MATCH_REG(reg)
+#else
+#define MATCH_REG(reg) asm(reg)
+#endif
+
 #ifdef SH_PORT
 /** @brief Called for every file read the game starts (`Fs_QueueStartRead`). For overlay files
  * (maps, screens, BODYPROG, B_KONAMI), makes the linked-in overlay current. src/port/overlay.c. */

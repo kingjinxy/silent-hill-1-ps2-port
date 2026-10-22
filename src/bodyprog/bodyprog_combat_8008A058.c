@@ -31,10 +31,10 @@ q3_12 D_800AFD1C[] =
 u32 func_8008A058(s32 arg0) // 0x8008A058
 {
     // @hack
-    register s32  temp_t0 asm("t0");
-    register u32  var_t1  asm("t1");
-    register u32  var_t2  asm("t2");
-    register s16* ptr     asm("t3");
+    register s32  temp_t0 MATCH_REG("t0");
+    register u32  var_t1  MATCH_REG("t1");
+    register u32  var_t2  MATCH_REG("t2");
+    register s16* ptr     MATCH_REG("t3");
 
     var_t1 = 0;
 

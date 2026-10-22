@@ -9293,6 +9293,15 @@ s32 func_800808AC(q19_12 posX, q19_12 posZ) // 0x800808AC
 
 s32 Math_MulFixed(s32 val0, s32 val1, s32 shift) // 0x800808D4
 {
+#ifdef SH_PORT
+    // Port: the asm below in C. The shifts use the low 5 bits of their amount, as MIPS `sllv`/`srlv`
+    // do (shift 0 gives hi | lo).
+    s64 res = (s64)val0 * (s64)val1;
+    u32 hi  = (u32)(res >> 32);
+    u32 lo  = (u32)res;
+
+    return (s32)((hi << ((32 - shift) & 31)) | (lo >> (shift & 31)));
+#else
     u32 lo;
 
     // Use inline asm to fetch high/low parts of mult.
@@ -9312,6 +9321,7 @@ s32 Math_MulFixed(s32 val0, s32 val1, s32 shift) // 0x800808D4
 #endif
 
     return (val0 << (32 - shift)) | (lo >> shift);
+#endif
 }
 
 s32 Math_MagnitudeShiftGet(q19_12 mag) // 0x800808F8

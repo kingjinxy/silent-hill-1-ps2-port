@@ -1821,7 +1821,7 @@ void Inventory_PlayerItemScroll(u32* selectedItemId) // 0x800523D8
     s32          temp3;
     s32          temp4;
     s32          temp5;
-    register s32 v0 asm("v0"); // @hack
+    register s32 v0 MATCH_REG("v0"); // @hack
     s_GameWork*  ptr;
     s_GameWork*  ptr2;
     s32*         ptr3;

@@ -50,7 +50,27 @@ s_SysWork_2510 D_800B142C = {
     .func_C  = func_8009E9D0,
 };
 
+#ifdef SH_PORT
+// Port: C for the asm below. The asm builds the first word from an unset `$v1`, but its masks clear
+// every bit they don't set again: the word is always 0x78000 | (arg1 & 0x13). Returns `$v0`, set by
+// the asm's NULL test.
+s32 func_8009E198(s_SysWork_2514* arg0, s32 arg1) // 0x8009E198
+{
+    if (arg0 == NULL)
+    {
+        return 0;
+    }
+
+    *(u32*)arg0          = 0x78000 | (arg1 & 0x13);
+    arg0->actuatorData_4 = 0;
+    *(u32*)&arg0->field_8 = 0;
+    arg0->field_C        = NULL;
+    arg0->field_10       = NULL;
+    return 1;
+}
+#else
 INCLUDE_ASM("bodyprog/nonmatchings/libkpad/libkpad", func_8009E198);
+#endif
 
 s32 func_8009E230(s_SysWork_2514* arg0) // 0x8009E230
 {
