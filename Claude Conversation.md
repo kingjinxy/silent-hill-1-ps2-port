@@ -29200,3 +29200,133 @@ Now I'll build and test the fix. The capture uses a 30 fps port build to match t
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
 
+## Claude
+
+I found and fixed the bug behind the wrong colours on Harry's back, pants and ears. With the fix, every one of Harry's polygons gets exactly DuckStation's vertex colours.
+
+**The bug:** one line in the port's batched character lighting in [bodyprog_80056D8C.c](src/bodyprog/gfx/bodyprog_80056D8C.c). The colour list holds one entry per normal. The batch lights all of a mesh's normals except the last three in one go, then lights the last three separately. It stored those last three at entry `arg1 + triples - 1` instead of `arg1 + (triples - 1) * 3`. So on every character mesh with more than three normals:
+- one colour in the middle of the list was overwritten;
+- the real last three colours kept values left over from the previous mesh.
+
+That produced the "colour shifted one vertex over, with a dark value in the gap" pattern, which showed up on the meshes covering Harry's jacket and pants.
+
+The self-check build missed it because it draws with the original GTE code and only compares the batch results, so this line never ran there.
+
+**Verification:** I captured DuckStation and port frames from your Infirmary save. In a port frame whose world-lighting state is byte-for-byte identical to DuckStation's, all of Harry's polygons now match exactly. About 100 on that texture page didn't before. The close-up is at `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/harry_fixed.png`.
+
+I didn't end up needing the offline replay from option 2. Matching frames by their lighting state made the colours directly comparable, and the mismatch pointed straight at that line.
+
+**Faster tests:** `compare_frames.py --load` now skips the logo delays and the intro FMV on the port, and cuts DuckStation's intro movie short. The port side of a capture takes about 4 seconds.
+
+**Commits:**
+- 3ba3bdbb4: the dithering fix for the flashlight rectangle, plus the comparison tools.
+- 79b593942: the lighting fix and the FMV skip.
+
+`build/port/sh1_ps2.iso` is a fresh 60 fps console build with both fixes. The only remaining flashlight difference is that the port's lens flare is smooth where DuckStation's is dithered, at about the same brightness.
+
+## User
+
+Now, the port’s lens flare should be dithered like DuckStation’s while we’re in 16-bit color mode. I know I complained about a rectangle being visible earlier, and I still don’t want that, but the lens flare should be dithered in 16-bit mode. If it’s too hard to compare this effect with the save file we already used, load the file, wait for Harry to be controllable, turn Harry 90 degrees to the right, and then walk 1.5 seconds. That should make any rectangle bug visible. Prompt me for open questions.
+
+## Claude
+
+The PS1 dithers a primitive's own colour before blending and clamps it at 0. The GS dithers the blended result. For additive blending these give identical results except where the source colour is below 4 (out of 255), where the GS can darken a pixel one level and the PS1 can't. That gap is what made the checkered rectangle: the flashlight draws an additive quad that is pure black (000000).
+
+The cheapest rule to try: dither semi-transparent primitives as before, but leave a primitive undithered when every vertex colour channel is below 4. With texel × colour < 4 everywhere, it adds nothing on the PS1 anyway. That keeps the flare dithered and removes the black quad's rectangle. Darker texels at the flare's edges are the only spot where it can still differ, so I'll measure that with a replay. First I'll look at how primitives carry their vertex colours into the state setup.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "p.dither   =" src/port/ps2/gpu_gs.c; sed -n 1335,1365p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1255,1300p src/port/ps2/gpu_gs.c; sed -n 1365,1400p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1300,1334p src/port/ps2/gpu_gs.c; grep -n "p.semi *=" src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() old="""    p.dither   = ((s_TexPage >> 9) & 1) && 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "#define MAX" include | head -3; grep -n "MAX(" src/port/ps2/gpu_gs.c | head -3
+
+## Claude
+
+`gpu_gs.c` doesn't include the `MAX` macro, so I'll write the check out plainly.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() old="""        u32 most = 0;         for (i = 0; i
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "clut\|CLUT" src/port/ps2/gpu_gs.c | sed -n 1,80p
+
+## Claude
+
+Practical, with care. The port keeps a cache of CLUT rows on the GS, and filtered rows would be extra entries. I'll read `clut_get` and the texture-state memo to see how to add them.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 374,392p src/port/ps2/gpu_gs.c; sed -n 610,690p src/port/ps2/gpu_gs.c; sed -n 780,915p src/port/ps2/gpu_g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 515,560p src/port/ps2/gpu_gs.c; sed -n 420,450p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() # rows old="""#define CLUT_ADDR  0x2F0000 #define 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 411,416p src/port/ps2/gpu_gs.c; sed -n 490,496p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() s=s.replace("""static void cache_invalidate(s32 x,
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1740,1765p src/port/ps2/gpu_gs.c; grep -n "p.hr *= \|p.hr *=" src/port/ps2/gpu_gs.c
+
+## Claude
+
+All four primitive paths now set `filt`. I'll build and replay the Infirmary frames.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (python3 tools/port/port_link.py > build/port/buil
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct def load(p):     d=open(p,'rb').read(); out=[]; pos=0     while pos+4<=len(d):  
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|    u32 lim = (filt >> 24) ? 16 \* 16 : 4 \* 16;|    u32 lim = 0; /* TMPTEST */ (void)((filt >> 24) ? 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^static void upload(" -A25 src/port/ps2/gpu_gs.c | head -40
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "upload_staged_impl(u32 dbp" -A30 src/port/ps2/gpu_gs.c | grep -n "pend_flush\|Flush\|s_Pkt" | head; gre
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() s=s.replace("    u32 lim = 0; /* TMPTEST */ (void)
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() s=s.replace("    u32 lim = (filt >> 24) ? 16 * 16 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() old="""    for (k = 0; k < n; k++)     {         u
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/flare_dither.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn -B2 -A14 "typedef struct _ControllerData" include | head -40; grep -rn "ControllerFlag_LStickUp\b\|Cont
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,97p include/bodyprog/sys/joy.h | grep -n "ControllerFlag_\|held\|clicked\|pulsed\|0x" | head -50; sed -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 -c " import sys; sys.path.insert(0,'tools/port'); import struct_layout for o,s,p in struct_layout.layout
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/sys/joy.c'; s=open(p).read() old="""void Joy_Update(void) // 0x8003446C {     
+
+## Claude
+
+Now the DuckStation side: the same state machine in the gdb script, at a breakpoint on `Joy_ControllerDataUpdate`.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/capture_ps2.c'; s=open(p).read() s=s.replace("""int Capture_Walk(void) {     r
+
+## Claude
+
+Both sides are wired up. For this comparison I'll build at 30 fps so the turn and walk advance like the PS1, then capture 0, 10 and 30 vertical blanks after the walk ends.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1; unset SH1_FPS; (bash tools/port/ee_compile_check.sh > build/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/bodyprog/sys/joy.c'; s=open(p).read() s=s.replace("""    Joy_ReadP1(); #ifdef SH_PORT  
+
+## Claude
+
+Both sides walked to almost the same spot: within about 150 units on x and 9 on z, out of 4096 per world unit. I'll look at the comparison frame.
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/build/port/cap/cmp_10_display.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/walk_replay_10.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/walk_replay_old_10.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
+

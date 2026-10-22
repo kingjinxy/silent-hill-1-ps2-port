@@ -4,7 +4,8 @@
  * forced, g_PortHiresOption: 1 2x, 2 32-bit, 4 480p; default: the saved options). With `load=F:D`,
  * the save is loaded instead, file F's Data D on card 1 through Load Game (title.c, saveload.c), and frames are vertical blanks of gameplay
  * (g_SysWork.gameStateCounter in GameState_InGame), each captured at the first frame reaching it.
- * `replay=N` (one or more) instead replays DuckStation's capture of frame N through the GS renderer:
+ * `walk` (with load=): Harry turns 90 degrees right and walks 1.5 s first (joy.c), and frames count
+ * from the walk's end. `replay=N` (one or more) instead replays DuckStation's capture of frame N through the GS renderer:
  * host:cap/ps1_N_vram.bin loaded into VRAM, ps1_N_gp0.bin's packets drawn, and VRAM written to
  * ps2r_N_vram.bin (the renderer alone, without game timing differences). For each,
  * writes to host:cap/: ps2_<N>_gp0.bin (every GP0 packet the frame drew: u32 word count, then the
@@ -35,6 +36,7 @@ static int   s_Mode = -1; /* rendering option bits forced, -1 none */
 static int   s_LoadSave;  /* load a save instead of a demo */
 static int   s_LoadFile, s_LoadData; /* its save: File N, Data N as the Load screen numbers them */
 static int   s_Replay[MAX_FRAMES], s_ReplayCount; /* DuckStation frames to replay */
+static int   s_Walk, s_WalkEnd = -1; /* `walk`: frames counted from the end of joy.c's walk */
 
 
 static void load(void)
@@ -60,6 +62,10 @@ static void load(void)
         {
             s_LoadSave = 1;
             sscanf(tok + 5, "%d:%d", &s_LoadFile, &s_LoadData);
+        }
+        else if (!strcmp(tok, "walk"))
+        {
+            s_Walk = 1;
         }
         else if (!strncmp(tok, "replay=", 7))
         {
@@ -122,11 +128,34 @@ int Capture_Load(int* file, int* data)
     return s_Loaded > 0 && s_LoadSave;
 }
 
+/** Whether the capture walks first (joy.c), and its end (gameplay vertical blank). */
+int Capture_Walk(void)
+{
+    if (s_Loaded < 0)
+    {
+        load();
+    }
+    return s_Loaded > 0 && s_Walk;
+}
+
+void Capture_WalkEnd(int vblank)
+{
+    s_WalkEnd = vblank;
+}
+
 /** Save captures: the listed frame a frame at gameplay vertical blank `vblank` captures (the
  * first not yet captured that it has reached), -1 none. */
 int Capture_LoadStep(int vblank)
 {
     int i;
+    if (s_Walk)
+    {
+        if (s_WalkEnd < 0)
+        {
+            return -1;
+        }
+        vblank -= s_WalkEnd;
+    }
     for (i = 0; i < s_Count; i++)
     {
         if (!s_Done[i] && s_Frames[i] <= vblank && (s_Open < 0 || s_Open == s_Frames[i]))

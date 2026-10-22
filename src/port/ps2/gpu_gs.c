@@ -24,8 +24,8 @@
  *  - Semi-transparency modes 0-3: ALPHA (A - B) * FIX / 128 + D with FIX 0x40/0x80/0x80/0x20, colour
  *    clamping on.
  *  - Mask bit: set = FBA, check = destination alpha test (DATE).
- *  - Dithering: DTHE with the PS1's matrix in DIMX, for opaque gouraud and modulated textured polygons
- *    (the GS dithers after blending, the PS1 before: semi-transparent ones stay undithered).
+ *  - Dithering: DTHE with the PS1's matrix in DIMX, for gouraud and modulated textured polygons (the
+ *    GS dithers after blending, the PS1 before: faint semi-transparent ones stay undithered).
  *  - Texture window: CLAMP REGION_REPEAT, the same (u & mask) | offset formula.
  *  - Clip area: SCISSOR. Coordinates are offset by 2048 (XYOFFSET) so negative ones fit.
  * Known differences: interpolation and blending rounding, line rasterisation, rectangle flips.
@@ -80,7 +80,9 @@ typedef unsigned long long u64x;
 #define SNAP_ADDR  0
 /* CLUT cache: one 256-pixel PSMCT16 row per CLUT (256x128, the last 64 KiB of the page cache area). */
 #define CLUT_ADDR  0x2F0000
-#define CLUT_ROWS  128
+#define CLUT_ROWS  120 /* rows 120-127: filtered CLUTs (filt_get) */
+#define FILT_ROW0  120
+#define FILT_ROWS  8
 
 #define PSM_CT32 0x00
 #define PSM_CT16 0x02
@@ -343,6 +345,7 @@ typedef struct
     u32 textured, raw, semi, gouraud, dither;
     u32 tpage, clut, semiMode;
     u32 hr; /* a 15-bit page sampled from the hires buffer (UVs doubled) */
+    u32 filt; /* dithered semi-transparent 4/8-bit texture: its CLUT filtered (filt_get), 0 none */
 } Prim;
 
 static s32 sext11(u32 v)
@@ -405,10 +408,13 @@ static void page_rect(s32 key, s32* x, s32* y, s32* w)
 
 
 /** Drops cached pages overlapping a VRAM rectangle that changed. */
+static void filt_invalidate(s32 x, s32 y, s32 w, s32 h);
+
 static void cache_invalidate(s32 x, s32 y, s32 w, s32 h)
 {
     s32 i;
     s_Epoch++;
+    filt_invalidate(x, y, w, h);
     for (i = 0; i < s_CacheSlots; i++)
     {
         s32 px, py, pw;
@@ -487,6 +493,7 @@ static void upload(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s32 h, const 
 static void cache_fill(s32 x, s32 y, s32 w, s32 h, u16 c)
 {
     s32 i, k;
+    filt_invalidate(x, y, w, h);
 #ifdef SH_PORT_INTERLACE_FIELDS
     if (s_Reg[R_SCANMSK])
     {
@@ -659,6 +666,117 @@ static u32 clut_get(u32 clut, u32 depth)
     return (u32)best;
 }
 
+/* Filtered CLUTs: the PS1 dithers a semi-transparent primitive's colour before blending, clamped at
+ * 0, the GS the blended result. For adding and subtracting blend modes they agree, except where the
+ * modulated texel is too faint to change the frame buffer on the PS1 (under 4; under 16 for the
+ * quarter-adding mode 3): there the GS's negative dither cells take a level off (darker flare edges,
+ * a checkered rectangle where the flashlight draws its black quad). Such primitives use a copy of
+ * their CLUT with those semi-transparent entries made transparent (0x0000, dropped by the alpha
+ * test). `filt`: the primitive's largest vertex colour per channel | mode 3 << 24. The CLUT as read
+ * from VRAM is kept, so another colour only filters it again. */
+typedef struct
+{
+    s32 key; /* as s_Cluts' (CLUT attribute | depth << 16), -1 = free */
+    u32 filt, used;
+    u16 raw[256] __attribute__((aligned(16)));
+} FiltSlot;
+static FiltSlot s_Filt[FILT_ROWS];
+
+static u32 filt_get(u32 clut, u32 depth, u32 filt)
+{
+    s32 key = (s32)((clut & 0x7FFF) | (depth << 16));
+    s32 i, best = -1, n = depth == 0 ? 16 : 256, k;
+    u32 lim = ((filt >> 24) & 1) ? 16 * 16 : 4 * 16; /* (texel << 3) * colour >> 7 >= 4 (16): texel * colour >= 64 (256) */
+    u16 row[256] __attribute__((aligned(16)));
+    for (i = 0; i < FILT_ROWS; i++)
+    {
+        if (s_Filt[i].key == key && s_Filt[i].filt == filt)
+        {
+            s_Filt[i].used = ++s_UseClock;
+            return (u32)(FILT_ROW0 + i);
+        }
+    }
+    for (i = 0; i < FILT_ROWS; i++) /* the same CLUT with another colour: its copy, filtered again */
+    {
+        if (s_Filt[i].key == key)
+        {
+            best = i;
+            break;
+        }
+    }
+    if (best < 0)
+    {
+        s32 x = (s32)(clut & 0x3F) * 16, y = (s32)((clut >> 6) & 0x1FF);
+        for (i = 0; i < FILT_ROWS; i++)
+        {
+            if (s_Filt[i].key < 0)
+            {
+                best = i;
+                break;
+            }
+            if (best < 0 || s_Filt[i].used < s_Filt[best].used)
+            {
+                best = i;
+            }
+        }
+        if (x + n <= VRAM_W)
+        {
+            download_rect(x, y, n, 1, s_Filt[best].raw, n);
+        }
+        else
+        {
+            download_rect(x, y, VRAM_W - x, 1, s_Filt[best].raw, n);
+            download_rect(0, y, x + n - VRAM_W, 1, s_Filt[best].raw + (VRAM_W - x), n);
+        }
+    }
+    for (k = 0; k < n; k++)
+    {
+        u32 t = s_Filt[best].raw[k], c, ch, out = t;
+        u32 keep = !(t & 0x8000) || (t & 31) * (filt & 0xFF) >= lim || ((t >> 5) & 31) * ((filt >> 8) & 0xFF) >= lim ||
+                   ((t >> 10) & 31) * ((filt >> 16) & 0xFF) >= lim;
+        if (keep && (t & 0x8000) && !((filt >> 24) & 1))
+        {
+            /* Adding: a faint channel of a kept entry raised to exactly 4 after modulation, which the
+             * dither never takes over or under a level (adds 0, as the PS1's faint channel). */
+            for (ch = 0; ch < 3; ch++)
+            {
+                c = (filt >> (ch * 8)) & 0xFF;
+                if (c && ((t >> (ch * 5)) & 31) * c < 64)
+                {
+                    u32 v = (64 + c - 1) / c;
+                    if (v * c < 80 && v <= 31)
+                    {
+                        out = (out & ~(31u << (ch * 5))) | (v << (ch * 5));
+                    }
+                }
+            }
+        }
+        row[k] = keep ? (u16)out : 0;
+    }
+    upload(CLUT_ADDR / 256, 4, PSM_CT16, 0, FILT_ROW0 + best, n, 1, row, (u32)(n * 2));
+    s_Filt[best].key   = key;
+    s_Filt[best].filt  = filt;
+    s_Filt[best].used  = ++s_UseClock;
+    s_RegValid[R_TEX0] = 0; /* this row's contents changed: load it again */
+    return (u32)(FILT_ROW0 + best);
+}
+
+/** Drops the filtered CLUTs a VRAM write at (x, y, w, h) touches. */
+static void filt_invalidate(s32 x, s32 y, s32 w, s32 h)
+{
+    s32 i;
+    for (i = 0; i < FILT_ROWS; i++)
+    {
+        s32 cx = (s_Filt[i].key & 0x3F) * 16, cy = (s_Filt[i].key >> 6) & 0x1FF;
+        s32 cw = (s_Filt[i].key >> 16) == 0 ? 16 : 256;
+        if (s_Filt[i].key >= 0 && ((x < cx + cw && cx < x + w) || cx + cw > VRAM_W) && y <= cy && cy < y + h)
+        {
+            s_Filt[i].key      = -1;
+            s_RegValid[R_TEX0] = 0;
+        }
+    }
+}
+
 /* --- Setup ------------------------------------------------------------------------------------*/
 
 static int s_Ready;
@@ -682,6 +800,10 @@ static void init(void)
     for (i = 0; i < CLUT_ROWS; i++)
     {
         s_Cluts[i].key = -1;
+    }
+    for (i = 0; i < FILT_ROWS; i++)
+    {
+        s_Filt[i].key = -1;
     }
     memset(s_PageMap, 0, sizeof(s_PageMap));
     memset(s_ClutMap, 0, sizeof(s_ClutMap));
@@ -810,9 +932,9 @@ static u64x prim_state(const Prim* p)
     }
     if (p->textured)
     {
-        static u32 texEpoch = ~0u, texTpage = ~0u, texClut = ~0u, texRaw = ~0u;
+        static u32 texEpoch = ~0u, texTpage = ~0u, texClut = ~0u, texRaw = ~0u, texFilt = ~0u;
         if (texEpoch != s_Epoch || texTpage != (p->tpage & 0x19F) || texClut != (p->clut & 0xFFFF) ||
-            texRaw != p->raw || !s_RegValid[R_TEX0])
+            texRaw != p->raw || texFilt != p->filt || !s_RegValid[R_TEX0])
         {
             LP_BEGIN(LP_STATE_TEX)
             PROF_BEGIN("gs: prim_state (texture)")
@@ -823,6 +945,7 @@ static u64x prim_state(const Prim* p)
             texTpage = p->tpage & 0x19F;
             texClut  = p->clut & 0xFFFF;
             texRaw   = p->raw;
+            texFilt  = p->filt;
             if (memoEpoch != s_Epoch)
             {
                 /* A cache miss read the hires area: its scale-down (hr_blit) rewrote the frame buffer,
@@ -897,11 +1020,12 @@ static void tex_state(const Prim* p)
     tex0 = e->tex0;
     if (depth < 2)
     {
-        if (!s_RegValid[R_TEXCLUT] || s_Reg[R_TEXCLUT] != e->texclut)
+        u64x texclut = p->filt ? 4 | ((u64x)filt_get(p->clut, depth, p->filt) << 12) : e->texclut;
+        if (!s_RegValid[R_TEXCLUT] || s_Reg[R_TEXCLUT] != texclut)
         {
             s_RegValid[R_TEX0] = 0; /* the CLUT is loaded when TEX0 is written */
         }
-        set(R_TEXCLUT, e->texclut);
+        set(R_TEXCLUT, texclut);
     }
     if (!s_RegValid[R_TEX0] || s_Reg[R_TEX0] != tex0)
     {
@@ -952,12 +1076,7 @@ static u64x state_other(const Prim* p)
     }
     set(R_TEST, test);
     set(R_FBA, s_SetMask);
-    /* Semi-transparent: no dithering. The PS1 dithers the primitive's own colour before blending, the
-     * GS the blended result: an additive black or faint primitive (the flashlight's 000000 quad in
-     * front of Harry) adds nothing on the PS1 but drops the matrix's negative cells a level on the GS
-     * (a dark checkered rectangle). Undithered, the source is truncated, which matches when it's
-     * this faint. 32-bit: no dithering (true colour). */
-    set(R_DTHE, p->dither && !p->semi && !(s_Sh && s_HrPsm == PSM_CT32));
+    set(R_DTHE, p->dither && !(s_Sh && s_HrPsm == PSM_CT32)); /* 32-bit: no dithering (true colour) */
 
     if (p->semi)
     {
@@ -1360,6 +1479,32 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
     }
 #endif
     p.dither   = ((s_TexPage >> 9) & 1) && (gouraud || (textured && !raw));
+    if (p.dither && p.semi)
+    {
+        /* The PS1 dithers a semi-transparent primitive's colour before blending (clamped at 0), the
+         * GS the blended result: they agree unless the colour is under 4, where the PS1 adds nothing
+         * but the GS drops the matrix's negative cells a level (the flashlight's black quad in front
+         * of Harry: a checkered rectangle). Such faint primitives are drawn undithered: below 4
+         * (modulated texels: up to 1.94x, so 2), nothing to add either way. */
+        u32 low = textured ? 3 : 4, faint = 1;
+        for (i = 0; i < nv; i++)
+        {
+            faint &= (rgb[i] & 0xFF) < low && ((rgb[i] >> 8) & 0xFF) < low && (rgb[i] >> 16) < low;
+        }
+        p.dither = !faint;
+    }
+    p.filt = 0;
+    if (p.dither && p.semi && textured && p.semiMode && ((tpage >> 7) & 3) < 2)
+    {
+        u32 m = 0;
+        for (i = 0; i < nv; i++)
+        {
+            m = ((rgb[i] & 0xFF) > (m & 0xFF) ? rgb[i] & 0xFF : m & 0xFF) |
+                ((rgb[i] & 0xFF00) > (m & 0xFF00) ? rgb[i] & 0xFF00 : m & 0xFF00) |
+                ((rgb[i] & 0xFF0000) > (m & 0xFF0000) ? rgb[i] & 0xFF0000 : m & 0xFF0000);
+        }
+        p.filt = m | ((u32)(p.semiMode == 3) << 24) | (1u << 25); /* bit 25: never 0 */
+    }
     if (!textured && !gouraud && !p.dither)
     {
         colorMask = HR_TRUECOLOR ? 0xFFFFFF : 0xF8F8F8; /* as quantize() */
@@ -1488,6 +1633,7 @@ static u32 rectangle(const u32* w, s32 n)
     p.dither   = 0;
     p.clut     = 0;
     p.hr       = 0;
+    p.filt     = 0;
 
     read_rgb(w[k++], &a);
     if (k >= n) return n;
@@ -1570,6 +1716,7 @@ static u32 lines(const u32* w, s32 n)
     p.tpage    = s_TexPage;
     p.clut     = 0;
     p.hr       = 0;
+    p.filt     = 0;
     prim       = prim_state(&p);
 
     read_rgb(w[k++], &prev);

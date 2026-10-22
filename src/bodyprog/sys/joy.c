@@ -30,6 +30,61 @@ void Joy_ReadP1(void) // 0x80034450
     // ((s32*)&cont->analogController)[1] = ((s32*)&g_GameWork.rawController)[1];
 }
 
+#ifdef SH_PORT
+/** Frame captures that walk (tools/port/compare_frames.py --walk, capture_ps2.c): 2 s into gameplay,
+ * Right until Harry has turned 90 degrees, then Up for 1.5 s (vertical blanks), as pad presses. */
+static void Port_CaptureWalk(void)
+{
+    extern int  Capture_Walk(void);
+    extern void Capture_WalkEnd(int vblank);
+    static s32  phase, rot0, start;
+    s32         n = g_SysWork.gameStateCounter, d;
+    u16         hold = 0;
+
+    if (!Capture_Walk() || g_GameWork.gameState != GameState_InGame)
+    {
+        return;
+    }
+    switch (phase)
+    {
+        case 0:
+            if (n < 120)
+            {
+                break;
+            }
+            rot0  = g_SysWork.playerWork.player.rotation.vy;
+            phase = 1;
+            printf("capture: walk: turning at %d\n", (int)n);
+
+        case 1:
+            d = (g_SysWork.playerWork.player.rotation.vy - rot0) & 0xFFF;
+            if ((d > 0x800 ? 0x1000 - d : d) < 0x400)
+            {
+                hold = ControllerFlag_DpadRight;
+                break;
+            }
+            start = n;
+            phase = 2;
+            printf("capture: walk: walking at %d\n", (int)n);
+
+        case 2:
+            if (n < start + 90)
+            {
+                hold = ControllerFlag_DpadUp;
+                break;
+            }
+            phase = 3;
+            Capture_WalkEnd(n);
+            printf("capture: walk: done at %d\n", (int)n);
+            break;
+    }
+    if (hold)
+    {
+        g_Controller0->analogController.buttonFlags &= ~hold; /* active low */
+    }
+}
+#endif
+
 void Joy_Update(void) // 0x8003446C
 {
     Joy_ReadP1();
@@ -47,6 +102,10 @@ void Joy_ControllerDataUpdate(void) // 0x80034494
     s32               prevHeldButFlags;
     s32               pulseTicks;
     s32               pulsedButFlags;
+
+#ifdef SH_PORT
+    Port_CaptureWalk();
+#endif
 
     // Update controller button flags.
     for (i = CONTROLLER_COUNT, cont = g_Controller0;

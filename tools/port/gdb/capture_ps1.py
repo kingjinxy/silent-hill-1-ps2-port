@@ -20,6 +20,7 @@ DEMO = int(os.environ.get("CAP_DEMO", "1"))
 # CAP_LOAD=F,D: the save is loaded instead (Load Game, then file F's Data D on card 1 confirmed), and
 # frames are vertical blanks of gameplay (g_SysWork.gameStateCounter in GameState_InGame), each
 # captured at the first frame reaching it, as the port's capture_ps2.c.
+WALK = os.environ.get("CAP_WALK") == "1"  # with CAP_LOAD: turn 90 degrees right and walk 1.5 s first (as joy.c)
 LOAD = [int(x) for x in os.environ["CAP_LOAD"].split(",")] if os.environ.get("CAP_LOAD") else None
 
 STEP = 0x800C4894          # g_Demo_DemoStep
@@ -52,6 +53,9 @@ SLOT_ELEMENT_SELECTED = 0x800A97D4          # g_SlotElementSelectedIdx[2]
 SELECTED_SAVE_SLOT = 0x800A97D6             # g_SelectedSaveSlotIdx
 SAVEGAME_ENTRY_TYPE_SAVE = 8                # SavegameEntryType_Save
 SAVE_SCREEN_LOGIC = 0x801E649C              # SaveScreen_LogicUpdate (saveload overlay)
+JOY_DATA_UPDATE = 0x80034494               # Joy_ControllerDataUpdate: the pad read, not yet processed
+PLAYER_ROT_Y = SYSWORK + 0x72               # g_SysWork.playerWork.player.rotation.vy
+PAD_DPAD_UP, PAD_DPAD_RIGHT = 1 << 4, 1 << 5
 MAINLOOP_STATE_CALL = 0x80033088            # the main loop's game state call
 GAMESTATE_MOVIE_INTRO = 6
 STREAM_MAX_FRAME = 0x801E3F40               # STREAM.BIN max_frame: the movie stops once frame_cnt reaches it
@@ -106,8 +110,8 @@ def load_step():
     global frame_step
     if frame_step is False:
         frame_step = None
-        if r32(GAMESTATE) == GAMESTATE_INGAME:
-            n = r32(STATE_COUNTER)
+        if r32(GAMESTATE) == GAMESTATE_INGAME and (not WALK or walk_end is not None):
+            n = r32(STATE_COUNTER) - (walk_end or 0)
             frame_step = next((f for f in FRAMES if f not in done and f <= n and open_frame in (None, f)), None)
     return frame_step
 
@@ -122,6 +126,7 @@ def demo_step():
 
 
 demo_count = 0
+walk_end = None       # gameplay vertical blank the walk ended at
 frame_step = False    # load_step's latch (False: not read this frame)
 done = set()
 open_frame = None     # frame whose packets are being collected
@@ -175,6 +180,36 @@ if LOAD:
         inf.write_memory(pad + 0x10, struct.pack("<I", r32(pad + 0x10) | (r32(CONFIG_ENTER) & 0xFFFF)))
         print("capture: loading file %d data %d (entry %d of %d)" % (LOAD[0], LOAD[1], entry, count), flush=True)
     list_bp.delete()
+    if WALK:
+        # As joy.c's Port_CaptureWalk: 2 s into gameplay, Right until turned 90 degrees, Up for 90 vertical blanks.
+        joy_bp, phase = gdb.Breakpoint("*0x%08X" % JOY_DATA_UPDATE, internal=True), 0
+        while walk_end is None:
+            gdb.execute("continue", to_string=True)
+            if r32(GAMESTATE) != GAMESTATE_INGAME:
+                continue
+            n, hold = r32(STATE_COUNTER), 0
+            rot = struct.unpack("<h", bytes(inf.read_memory(PLAYER_ROT_Y, 2)))[0]
+            if phase == 0 and n >= 120:
+                rot0, phase = rot, 1
+                print("capture: walk: turning at %d" % n, flush=True)
+            if phase == 1:
+                d = (rot - rot0) & 0xFFF
+                if min(d, 0x1000 - d) < 0x400:
+                    hold = PAD_DPAD_RIGHT
+                else:
+                    start, phase = n, 2
+                    print("capture: walk: walking at %d" % n, flush=True)
+            if phase == 2:
+                if n < start + 90:
+                    hold = PAD_DPAD_UP
+                else:
+                    walk_end = n
+                    print("capture: walk: done at %d" % n, flush=True)
+            if hold:
+                pad = r32(CONTROLLER0_PTR)
+                raw = struct.unpack("<H", bytes(inf.read_memory(pad + 2, 2)))[0]
+                inf.write_memory(pad + 2, struct.pack("<H", raw & ~hold))
+        joy_bp.delete()
 else:
     start_bp = gdb.Breakpoint("*0x%08X" % DEMO_START, internal=True)
     while demo_count < DEMO:

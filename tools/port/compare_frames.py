@@ -11,7 +11,8 @@ and the report lists pixel differences and the first GP0 packets that differ (sa
 different pixels: the renderer; different packets: game logic, GTE, ...).
 
 --mode N forces the port's Debug Options rendering bits (1 2x, 2 32-bit, 4 480p); 2x captures are
-read back scaled down to VRAM. --load F,D loads file F's Data D on card 1 instead, through Load Game
+read back scaled down to VRAM. --walk (with --load) has Harry turn 90 degrees right and walk 1.5 s
+first, frames then counting from the walk's end. --load F,D loads file F's Data D on card 1 instead, through Load Game
 (DuckStation's card 1 must hold the same saves) and frames are vertical blanks of gameplay.
 
 --replay replays the DuckStation captures of --frames (already made) through the port's GS renderer
@@ -43,10 +44,10 @@ import struct_layout  # noqa: E402  (field names for the game state diff)
 
 # --- Captures --------------------------------------------------------------------------------------
 
-def capture_ps2(frames, demo, mode, cont):
+def capture_ps2(frames, demo, mode, cont, walk=False):
     open(os.path.join(REPO, "build", "port", "capture.txt"), "w").write(
         ",".join(map(str, frames)) + " demo=%d" % demo + (" mode=%d" % mode if mode is not None else "") +
-        (" load=%s" % cont.replace(",", ":") if cont else "") + "\n")
+        (" load=%s" % cont.replace(",", ":") if cont else "") + (" walk" if walk else "") + "\n")
     try:
         out = subprocess.run([sys.executable, os.path.join(HERE, "pcsx2_run.py"), "--seconds", "300",
                               "--until", "capture: all frames done", ISO], capture_output=True, text=True).stdout
@@ -82,7 +83,7 @@ def replay_ps2(frames):
                 shutil.copy2(src, os.path.join(CAP, "ps2r_%d%s" % (f, ext)))
 
 
-def capture_ps1(frames, demo, cont):
+def capture_ps1(frames, demo, cont, walk=False):
     backup = patch_duckstation()
     ds = None
     try:
@@ -91,7 +92,7 @@ def capture_ps1(frames, demo, cont):
         if not warp_sweep.wait_port(2345, 30):
             sys.exit("DuckStation's GDB server didn't start")
         time.sleep(1)
-        env = dict(os.environ, CAP_FRAMES=",".join(map(str, frames)), CAP_OUT=CAP, CAP_DEMO=str(demo), CAP_LOAD=cont or "")
+        env = dict(os.environ, CAP_FRAMES=",".join(map(str, frames)), CAP_OUT=CAP, CAP_DEMO=str(demo), CAP_LOAD=cont or "", CAP_WALK="1" if walk else "0")
         out = subprocess.run(["gdb-multiarch", "-q", "-batch", "-ex", "set architecture mips:3000",
                               "-ex", "target remote localhost:2345", "-x", os.path.join(HERE, "gdb", "capture_ps1.py")],
                              env=env, capture_output=True, text=True, timeout=1800, stdin=subprocess.DEVNULL)
@@ -230,6 +231,7 @@ def main():
     ap.add_argument("--skip-ps2", action="store_true", help="reuse the PS2 capture")
     ap.add_argument("--demo", type=int, default=1, help="which attract demo (1: the first played)")
     ap.add_argument("--load", dest="cont", metavar="F,D", help="load file F's Data D on card 1 instead of a demo")
+    ap.add_argument("--walk", action="store_true", help="with --load: turn 90 degrees right and walk 1.5 s first; frames count from its end")
     ap.add_argument("--replay", action="store_true", help="replay the DuckStation captures through the port's renderer")
     ap.add_argument("--mode", type=int, help="the port's rendering option bits (1 2x, 2 32-bit, 4 480p)")
     args = ap.parse_args()
@@ -238,9 +240,9 @@ def main():
     if args.replay:
         replay_ps2(frames)
     elif not args.skip_ps2:
-        capture_ps2(frames, args.demo, args.mode, args.cont)
+        capture_ps2(frames, args.demo, args.mode, args.cont, args.walk)
     if not args.skip_ps1 and not args.replay:
-        capture_ps1(frames, args.demo, args.cont)
+        capture_ps1(frames, args.demo, args.cont, args.walk)
     LAYOUTS["g_SysWork"] = struct_layout.layout("s_SysWork")
     LAYOUTS["g_GameWork"] = struct_layout.layout("s_GameWork")
     side2 = "ps2r" if args.replay else "ps2"
