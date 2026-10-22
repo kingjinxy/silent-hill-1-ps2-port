@@ -21,7 +21,7 @@ Sources:
 | 3D maths | GTE (COP2): fixed point; RTPS/RTPT, NCLIP, MVMVA, DPCS/DCPL, NCCS... in a few to ~20 cycles each | VU0 (COP2 macro mode, or microprograms), VU1 (microprograms only, feeds the GS) | No GTE; the port computes GTE results in C/MMI. The VUs are float hardware (see §5). |
 | Graphics | GPU: 2D rasterizer, 1 MB VRAM shared by framebuffer and textures, no Z-buffer (ordering tables), affine texturing, 4/8/16-bit textures with CLUTs, 2 KB texture cache, dithering | GS: 147 MHz, 4 MB eDRAM, 8 textured / 16 untextured pixels per cycle, Z-buffer, perspective-correct texturing, CLUT buffer, per-vertex fog (FOG/FOGCOL), alpha blending, three GIF paths (PATH1 VU1, PATH2 VIF1, PATH3 direct) | Fill rate is effectively free at PS1 resolutions. The cost is the CPU turning PS1 GPU packets into GS packets and state. |
 | DMA | Per-device channels; the CPU stalls while DMA owns the bus | DMAC: 128-bit transfers, chains (tags), slice mode, channels for VIF0/1, GIF, SIF, SPR | GS packets can be built and sent while the CPU keeps working (double buffering). |
-| Video | MDEC | IPU (MPEG-2 macroblocks) | Done (FMV path). |
+| Video | MDEC | IPU (MPEG-2 macroblocks) | Done (FMV path), bit-exact on the EE. The IPU can't decode STR (see the 2026-10-22 log entry). |
 | Sound | SPU, 24 voices, 512 KB | SPU2: 2 cores × 24 voices, 2 MB, on the IOP | Done (one SPU2 core, PS1 driver unchanged). |
 | Storage | 2× CD-ROM | DVD (on hardware tests: Neutrino over Ethernet) | Faster, and with RAM to spare, loads can be avoided entirely. |
 | I/O processor | — | IOP: R3000-class CPU, the PS1's CPU in backward-compatibility mode | Runs our sound and disc modules. |
@@ -448,3 +448,77 @@ Light counters in Particle_Update (`particles: move`, `particles: draw`) and aro
 - A flake's RTPS costs ~370 cycles: loading V0, the command with its full register file, the FIFO and FLAG, and the two reads.
 - A batch (Gte_RtpBatch, ~125-210 cycles a point) would save at most ~40k cycles a frame, ~1.5% of busy time. The movement (~350 cycles a flake: three RNG calls, position maths, a ground lookup when a flake lands) has no exact shortcut of that size.
 - Not pursued. The counters stay in: they're light-counter builds only, and the demo 0 dumps are identical with them on.
+
+### 2026-10-22: IPU for FMV decoding: rejected
+Sources: ps2tek's IPU chapter (registers, commands) and PCSX2's IPU decoder (pcsx2/IPU: IPU_MultiISA.cpp, yuv2rgb.cpp).
+- **It can't read STR.** Only BDEC (one macroblock) and IDEC (one slice) decode coefficients, and both read MPEG-1/2 syntax only. STR v2's DC is a raw 10-bit value; the IPU expects a DC size code plus a difference from the previous block (intra), or the "first" code table (non-intra). The escapes differ (STR: 6-bit run + 10-bit level; MPEG-2: 6 + 12; MPEG-1: 6 + 8/16), and so does the block order (STR: Cr, Cb, Y1-Y4; MPEG: Y1-Y4, Cb, Cr). Using it means the EE re-encodes every frame into an MPEG bitstream, which costs about what parsing already costs.
+- **It wouldn't be exact even then.**
+  - Dequantization: intra `level*q*W >> 4`, non-intra `(2*level+1)*q*W >> 5`, against the MDEC's 4 fraction bits rounded toward zero.
+  - The IDCT is an integer butterfly (W1-W7), not the MDEC's matrix and rounding.
+  - Intra output is clipped to unsigned 0-255, so the MDEC's signed values, which wrap to 9 bits, are lost before any colour conversion on the EE.
+  - CSC uses fixed studio-range coefficients ((Y-16)*1.164), not the MDEC's full-range BT.601.
+- **Nothing can be used on its own.** There is no standalone IDCT or dequantize command; VDEC reads only MPEG macroblock, motion and header codes; CSC takes 8-bit studio-range input only.
+- Decision: keep strdec.c on the EE (bit-exact; 7.8-10M cycles a frame on hardware, at most ~51% of the 15 fps budget). If movies ever need to be faster, VU0 or more strdec.c tuning can stay exact. Re-encoding the movies offline as MPEG-2 would let IDEC do it all, but it replaces original assets: ruled out.
+
+### 2026-10-22: EE scratchpad for hot data (option 3): built, exact in PCSX2, hardware timing to do
+- `include/port/spr.h`: `SPR` puts a zero-initialised variable in `.spad` (0x70000000). The section is NOBITS and NOLOAD in tools/port/linkfile (ps2sdk's linkfile, changed): with the stock script it landed in the one LOAD segment, whose memsz then spanned 0x100000-0x70000000. main() zeroes `_spad_start`-`_spad_end` first. Only port_link.py builds get it (SH_PORT_SPR); SH1_NO_SPR=1 leaves it out.
+- In it (6.3 KB of 16): g_PsxScratch (the PS1 scratchpad, 1 KB), the GTE register file and gte.c's unpacked matrices, reciprocal table and flags, and gpu_gs.c's packet builder state, register shadow (s_Reg, s_RegValid), page and CLUT cache tables, texture memo (2 KB), state memos and fog pair buffer.
+- Checked: nothing in it is a DMA source or target; the game's SetSp (stack into the scratchpad, collision and particles) is a no-op stub in the port; DrawOTag now reports a link below 0x100000 (a packet in the scratchpad would truncate to 0).
+- Kaufmann (bench_cutscene.sh 4), SPR on against SH1_NO_SPR=1: 9 of 10 dumps identical, the tenth 41 pixels in one 7×9 subtitle glyph (the known variation between builds).
+- PCSX2 doesn't model the caches, so the gain can only be measured on hardware. Next: hardware timing; then candidates for the remaining ~9.7 KB (batch buffers, the game's hottest small globals).
+
+### 2026-10-22: RAM usage (EE, 32 MB)
+Static: everything is linked in, all 48 overlays included, and nothing is allocated while playing, so gameplay, in-engine cutscenes and FMV use the same memory. Only what's in use differs: outside FMV the movie buffers (1.2 MB) are idle; inside the 2 MB PS1 arena the game uses its own PS1 layout.
+
+| Region | MB |
+|---|---|
+| EE kernel (0-1 MB) | 1.00 |
+| ELF image (code, data, bss; ends at 0x00A7CF60) | 9.49 |
+| Heap: pristine copies of the 48 overlays' initial data (overlay.c) | 0.95 |
+| Main thread stack | 0.13 |
+| **Used** | **~11.6** |
+| **Free** | **~20.4** |
+
+| Category | MB | Main items |
+|---|---|---|
+| Game code (decomp C + recompiled asm) | 3.12 | maps 2.46, bodyprog 0.48, recomp 0.11, screens 0.06 |
+| Game data (initialised, read-only) | ~1.2 | maps 0.45, data from asm files ~0.7 |
+| PS1 RAM arena (g_PsxRam) | 2.00 | |
+| Game bss | 0.13 | g_SysWork, g_WorldGfxWork, g_OtTags1... |
+| GS renderer (gpu_gs.c) | 0.84 | s_Readback 512 KB, packet buffers 128 KB, staging/image packet/CLUT map 192 KB |
+| FMV (movie_ps2.c, strdec.c) | 1.20 | ring 512 KB, RGBA frame 300 KB, decoder lookup tables 320 KB |
+| Memory card (psx_card.c) | 0.29 | s_Card 256 KB |
+| Capture and debug | ~0.32 | capture bands 144 KB, dump band 64 KB, debug 64 KB, log 43 KB |
+| CD, SPU, embedded IRX | ~0.15 | CD bounce 64 KB, SPU 50 KB, sh1spu/freesd 31 KB |
+| Port code, libc, ps2sdk, gsKit | ~0.4 | |
+
+No memory changes planned for now. For option 7 (use the RAM), ~20 MB is free; capture and debug buffers (~0.3 MB) could be left out of release builds.
+
+### 2026-10-22: PS1 assembly still in the port build, and a plan to turn it into C
+Scope: assembly left over from the PS1 only. The port's own EE assembly stays: MMI (vw_calc.c's bone matrices), `plzcw` and `mult` in gte.c, `pref`, `sync.l`, the COP0 counter reads.
+
+Found by preprocessing every linked game file with the port's flags (as ee_compile_check.sh), so only what the PS2 build compiles counts. Not in the port build: include/psyq/inline_c.h, inline_o.h, include/inline_no_dmpsx.h, the GTE macros in include/gpu.h and libsn.h's `break`s (matching build only; the port maps GTE macros to C through include/port/gte_from_*.h), and the PS1-only `#else` branches (vw_calc.c, bodyprog_80056D8C.c `gte_strgb3_vec`, player_control.c func_80080540).
+
+| # | Where | What |
+|---|---|---|
+| A1 | bodyprog/libkpad/libkpad.c func_8009E198 | INCLUDE_ASM: the PS1 function assembled as is into the EE build |
+| A2 | player_control.c Math_MulFixed | `mult`/`mfhi`/`mflo`, a matching hack the port also uses |
+| A3 | combat_8008A058.c (t0-t3), item_screens_3.c (v0), Chara_PuppetNurse.c, map3_s03.c, map3_s05.c, map7_s01/characters.c (v1) | `register ... asm("reg")` matching hacks |
+| B | build/port/librecomp.a: 203 functions linked (111 KB) | PS1 object code recompiled to C by tools/port/recomp.py: Sony's libgte (matrix functions, ratan2...), libgs (GsSortObject4J, GsTMDfast*: item screens), libgpu (SetDrawEnv, AddPrim, sys), Konami's libkmath |
+| C | 92 INCLUDE_RODATA blocks and the asm data files (~0.7 MB) | PS1 data, not code |
+
+Plan, in order:
+1. **A1-A3, the game's own code (small, exact).**
+   - func_8009E198: the asm starts from an unset `$v1`, but the masks clear every bit not set again, so the stored word is always `0x78000 | (arg1 & 0x13)` (then fields 4-0x10 zeroed, nothing done for NULL). Port C under `#ifdef SH_PORT`, INCLUDE_ASM kept for the matching build.
+   - Math_MulFixed: C with a 64-bit product. Shift amounts as on MIPS (`sllv`/`srlv` use the low 5 bits): shift 0 gives `hi | lo`, not undefined C.
+   - Register hacks: one macro (e.g. `MATCH_REG("t0")`, empty under SH_PORT). Read each function first in case it reads a register before setting it (as func_80080540's asm did).
+   - Check: bench_cutscene.sh 4 plus the attract demos' dumps, unchanged.
+2. **B, native C for the recompiled libraries (the largest part).** Hand-written C for each function, as libgte_port.c already does for InitGeom, ordered by how often it runs (profile first: libgte matrix functions in the game update, libgpu's per-frame calls; libgs only in the item screens). Each must leave the GTE registers and memory as the PS1 function does: tools/port/lib_test compares the PS1 originals (DuckStation) against the EE versions. Once a library is fully covered, drop it from recomp_all.sh.
+3. **C: not planned.** It's data with no runtime cost; turning it into C is decomp work, not port work.
+
+### 2026-10-22: PS1 assembly, step 1 (A1-A3): done
+- func_8009E198 (libkpad.c): C under SH_PORT (`0x78000 | (arg1 & 0x13)`, fields 4-0x10 zeroed, returns 1; NULL returns 0). INCLUDE_ASM kept for the matching build.
+- Math_MulFixed (player_control.c): 64-bit product in C, shifts masked to 5 bits as `sllv`/`srlv`.
+- `MATCH_REG("reg")` (include/decomp/port.h): `asm(reg)` in the matching build, nothing in the port. Used for the 6 pinned locals in combat_8008A058.c, item_screens_3.c and puppet_nurse.c (included by 4 maps); each is set before it's read. memcpy.c's are compiled out of the port (it uses libc's memcpy).
+- Check: Kaufmann (bench_cutscene.sh 4) 10 of 10 dumps identical to the build before; attract demo 0 (bench_frames.sh) 10 of 10 identical with and without the change.
+- Left from the PS1: the recompiled libraries (step 2) and data (not planned).
