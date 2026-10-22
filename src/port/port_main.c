@@ -9,10 +9,18 @@ extern void Port_MainThreadInit(void);  /* src/port/ps2/libetc_ps2.c */
 extern void Port_LogInit(void);         /* src/port/ps2/log_ps2.c */
 extern void Port_OverlaySnapshot(void); /* src/port/overlay.c */
 
+extern unsigned char _spad_start[], _spad_end[]; /* tools/port/linkfile */
+
 int main(int argc, char** argv)
 {
+    unsigned char* p;
     (void)argc;
     (void)argv;
+    /* The scratchpad's variables (include/port/spr.h) aren't in the ELF: zero them first. */
+    for (p = _spad_start; p < _spad_end; p++)
+    {
+        *p = 0;
+    }
     printf("SH1 port: starting (build " __DATE__ " " __TIME__ ")\n");
     Port_MainThreadInit();
     Port_LogInit();

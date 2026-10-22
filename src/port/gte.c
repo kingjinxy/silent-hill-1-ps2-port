@@ -6,6 +6,7 @@
 
 #define GTE_IMPLEMENTATION
 #include "port/gte.h"
+#include "port/spr.h"
 
 /* No <stdint.h>: the port build uses -nostdinc. int is 32-bit and long long 64-bit on both the EE
  * and the hosts this is tested on. */
@@ -60,8 +61,9 @@ enum
 #define GTE_EE 1
 #endif
 
-u32 g_GteData[32];
-u32 g_GteCtrl[32];
+/* The register file and the state below are in the EE's scratchpad (include/port/spr.h). */
+SPR u32 g_GteData[32];
+SPR u32 g_GteCtrl[32];
 u32 g_GteCtrlDirty = ~0u; /* a bit per control register written since the last refresh */
 #define d g_GteData
 #define c g_GteCtrl
@@ -71,15 +73,15 @@ u32 g_GteCtrlDirty = ~0u; /* a bit per control register written since the last r
  *  - s_Small: TR, BK and FC are all within +-2^30. Then no 44-bit MAC check can trigger: every
  *    other operand is 16-bit (products below 2^30), so sums stay below 2^43; mac44() skips its
  *    checks (s_FastMac, per command: not for GPF/GPL, which add a shifted 32-bit MAC). */
-static s32 m_rt[9], m_llm[9], m_lcm[9];
+static SPR s32 m_rt[9], m_llm[9], m_lcm[9];
 static int s_Small = 1;
 /* FC within ±2^18: DPCS with sf = 1 fits 32-bit arithmetic (dpcs_tiny). */
 static int s_FcTiny = 1;
-static int s_FastMac;
+static SPR int s_FastMac;
 
 /* Unsigned Newton-Raphson reciprocal table ("GTE Division Inaccuracy"). */
-static u8   unr_table[0x101];
-static int  unr_ready;
+static SPR u8  unr_table[0x101];
+static SPR int unr_ready;
 
 static void unr_init(void)
 {
@@ -287,7 +289,7 @@ unsigned int Gte_CtrlRead(unsigned int reg)
  * Arithmetic helpers
  * --------------------------------------------------------------------------------------------*/
 
-static u32 flag;
+static SPR u32 flag;
 
 /** 44-bit MAC accumulation: flags overflow of MACn (n=1..3) and wraps to 44 bits, as the hardware does
  * after each addition. */

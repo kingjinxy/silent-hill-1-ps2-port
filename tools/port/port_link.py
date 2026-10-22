@@ -39,6 +39,9 @@ EE_C_OBJS = "build/ee_check"
 # faster than -O2 in the opening cutscene; the game's code gains nothing from it and stays at -O2.
 PORT_CFLAGS = [os.environ.get("SH1_PORT_OPT", "-O3"), "-G0", "-fno-toplevel-reorder", "-mno-check-zero-division", "-fno-strict-aliasing", "-std=gnu89", "-nostdinc", "-Wa,-Iinclude", "-Iinclude", "-Iinclude/psyq", "-Iinclude/decomp",
                "-D_LANGUAGE_C", "-DVER_USA", "-DSH_PORT", "-DNON_MATCHING"]
+# Hot data in the EE's scratchpad (include/port/spr.h); SH1_NO_SPR=1 keeps it in RAM (for comparisons).
+SPR_CFLAGS = [] if os.environ.get("SH1_NO_SPR") else ["-DSH_PORT_SPR"]
+PORT_CFLAGS += SPR_CFLAGS
 
 
 def run(cmd, check=True):
@@ -264,7 +267,7 @@ def main():
     # PS2-side HAL code (src/port/ps2/): compiled against ps2sdk's headers, not the game's.
     for src in sorted(glob.glob("src/port/ps2/*.c")):
         obj = os.path.join(OUT, "port", "ps2_" + os.path.basename(src) + ".o")
-        run([CC, "-c", os.environ.get("SH1_PORT_OPT", "-O3"), "-G0", "-D_EE", "-Wall", *prof, *dump, "-I" + os.path.join(PS2SDK, "ee", "include"),
+        run([CC, "-c", os.environ.get("SH1_PORT_OPT", "-O3"), "-G0", "-D_EE", "-Wall", *prof, *dump, *SPR_CFLAGS, "-I" + os.path.join(PS2SDK, "ee", "include"),
              "-I" + os.path.join(PS2SDK, "common", "include"), "-I" + os.path.join(GSKIT, "include"),
              "-iquote", "include", src, "-o", obj])
         port_objs.append(obj)
@@ -376,7 +379,7 @@ def main():
     elf = OUT + "/sh1.elf"
 
     def final_link(extra):
-        return run([CC, "-T", os.path.join(PS2SDK, "ee", "startup", "linkfile"), "-L", os.path.join(PS2SDK, "ee", "lib"),
+        return run([CC, "-T", "tools/port/linkfile", "-L", os.path.join(PS2SDK, "ee", "lib"),
                     "-Wl,-zmax-page-size=128", "-Wl,--wrap=_write", "-Wl,--wrap=SifLoadModule", "-Wl,--unresolved-symbols=report-all", "-o", elf,
                     combined, *port_objs, *extra, "-Wl,--start-group", recomp_lib, "-Wl,--end-group",
                     "configs/USA/relative_syms.ld", "configs/USA/port_relative_syms.ld", "configs/USA/port_syms.ld",

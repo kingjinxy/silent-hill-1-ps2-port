@@ -221,14 +221,16 @@ static void DrawOTagImpl(u_long* p)
     while (addr != OT_END)
     {
         const u32* prim;
-        if (addr == 0 || steps > 0x40000)
+        /* Below 0x100000: a null link, or a packet outside RAM (the scratchpad at 0x70000000 truncates
+         * to 0: the PS1's GPU couldn't read its scratchpad either). */
+        if (addr < 0x100000 || steps > 0x40000)
         {
             static int reported;
             if (reported++ < 4)
             {
                 u32 a = start;
                 s32 i;
-                printf("libgpu: DrawOTag(%08X): %s after %d links; chain:", start, addr == 0 ? "NULL link" : "no end", steps);
+                printf("libgpu: DrawOTag(%08X): %s after %d links; chain:", start, addr == 0 ? "NULL link" : addr < 0x100000 ? "link outside RAM" : "no end", steps);
                 for (i = 0; i < 12 && a != OT_END && a != 0; i++)
                 {
                     printf(" %06X:%08X", a, *(const u32*)ptr24(a));

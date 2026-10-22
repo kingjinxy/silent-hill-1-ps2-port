@@ -36,6 +36,7 @@
 #include <string.h>
 #include <dmaKit.h>
 #include "port/prof.h"
+#include "port/spr.h"
 
 typedef unsigned long long u64x;
 
@@ -115,26 +116,28 @@ static u64x s_PktBuf[2][PKT_WORDS] __attribute__((aligned(64)));
  * and loaded lines about to be overwritten. Writes are combined in the EE's UCAB; `sync.l` drains it
  * before a send. The DMA gets the plain address (s_PktBuf). */
 #define UCAB(p) ((u64x*)(((u32)(p) & 0x0FFFFFFF) | 0x30000000))
-static u64x* s_Pkt; /* UCAB(s_PktBuf[s_PktCur]), set by init() */
-static int   s_PktCur;
-static int  s_Pos;            /* words used */
+/* The packet builder's state, the register shadow, the texture caches' tables and the memos are in
+ * the EE's scratchpad (include/port/spr.h): DrawOTag touches them for every primitive. */
+static SPR u64x* s_Pkt; /* UCAB(s_PktBuf[s_PktCur]), set by init() */
+static SPR int   s_PktCur;
+static SPR int  s_Pos;            /* words used */
 static int  s_TagAt = -1;     /* open tag (word index), -1 = none */
-static u64x s_TagRegs;        /* REGLIST register list of the open tag, 0 = A+D */
-static int  s_TagNreg;        /* registers per loop */
-static int  s_TagLoops;
+static SPR u64x s_TagRegs;        /* REGLIST register list of the open tag, 0 = A+D */
+static SPR int  s_TagNreg;        /* registers per loop */
+static SPR int  s_TagLoops;
 static int  s_LastTag = -1;   /* for EOP */
 
-static u64x s_Reg[REG_COUNT];
+static SPR u64x s_Reg[REG_COUNT];
 #ifdef SH_PORT_LITEPROF
 unsigned int g_LiteProf[LP_COUNT][2];
 #endif
 /* Incremented whenever GS state may have changed outside prim_state() (reset, fills, display
  * copies, texture cache changes): its memo of the last primitive's state is then stale. */
-static u32  s_Epoch;
+static SPR u32  s_Epoch;
 /* Per-frame statistics (GpuGs_Stats): primitives, texture (TEX0) changes, CLUT loads, primitives
  * with destination alpha test (check mask), primitives sampling the VRAM buffer (15-bit pages). */
 static u32 s_StPrims, s_StTex0, s_StClut, s_StDate, s_StRtTex, s_StUploads, s_StReadbacks;
-static u8   s_RegValid[REG_COUNT];
+static SPR u8   s_RegValid[REG_COUNT];
 
 /* Interlaced 480-line display with drawing to the display area off (GP0 E1 bit 10, DFE = 0): the
  * game draws into the area on screen (single-buffered: title, inventory). On the PS1 (Mednafen's
@@ -304,8 +307,8 @@ void GpuGs_StateLost(void)
 
 /* --- Drawing state (GP0 E1-E6), as in gpu_soft.c ----------------------------------------------*/
 
-static u32 s_TexPage;
-static u32 s_TwMaskX, s_TwMaskY, s_TwOffX, s_TwOffY;
+static SPR u32 s_TexPage;
+static SPR u32 s_TwMaskX, s_TwMaskY, s_TwOffX, s_TwOffY;
 static s32 s_AreaX1, s_AreaY1, s_AreaX2 = VRAM_W - 1, s_AreaY2 = VRAM_H - 1;
 /* Incremented when a drawing setting prim_state depends on changes (GP0 E2-E4, E6): its memo then
  * only compares this, s_Epoch and the primitive's own flags. */
@@ -363,7 +366,7 @@ typedef struct
     u32 used;
 } Slot;
 
-static Slot s_Slots[CACHE_SLOTS];
+static SPR Slot s_Slots[CACHE_SLOTS];
 static s32  s_CacheSlots = CACHE_SLOTS - 1; /* in use (fewer with a 2x shadow buffer; the last is blend_exact's) */
 
 /** GS block address of page cache slot i. */
@@ -383,15 +386,15 @@ typedef struct
     u32 used;
 } ClutSlot;
 
-static ClutSlot s_Cluts[CLUT_ROWS];
+static SPR ClutSlot s_Cluts[CLUT_ROWS];
 
 /* Direct lookups (slot or row + 1, 0 = not cached): page cache by key, CLUT cache by
  * CLUT attribute | depth << 15. */
-static u8 s_PageMap[64];
+static SPR u8 s_PageMap[64];
 static u8 s_ClutMap[0x10000];
 #define CLUT_MAP(key) (((key) & 0x7FFF) | (((key) >> 16) << 15))
 
-static u32  s_UseClock;
+static SPR u32  s_UseClock;
 /* Incremented whenever a page or CLUT changes cache slot (s_PageMap/s_ClutMap entries set or
  * dropped): tex_state's memo of TEX0/TEXCLUT values is then stale. */
 static u32  s_TexGen = 1;
@@ -831,7 +834,7 @@ static void init(void)
 
 static u64x dimx(void)
 {
-    static u64x cached;
+    static SPR u64x cached;
     static int  ready;
     if (ready)
     {
@@ -929,7 +932,7 @@ static void tex_state(const Prim* p) __attribute__((noinline));
 static u64x prim_state(const Prim* p)
 {
     static u32  memoEpoch = ~0u, memoGen = ~0u, memoKey = ~0u;
-    static u64x memoPrim;
+    static SPR u64x memoPrim;
     u32         key;
 
     SCANMSK_CHECK();
@@ -989,7 +992,7 @@ static void tex_state(const Prim* p)
         u32  key, gen;
         s32  slot, row; /* page cache slot and CLUT row (4/8-bit pages) */
         u64x tex0, texclut;
-    } memo[64];
+    } memo[64] SPR;
     u32  depth = (p->tpage >> 7) & 3;
     u32  clut  = depth >= 2 ? 0 : p->clut & 0xFFFF;
     u32  key   = (p->tpage & 0x19F) | (clut << 9) | (p->raw << 25);
@@ -1133,8 +1136,8 @@ static u64x vertex_regs(int textured, int n, int* nreg)
 /** A primitive (PRIM + n vertices) as one REGLIST loop. */
 static void emit(const Prim* p, u64x prim, const Vtx* const* v, int n)
 {
-    static u64x regsTab[2][5];
-    static int  nregTab[2][5];
+    static SPR u64x regsTab[2][5];
+    static SPR int  nregTab[2][5];
     u64x*       q;
     u32         a = p->textured ? 0x80 : 0;
     int         i;
@@ -1194,8 +1197,8 @@ static void quantize(Vtx* v, s32 n)
 /** One REGLIST loop of PRIM and `nv` vertices from packed register values. */
 static void emit_packed(int textured, u64x prim, const u64x* rgbaq, const u64x* uv, const u64x* xyz, int nv)
 {
-    static u64x regsTab[2][5];
-    static int  nregTab[2][5];
+    static SPR u64x regsTab[2][5];
+    static SPR int  nregTab[2][5];
     u64x*       q;
     int         i;
     if (!nregTab[textured][nv])
@@ -1268,8 +1271,8 @@ static void emit_poly(int textured, u64x prim, const u64x* rgbaq, const u64x* uv
 /** Space in the packet for one quad strip (PRIM and 4 vertices: RGBAQ, [UV], XYZ2). */
 static inline u64x* quad_loop(int textured)
 {
-    static u64x regs[2];
-    static int  nreg[2];
+    static SPR u64x regs[2];
+    static SPR int  nreg[2];
     if (!nreg[textured])
     {
         regs[textured] = vertex_regs(textured, 4, &nreg[textured]);
@@ -2108,8 +2111,8 @@ static void settings(u32 w)
  * or reads the GS (pend_flush in the other entry points) draws a held quad first. SH_PORT_FOG_TEST
  * (SH1_FOG_TEST=1) instead drops the underlay: a wrong picture, measuring the most a fog collapse
  * could save. */
-static u32 s_FogPend[8];
-static s32 s_FogPending;
+static SPR u32 s_FogPend[8];
+static SPR s32 s_FogPending;
 
 static int fog_pair(const u32* w, s32 n)
 {
