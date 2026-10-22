@@ -29908,3 +29908,86 @@ It's in. Now the synthetic test (DuckStation already captured) and the demo repl
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
 
+## Claude
+
+The PS1's average, subtract and quarter-add blend modes (0, 2 and 3) now come out exact on the PS2, except for the gouraud colour rounding we accepted. It's committed as 158533092, and `build/port/sh1_ps2.iso` is a fresh 60 fps console build.
+
+**How it works:** for a polygon in one of those modes:
+1. Its texels that aren't semi-transparent are drawn straight to the frame, as before.
+2. The semi-transparent part is drawn into a small scratch area of video memory, dithered down to 5 bits exactly as the PS1 does.
+3. That's blended onto the frame. Because the colour is already in exact 5-bit steps, the PS2's 8-bit blend now gives the PS1's result in all four modes.
+
+The scratch area is one slot taken from the texture cache (36 slots left instead of 37). The additive mode, which the fog and the flashlight flare use, keeps its current path.
+
+**Two details the test caught:**
+- **Quads:** the PS1 draws a quad as two triangles and blends any overlap twice. These quads now go one triangle at a time, restoring the polygon's texture in between.
+- **Bit 15:** the PS1 doesn't set bit 15 for untextured semi-transparent polygons, so the composite leaves it clear for those.
+
+**Results:**
+- Synthetic test: **4,894 → 1,461** differing pixels. What's left is the accepted gouraud rounding plus a few single edge texels.
+- Game frames, no regressions: the Infirmary frame went 1,248 → 1,171 and the walking test 784 → 766. Demo 1 is unchanged, since its frames contain no mode 0, 2 or 3 primitives.
+
+**Limits:**
+- The new path is off with the 2× resolution or 32-bit colour options, for fog pairs, and for polygons whose clipped area is larger than 256×128. Those keep the old path.
+- Each of these polygons now takes three draws instead of one. These modes are rare in the demo and Infirmary frames I captured (about 70 subtract-mode primitives, none in modes 0 or 3), so the cost should be small. I haven't measured it on hardware.
+
+## User
+
+Show me a comparison screenshot from the most recent tests
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/comparison.png
+
+- tool `ToolSearch`: 
+
+- tool `SendUserFile`: 
+
+## Claude
+
+Here's the comparison image, from the two most recent tests. Each row shows DuckStation (the PS1 reference), the port in PCSX2 drawing the same GPU commands, and a map with the differing pixels in white.
+
+- **Infirmary, top row:** 1,171 of 71,680 pixels differ (1.6%). The flare is dithered like DuckStation's and there's no rectangle in front of Harry. Most of the white dots are scattered single pixels, which is the accepted gouraud colour rounding, one level each. The denser streak down Harry's side is pixels at his edges where adjacent polygons meet.
+- **Walk test, bottom row:** 766 pixels differ (1.1%), again mostly isolated one-level pixels over the lit wall. The arc of dots around Harry's head is texels along polygon edges.
+
+These replays isolate the renderer, so they don't include differences in game timing or logic. The file is at `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/comparison.png`.
+
+## User
+
+Does the dithering show any differences? I can’t really see any notable differences with the naked eye.
+
+## Claude
+
+I'll check numerically: if the dithering differed, the differences would cluster in particular positions of the 4×4 dither pattern, or the dither pattern itself would be shifted. I'll break the differing pixels down by pattern position and direction for both frames.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import struct ld=lambda p: struct.unpack('<524288H',open(p,'rb').read()) M=[[-4,0,-3,1],[2,-2,
+
+## Claude
+
+No. The dithering matches DuckStation; the numbers agree with what you see.
+
+I split the differing pixels by their position in the PS1's 4×4 dither pattern (the eight dither values, −4 to +3):
+
+| | Pixels differing, by dither value | Average change |
+|---|---|---|
+| Infirmary | 0.8%–2.0% | under 0.01 of a level |
+| Walk test | 0.8%–1.6% | under 0.005 of a level |
+
+If the dithering were wrong, the differences would pile up in particular cells or in one direction: the earlier rectangle bug showed up as the negative cells being about 0.2 of a level darker. Here they're spread almost evenly across the pattern, and the average change is close to zero. So the pattern is aligned and applied the same way as on the PS1.
+
+What remains is the gouraud colour rounding we accepted: isolated pixels one level (out of 32) darker, scattered over gradients. That's why you can't see it.
+
+## User
+
+Alright, commit the latest changes and update the docs if they’re not already updated. What are some next steps we can take?
+
+## Claude
+
+I'll check what's uncommitted and whether the docs already cover today's tools and fixes.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git status --short; grep -n "gpu_test\|--replay\|--state\|--ps1-holds\|--load\|--walk\|compare_frames" "Running 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 265,290p "Planning Doc.md"; cat docs/ToFix.md | head -53
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='Planning Doc.md'; s=open(p).read() s=s.replace("""- [ ] Renderer rounding: display pixels m
+

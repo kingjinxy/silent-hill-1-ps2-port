@@ -274,9 +274,11 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [ ] Overlay .data/.bss reset on reload (code in place, off: breaks the second demo)
 - [x] Frame comparison tool vs DuckStation (`tools/port/compare_frames.py`): same demo frame, display + VRAM + GP0 stream + game state
 - [x] First attract demo in sync with the PS1 (Harry's run animation froze: `variableFunc` called without its model argument)
-- [ ] Renderer rounding: display pixels mostly +-1/31 off DuckStation's software renderer (identical GP0 streams)
+- [x] Renderer rounding (2026-10-22): texture coordinates rounded as the PS1's (half a texel), semi-transparency dithered as the PS1 (filtered CLUTs, second pass for the mask bit), blend modes 0/2/3 exact (scratch-area composite). Synthetic test (`tools/port/gpu_test.py`) 20205 -> 1461 differing pixels; demo 1 frames 19937 -> 9032
+- [ ] Gouraud colour rounding: the PS1 rounds interpolated colours, the GS truncates (one level darker on ~10% of gouraud pixels, mostly the ground fog). Accepted for now: no exact GS method (see docs/ToFix.md)
 - [ ] Crash in the second attract demo (map2_s00 again, ~7 s in; world chunk streaming, `WorldMap_CollisionDataGet`): timing dependent
-- [ ] Flashlight lighting / player textures: re-check once the above are done
+- [x] Flashlight lighting / player textures (2026-10-21/22): Harry's colours wrong on some body parts (batched NCT's last triple stored at the wrong index), the checkered rectangle in front of Harry (GS dithered after blending), the darker lens flare; all fixed, checked against DuckStation from the Infirmary save (`compare_frames.py --load 2,10 [--walk]`)
+- [x] All five attract demos in sync with the PS1 (2026-10-22): `func_80080540` (inline asm only correct with the PS1 compiler's registers: Air Screamers aimed wrongly); with the PS1's load timing (`--state 0:100000 --ps1-holds`, a test option) every game-state field matches at every step but music fade volumes
 - [ ] GS renderer gaps: rectangle flips, wrapping VRAM copies, 24-bit display (FMV)
 - [ ] GS hardware renderer (speed), checked against gpu_soft.c
 

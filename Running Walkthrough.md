@@ -1458,3 +1458,21 @@ Progress, intro frames 100/300/600/900, share of channel values identical:
 - **Test runs:** a `movies` line in host:demo.txt starts the same run once the main menu is up, with a log line per movie ("movie test: N of 21 ... played to frame F of F").
 - **First attempt:** title.c's Demo list code only read the menu when no remote request was pending, tested as `chosen < 0`, which also swallowed the new request value (-3).
 - **PCSX2:** all 21 play to their frame limits with no dropped frames.
+
+## Matching DuckStation pixel for pixel: lighting, demos, renderer (2026-10-21/22)
+
+New comparison tools, all against DuckStation's software renderer:
+- `compare_frames.py --demo N` (any of the five attract demos; DuckStation only stops once the wanted demo starts), `--load F,D` (a save through Load Game: file F, Data D on card 1; logos and intro movie skipped), `--walk` (with --load: turn 90 degrees right, walk 1.5 s), `--mode N` (Debug Options rendering bits).
+- `--replay`: DuckStation's GP0 packets drawn by the port's GS renderer from DuckStation's VRAM, so only the renderer differs.
+- `--state A:B [--globals ...] [--ps1-holds]`: the game state (g_SysWork, g_GameWork, RNG seed, delta time, any globals) at every demo step on both sides, with a per-field summary; --ps1-holds gives the port's demo playback the PS1's load timing.
+- `tools/port/gpu_test.py`: the same VRAM and packets drawn on both (81 primitive configurations in cells); `--uv` decodes the texel each pixel sampled; `--dark` keeps vertex colours at 0-127.
+
+Bugs found and fixed:
+- **Brightness 0** in the PCSX2 card's saved options made the port look darker than DuckStation (not a code bug).
+- **Checkered rectangle in front of Harry** (also in the PS2's PS1 mode): the flashlight draws an additive black quad; the PS1 dithers a polygon's colour before blending (clamped at 0), the GS the blended result, so the negative dither cells lost a level. Faint primitives are now undithered; dithered 4/8-bit textures in the adding/subtracting modes use a filtered CLUT (texels too faint to add anything left out, faint channels raised to exactly 4) and a second, undithered pass writes the left-out texels' mask bit. CLUT rows are never refiltered in place (PCSX2 read the row after its replacement's upload). The flare is dithered like DuckStation's, within 0.7%.
+- **Harry's jacket and pants lit wrongly**: `func_8005AA08`'s batched NCT stored its last triple at `field_21C[arg1 + triples - 1]` instead of `+ (triples - 1) * 3` (one colour per normal); check builds never ran that line.
+- **Attract demo desyncs**: `func_80080540` was PS1 inline asm that relied on the PS1 compiler's register allocation; on the EE it lost x * x and squared an unset register, so Air Screamers aimed differently. Now C. All five demos match the PS1's game state at every step (with --ps1-holds).
+- **Texture coordinates**: the PS1 rounds interpolated UVs (DuckStation starts every attribute half a unit up), the GS truncates; polygon UVs now carry half a texel. Synthetic test 20205 -> 4894 differing pixels, demo frames about halved.
+- **Blend modes 0, 2, 3**: the source is drawn into a scratch area (the last page cache slot) dithered as the PS1, then composited, which makes the GS's 8-bit blend the PS1's 5-bit one; quads triangle by triangle. Synthetic test 4894 -> 1461.
+
+Left: gouraud colour rounding (accepted; docs/ToFix.md). Replays now differ from DuckStation by ~1-2% of pixels, scattered single-level differences with no dither-pattern bias.

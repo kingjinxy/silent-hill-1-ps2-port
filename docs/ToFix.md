@@ -40,11 +40,24 @@ Known issues, tabled for now (collected 2026-10-19, mostly from the console cuts
 - **Text corrupted by toggling Resolution on hardware: fix not yet verified.**
   - Seen on 2026-10-18: text got worse with each toggle.
   - Fixed since: dirty-tile tracking and mid-texel sampling in the scale blits. Not yet confirmed on hardware.
+- **Gouraud colour rounding (accepted 2026-10-22).**
+  - The PS1 interpolates colours from half a unit up (rounds them); the GS truncates. One level (of 32) darker on ~10% of gouraud pixels, mostly the ground fog (textured gouraud, additive). Not visible by eye.
+  - Tried: vertex colours as 2c + 1 halved by the blend (exact for untextured gouraud, close for textured), but the GS clamps the modulated colour to 255 before the blend, so only colours up to 63 qualify: ~50 pixels a frame gained, not kept. Exact options left: untextured gouraud through a constant texel; textured gouraud only by rasterising off the GS (VU1/EE).
+- **Exact blending (modes 0, 2, 3) not measured on hardware.**
+  - Each such polygon costs three draws (opaque texels, the scratch area, the composite). Rare in the game frames captured so far (~70 subtract-mode polygons, no average or quarter-add); measure if a scene uses them heavily.
+  - Not used with the 2x or 32-bit shadow buffer, for fog pairs, or past a 256x128 box: those keep the 1-2 level differences.
+- **Filtered CLUT cost not measured on hardware.**
+  - The flare's filtered CLUTs read the CLUT back from the GS once per CLUT, then refilter and upload 16 entries per new sprite colour, and each filtered polygon is drawn twice (the mask-bit pass).
 - **2x prototype limits.**
   - Lines stay 1 pixel wide.
   - A clip area straddling the 2x area's edge is drawn at 1x (logged "hires: clip area ... straddles").
   - Feedback effects reading a 32-bit shadow buffer lose the mask (semi-transparency) bit.
   - The credits weren't covered by the screen-read inventory.
+
+## Testing
+
+- **The PCSX2 memory card's options have brightness 0** (the default is 3): the port auto-loads them at boot, so test runs from it are darker than a fresh DuckStation run. DuckStation's card 1 now holds the same PS1 card image (backup: shared_card_1.mcd.empty_backup).
+- **Attract demos need the PS1's load timing to stay exactly in sync**: the port's chunk loads finish faster (demo 4: 17 vs 33 frames at step 881) and Harry's animation runs on meanwhile. `compare_frames.py --ps1-holds` reproduces the PS1's timing for comparisons only.
 
 ## Options / UI
 
