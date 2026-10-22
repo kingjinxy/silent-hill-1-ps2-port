@@ -522,3 +522,9 @@ Plan, in order:
 - `MATCH_REG("reg")` (include/decomp/port.h): `asm(reg)` in the matching build, nothing in the port. Used for the 6 pinned locals in combat_8008A058.c, item_screens_3.c and puppet_nurse.c (included by 4 maps); each is set before it's read. memcpy.c's are compiled out of the port (it uses libc's memcpy).
 - Check: Kaufmann (bench_cutscene.sh 4) 10 of 10 dumps identical to the build before; attract demo 0 (bench_frames.sh) 10 of 10 identical with and without the change.
 - Left from the PS1: the recompiled libraries (step 2) and data (not planned).
+
+### 2026-10-22: PS1 library code in C: libkmath, libgte, libgpu packet builders (kept)
+- Konami's libkmath (src/port/libkmath_port.c, 8 functions), Sony's libgte (libgte_port.c, 75 functions; tables in libgte_tables.c) and libgpu's packet builders (libgpu_packets.c, 17 functions, with `GEnv`) replace their recompiled versions. Each makes the original's GTE register accesses, commands and stores in its order. tools/port/lib_test checks 95 functions against the PS1 originals in DuckStation (returns, memory, every GTE register): no differences. Recompiled code that calls them goes through generated bridges.
+- Not exact in one case: normalising a zero vector, where the PS1 reads 128 bytes before its table (only IR0 can differ).
+- Speed, attract demos 0-4 in PCSX2 (benchmark build, frames per vertical blank), b95f79e03 against 69e9212cd: 34.55 → 34.76, 64.49 → 65.07, 79.06 → 80.00, 145.58 → 147.53, 200.61 → 209.84 fps (+0.6% to +4.6%, more in light scenes where per-frame library calls weigh more). PCSX2 doesn't model the caches; hardware may differ.
+- Still recompiled: 31 functions (libgs display/OT/lighting/coordinates/model drawing, libgte GsTMDfast*LFG, libgpu tmd.o).
