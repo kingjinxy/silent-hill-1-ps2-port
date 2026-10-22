@@ -29708,3 +29708,45 @@ Once the all-demos run finishes, I'll commit this and start on the renderer exac
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
 
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -hn "^LoadImage \|^DrawOTag \|^StoreImage \|^DrawSync \|^ClearImage " configs/USA/sym.*.txt
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/gpu_test.py
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/gdb/gpu_test_ps1.py
+
+## Claude
+
+Both scripts are written. I'll run the test: DuckStation first, then the port.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; time python3 tools/port/gpu_test.py 2>&1 | tail -125
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/gt_ps1.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad/gt_ps2.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='tools/port/gpu_test.py'; s=open(p).read() s=s.replace('''    python3 tools/port/gpu_test.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "uv\[i\]" src/port/ps2/gpu_gs.c | head; sed -n 1428,1445p src/port/ps2/gpu_gs.c
+
+## Claude
+
+I'll add the half-texel bias where polygon UVs are built. With hires textures the UV is doubled afterwards, which doubles the bias too, still half an original texel.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() old="""            uv[i] = (u64x)((t & 0xFF) << 4)
+
+## Claude
+
+Texture sampling is now essentially exact: only 1–2 pixels per cell differ, out of hundreds. Next I'll re-run the general test to see how much of the textured difference that removed.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 tools/port/gpu_test.py 2>&1 | awk '{print substr($0,1,95)}' | sed -n 4,90p
+
+- tool `ToolSearch`: 
+
+- tool `WebFetch`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
+

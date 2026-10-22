@@ -1430,7 +1430,10 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
             srV0 = ((t >> 8) & 0xFF) < srV0 ? ((t >> 8) & 0xFF) : srV0;
             srV1 = ((t >> 8) & 0xFF) > srV1 ? ((t >> 8) & 0xFF) : srV1;
 #endif
-            uv[i] = (u64x)((t & 0xFF) << 4) | ((u64x)(((t >> 8) & 0xFF) << 4) << 16);
+            /* + half a texel: the PS1 rounds its interpolated texture coordinates to the nearest texel,
+             * the GS truncates (the same texels at 1:1 and magnified; minified or rotated, the GS
+             * otherwise took the texel before half the time: gpu_test.py --uv). */
+            uv[i] = (u64x)(((t & 0xFF) << 4) + 8) | ((u64x)((((t >> 8) & 0xFF) << 4) + 8) << 16);
             if (i == 0) clut = t >> 16;
             if (i == 1) tpage = (s_TexPage & ~0x1FFu) | ((t >> 16) & 0x1FF);
         }
