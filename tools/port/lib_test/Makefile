@@ -56,17 +56,16 @@ librecomp_ee.a: $(RECOMP_C) $(wildcard $(RECOMP)/bridge_*.c)
 	done
 	$(PS2DEV)/ee/bin/mips64r5900el-ps2-elf-ar rcs $@ ee_objs/*.o
 
-# libkmath: the port's C version (src/port/libkmath_port.c), built as the game's port C is.
-KMATH_C := $(ROOT)/src/port/libkmath_port.c $(ROOT)/src/port/libkmath_table.c
-libkmath_port.o: $(KMATH_C)
-	$(CC_EE) -O2 -G0 -std=gnu89 -nostdinc -I$(ROOT)/include -I$(ROOT)/include/psyq -I$(ROOT)/include/decomp -Wa,-I$(ROOT)/include -D_LANGUAGE_C -DVER_USA -DSH_PORT \
-		-DNON_MATCHING -c $(ROOT)/src/port/libkmath_port.c -o libkmath_port.o
-	$(CC_EE) -O2 -G0 -std=gnu89 -nostdinc -I$(ROOT)/include -I$(ROOT)/include/psyq -I$(ROOT)/include/decomp -Wa,-I$(ROOT)/include -D_LANGUAGE_C -DVER_USA -DSH_PORT \
-		-DNON_MATCHING -c $(ROOT)/src/port/libkmath_table.c -o libkmath_table.o
+# The port's C libraries (src/port/libkmath_*.c, libgte_*.c), built as the game's port C is.
+PORT_LIB_C := libkmath_port libkmath_table libgte_port libgte_tables
+PORT_LIB_O := $(addsuffix .o,$(PORT_LIB_C))
+$(PORT_LIB_O): %.o: $(ROOT)/src/port/%.c
+	$(CC_EE) -O2 -G0 -std=gnu89 -nostdinc -I$(ROOT)/include -I$(ROOT)/include/psyq -I$(ROOT)/include/decomp -Wa,-I$(ROOT)/include \
+		-D_LANGUAGE_C -DVER_USA -DSH_PORT -DNON_MATCHING -c $< -o $@
 
-lib_test_ee.elf: lib_test.c lib_tests.h ps1_results.o librecomp_ee.a libkmath_port.o
+lib_test_ee.elf: lib_test.c lib_tests.h ps1_results.o librecomp_ee.a $(PORT_LIB_O)
 	$(CC_EE) $(CFLAGS_EE) -T$(PS2SDK)/ee/startup/linkfile -L$(PS2SDK)/ee/lib -Wl,-zmax-page-size=128 -o $@ \
-		lib_test.c ps1_results.o libkmath_port.o libkmath_table.o $(ROOT)/src/port/gte.c $(ROOT)/src/port/libgte_port.c $(ROOT)/src/port/recomp_rt.c \
+		lib_test.c ps1_results.o $(PORT_LIB_O) $(ROOT)/src/port/gte.c $(ROOT)/src/port/recomp_rt.c \
 		-Wl,--start-group librecomp_ee.a -Wl,--end-group
 
 clean:
