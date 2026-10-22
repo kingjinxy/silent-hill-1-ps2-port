@@ -681,6 +681,8 @@ typedef struct
     u16 raw[256] __attribute__((aligned(16)));
 } FiltSlot;
 static FiltSlot s_Filt[FILT_ROWS];
+static u32      s_FiltDrawn; /* the polygon just drawn used a filtered CLUT */
+static u32      s_FiltPass2; /* drawing its second pass (the left-out texels) */
 
 static u32 filt_get(u32 clut, u32 depth, u32 filt)
 {
@@ -696,29 +698,38 @@ static u32 filt_get(u32 clut, u32 depth, u32 filt)
             return (u32)(FILT_ROW0 + i);
         }
     }
-    for (i = 0; i < FILT_ROWS; i++) /* the same CLUT with another colour: its copy, filtered again */
+    /* A new filtered row goes to the least recently used slot, never over one just drawn with (the GS
+     * reads a CLUT row after the upload that would replace it: measured). The CLUT as read from VRAM
+     * comes from a slot holding the same CLUT if there is one (no readback). */
+    for (i = 0; i < FILT_ROWS; i++)
     {
-        if (s_Filt[i].key == key)
+        if (s_Filt[i].key < 0)
         {
             best = i;
             break;
         }
+        if (best < 0 || s_Filt[i].used < s_Filt[best].used)
+        {
+            best = i;
+        }
     }
-    if (best < 0)
+    for (i = 0; i < FILT_ROWS; i++)
+    {
+        if (s_Filt[i].key == key)
+        {
+            break;
+        }
+    }
+    if (i < FILT_ROWS)
+    {
+        if (i != best)
+        {
+            memcpy(s_Filt[best].raw, s_Filt[i].raw, sizeof(s_Filt[best].raw));
+        }
+    }
+    else
     {
         s32 x = (s32)(clut & 0x3F) * 16, y = (s32)((clut >> 6) & 0x1FF);
-        for (i = 0; i < FILT_ROWS; i++)
-        {
-            if (s_Filt[i].key < 0)
-            {
-                best = i;
-                break;
-            }
-            if (best < 0 || s_Filt[i].used < s_Filt[best].used)
-            {
-                best = i;
-            }
-        }
         if (x + n <= VRAM_W)
         {
             download_rect(x, y, n, 1, s_Filt[best].raw, n);
@@ -751,7 +762,14 @@ static u32 filt_get(u32 clut, u32 depth, u32 filt)
                 }
             }
         }
-        row[k] = keep ? (u16)out : 0;
+        if (filt & (1u << 27))
+        {
+            row[k] = (!keep && (t & 0x8000)) ? 0x8000 : 0; /* second pass: what the first left out, black */
+        }
+        else
+        {
+            row[k] = keep ? (u16)out : 0;
+        }
     }
     upload(CLUT_ADDR / 256, 4, PSM_CT16, 0, FILT_ROW0 + best, n, 1, row, (u32)(n * 2));
     s_Filt[best].key   = key;
@@ -1507,6 +1525,15 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
                 ((rgb[i] & 0xFF0000) > (m & 0xFF0000) ? rgb[i] & 0xFF0000 : m & 0xFF0000);
         }
         p.filt = m | ((u32)(p.semiMode == 3) << 24) | (1u << 25); /* bit 25: never 0 */
+        if (s_FiltPass2)
+        {
+            p.dither = 0;
+            p.filt |= 1u << 27; /* the complement: only the left-out texels, black (polygon()) */
+        }
+        else
+        {
+            s_FiltDrawn = 1;
+        }
     }
     if (!textured && !gouraud && !p.dither)
     {
@@ -1602,8 +1629,7 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
     return (u32)k;
 }
 
-static u32 polygon(const u32* w, s32 n, const u32* under) __attribute__((noinline));
-static u32 polygon(const u32* w, s32 n, const u32* under)
+static u32 polygon_sw(const u32* w, s32 n, const u32* under)
 {
     switch ((w[0] >> 24) & 0x1C)
     {
@@ -1616,6 +1642,24 @@ static u32 polygon(const u32* w, s32 n, const u32* under)
         case 0x18: return polygon_t(w, n, under, 0x18);
         default:   return polygon_t(w, n, under, 0x1C);
     }
+}
+
+/** A GP0 polygon. One drawn with a filtered CLUT (filt_get) is drawn again, undithered, with the
+ * texels the filter left out as black semi-transparent ones: they add nothing, as on the PS1, but
+ * the pixels are written (their mask bit, bit 15, set from the texel as the PS1 does). */
+static u32 polygon(const u32* w, s32 n, const u32* under) __attribute__((noinline));
+static u32 polygon(const u32* w, s32 n, const u32* under)
+{
+    u32 r;
+    s_FiltDrawn = 0;
+    r           = polygon_sw(w, n, under);
+    if (s_FiltDrawn)
+    {
+        s_FiltPass2 = 1;
+        polygon_sw(w, n, NULL);
+        s_FiltPass2 = 0;
+    }
+    return r;
 }
 
 static u32 rectangle(const u32* w, s32 n)

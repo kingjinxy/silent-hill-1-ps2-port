@@ -29750,3 +29750,70 @@ Texture sampling is now essentially exact: only 1–2 pixels per cell differ, ou
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
 
+## Claude
+
+I fixed the biggest renderer difference, texture-coordinate rounding. That roughly halved the differing pixels in real demo frames. It's committed as a12500eae, and `build/port/sh1_ps2.iso` is a fresh 60 fps console build.
+
+**The new test:** `tools/port/gpu_test.py` draws the same VRAM and GPU commands on DuckStation (through the game's own `LoadImage`/`DrawOTag`/`StoreImage`) and on the port's GS renderer, then compares them in 81 cells, one primitive type per cell. `--uv` decodes exactly which texel each pixel sampled. A run takes seconds.
+
+**What it found:**
+- **Texture coordinates (fixed):** the PS1 rounds them to the nearest texel; the GS truncated them. DuckStation's source confirms the PS1 starts every interpolated value half a unit up. Minified or rotated textures were sampling the previous texel about half the time. Polygon UVs now include the half-texel offset.
+  - Synthetic test: 20,205 → 4,894 differing pixels.
+  - Demo 1 frames replayed from DuckStation's commands: 19,937 → 9,299 at step 100, and 22,700 → 10,138 at step 300.
+- **Exact already:** rectangles and sprites, flat polygons, and raw textures.
+
+**What's left, and why it's harder:**
+1. **Gouraud colour rounding:** the port is one level darker on about 10% of gouraud pixels. This is now the bulk of what remains. The PS1 rounds colours the same way it rounds UVs, but GS vertex colours are whole 8-bit values with no fractional part, so the half-unit can't be passed in. Getting it exact would need a workaround: drawing gouraud polygons as textured, a CPU-drawn path, or accepting a statistical bias.
+2. **Subtract and quarter-add blending:** 1–2 level errors, because the PS1 dithers and then blends in 5-bit while the GS blends in 8-bit and then dithers.
+3. **Mask bit:** the flare filter leaves bit 15 unset on the faint texels it skips (about 3,000 pixels in demo 1). It's invisible unless something tests the mask. It could be fixed exactly with a second, undithered pass that only writes those texels.
+
+- tool `AskUserQuestion`: 
+
+## Claude
+
+I'll stop here. Everything above is committed, with the UV fix in a12500eae and the console ISO up to date. When you want to continue, the three remaining renderer differences are listed above, with the gouraud colour rounding being by far the largest.
+
+## User
+
+[Request interrupted by user]
+
+## User
+
+Ask me the questions again
+
+- tool `AskUserQuestion`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk 'NR>=1395 && NR<=1660' src/port/ps2/gpu_gs.c | grep -n "return\|^static\|^}\|polygon_t\|LP_END(LP_POLY_EMIT)
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() # polygon dispatcher old="""static u32 polygon(con
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "p.filt = m" -A2 src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() old="""static u32 polygon(const u32* w, s32 n, con
+
+- tool `Read`: /home/alex/Documents/silent-hill-1-ps2-port/build/port/cap/cmpr_100_display.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^void GpuGs_Commands" -A60 src/port/ps2/gpu_gs.c | grep -n "under\|pend\|polygon(" | head -20; grep -n 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1975,2045p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|            row\[k\] = (!keep \&\& (t \& 0x8000)) ? 0x8000 : 0; /\* second pass: what the first left o
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^static void upload_staged_impl" -A25 src/port/ps2/gpu_gs.c | head -30
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|    if (s_FiltDrawn)$|    if (0 \&\& s_FiltDrawn) /* TMPTEST2 */|' src/port/ps2/gpu_gs.c; grep -n "TMP
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|    if (0 \&\& s_FiltDrawn) /\* TMPTEST2 \*/|    if (s_FiltDrawn)|' src/port/ps2/gpu_gs.c; python3 - <
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='src/port/ps2/gpu_gs.c'; s=open(p).read() s=s.replace("            row[k] = 0; /* TMPTEST */
+
+## Claude
+
+The LRU choice keeps a re-used row at least 8 primitives away from its last use, so it should be safe. I'll build and measure the replay and the flare.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1; unset SH1_FPS; (python3 tools/port/port_link.py > build/port/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_NO_RECOMP=1 SH1_FPS=60; (bash tools/port/ee_compile_check.sh > build/port/
+
