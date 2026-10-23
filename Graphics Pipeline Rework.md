@@ -63,7 +63,11 @@ Done:
 
 Exactness for these: `gpu_test.py` identical; the 7 DuckStation captures replayed through the renderer (`compare_frames.py --replay`, timing-independent) byte-identical VRAM to HEAD's; attract demo 0 dumps identical.
 
-Left: the mesh-path bypass (parse ~600k + PS1 packet building ~340k a frame in Kaufmann), and cheaper `blend_exact` packets.
+- [x] Exact blending, one pass per quad: a quad whose triangles (0,1,2) and (1,2,3) lie strictly on either side of their shared edge (`quad_split`) goes through `blend_exact` once over its whole box instead of once per triangle (each pixel belongs to one triangle under both the PS1's and the GS's top-left fill, so it's blended once either way). Quads that fold over keep the per-triangle path. Kaufmann: blend exact 755 → **313** k-cycles a frame, DrawOTag 3,745 → **3,319** (−11%). Same checks, all identical.
+
+Left: the mesh-path bypass (parse ~600k + PS1 packet building ~340k a frame in Kaufmann), better done with step 5's packet format.
+
+Console estimate for Kaufmann-like scenes (exact blending, filtered CLUTs): DrawOTag 8.2M → 3.3M cycles in PCSX2 over today's changes; at ~2.3x, and more for the readbacks and uploads removed, these scenes should gain the most on the console.
 
 ### 4. GTE maths on MMI
 Batched transforms, point light dot products and colour maths with 128-bit integer SIMD (`PMULTH`/`PMADDH`), with a range guard falling back to the C path so results and flags stay exact.
@@ -90,3 +94,4 @@ So the filtered CLUTs (2026-10-22) had more than doubled Kaufmann's DrawOTag (it
 - 2026-10-23: step 2 done (small uploads inline in the packet stream), console test pending.
 - 2026-10-23: filtered CLUT caches enlarged (Kaufmann readbacks 16 → 0 a frame). Kaufmann dumps shown to depend on build speed.
 - 2026-10-23: step 3 re-scoped after measuring; per-kind state memo (−2% DrawOTag in Kaufmann).
+- 2026-10-23: exact blending once per quad (−11% DrawOTag in Kaufmann). Next: step 4 (GTE on MMI).

@@ -1681,6 +1681,16 @@ static int blend_exact_box(const s32* x, const s32* y, s32 nv, s32* bx, s32* by,
     return *bw <= BX_W && *bh <= BX_H;
 }
 
+/** Whether a quad's triangles (0, 1, 2) and (1, 2, 3) lie strictly on either side of their shared
+ * edge 1-2 (vertices 0 and 3 on opposite sides of it): then no pixel is in both. */
+static int quad_split(const s32* x, const s32* y)
+{
+    s32 ex = x[2] - x[1], ey = y[2] - y[1];
+    s32 c0 = ex * (y[0] - y[1]) - ey * (x[0] - x[1]);
+    s32 c3 = ex * (y[3] - y[1]) - ey * (x[3] - x[1]);
+    return (c0 < 0 && c3 > 0) || (c0 > 0 && c3 < 0);
+}
+
 static void blend_exact(const Prim* p, u64x prim, const u64x* rgbaq, const u64x* uv, const u64x* xyz, const s32* x,
                         const s32* y, s32 nv, s32 bx, s32 by, s32 bw, s32 bh)
 {
@@ -1907,9 +1917,12 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
             rgbaq[i] = (u64x)(rgb[i] & colorMask) | a;
             xyz[i]   = (u64x)(HR_X(x[i]) << 4 & 0xFFFF) | ((u64x)(HR_Y(y[i]) << 4 & 0xFFFF) << 16);
         }
-        if (nv == 3)
+        if (nv == 3 || quad_split(x, y))
         {
-            blend_exact(&p, prim, rgbaq, uv, xyz, x, y, 3, bxx, byy, bww, bhh);
+            /* A triangle, or a quad whose two triangles don't overlap: one pass over the whole box.
+             * Each pixel belongs to one triangle (both the PS1 and the GS fill top-left), so it's
+             * blended once either way. */
+            blend_exact(&p, prim, rgbaq, uv, xyz, x, y, nv, bxx, byy, bww, bhh);
         }
         else
         {
