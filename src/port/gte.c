@@ -7,6 +7,7 @@
 #define GTE_IMPLEMENTATION
 #include "port/gte.h"
 #include "port/spr.h"
+#include "port/prof.h"
 
 /* No <stdint.h>: the port build uses -nostdinc. int is 32-bit and long long 64-bit on both the EE
  * and the hosts this is tested on. */
@@ -1359,6 +1360,23 @@ void Gte_CmdDpcs(void)
     cmd_end();
 }
 
+/** Whether a 3x3 row-major matrix's rows dotted with any 16-bit vector stay within 32 bits: each
+ * row's absolute values sum to under 65536 (then |row . v| < 65536 * 32768 = 2^31). Rotation and
+ * light matrices are 1.3.12 fixed point (rows well under 3 * 4096 * 2). */
+static int rows_small(const s32* m, int rows)
+{
+    int i;
+    for (i = 0; i < rows; i++)
+    {
+        s32 a = m[i * 3], b = m[i * 3 + 1], d = m[i * 3 + 2];
+        if ((a < 0 ? -a : a) + (b < 0 ? -b : b) + (d < 0 ? -d : d) >= 65536)
+        {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /** RTPS's projection from MAC1-3 (sf = 1, lm = 0), as rtp_small without the registers and FLAG:
  * returns SX | SY << 16 and sets *szOut to SZ. (Gte_RtpBatch, Gte_RtpGrid.) */
 static inline u32 rtp_project(s64 m1, s64 m2, s64 m3, u32 h, s32 ofx, s32 ofy, s32* szOut)
@@ -1396,6 +1414,38 @@ static inline u32 rtp_project(s64 m1, s64 m2, s64 m3, u32 h, s32 ofx, s32 ofy, s
     return ((u32)sx & 0xFFFF) | ((u32)sy << 16);
 }
 
+/** rtp_project from MAC1-3 >> 12 already taken (32-bit: the batches' fast path). */
+static inline __attribute__((always_inline)) u32 rtp_project32(s32 ir1, s32 ir2, s32 z3, u32 h, s32 ofx, s32 ofy, s32* szOut,
+                                                                u32* nOut)
+{
+    s32 sz, sx, sy;
+    u32 n;
+    ir1 = ir1 < -0x8000 ? -0x8000 : ir1 > 0x7FFF ? 0x7FFF : ir1;
+    ir2 = ir2 < -0x8000 ? -0x8000 : ir2 > 0x7FFF ? 0x7FFF : ir2;
+    sz  = z3 < 0 ? 0 : z3 > 0xFFFF ? 0xFFFF : z3;
+    if (h < (u32)sz * 2)
+    {
+        u32 zz = clz32((u32)sz) - 16, nn = h << zz, dd = (u32)sz << zz, u;
+        u64 r;
+        u  = unr_table[(dd - 0x7FC0) >> 7] + 0x101;
+        dd = (0x2000080u - (dd * u)) >> 8;
+        dd = (0x0000080u + (dd * u)) >> 8;
+        r  = (((u64)nn * dd) + 0x8000) >> 16;
+        n  = r > 0x1FFFF ? 0x1FFFF : (u32)r;
+    }
+    else
+    {
+        n = 0x1FFFF;
+    }
+    *nOut = n;
+    sx = (s32)((mul32((s32)n, ir1) + ofx) >> 16);
+    sx = sx < -0x400 ? -0x400 : sx > 0x3FF ? 0x3FF : sx;
+    sy = (s32)((mul32((s32)n, ir2) + ofy) >> 16);
+    sy = sy < -0x400 ? -0x400 : sy > 0x3FF ? 0x3FF : sy;
+    *szOut = sz;
+    return ((u32)sx & 0xFFFF) | ((u32)sy << 16);
+}
+
 /** Batched RTPS (sf = 1, lm = 0) over `count` vertices, in place: xy[i] holds VX | VY << 16 and z[i]
  * VZ on entry, SX | SY << 16 and SZ on return, exactly as RTPS/RTPT would compute them with the
  * current matrices. GTE registers and FLAG are left untouched (callers run their last command
@@ -1420,6 +1470,29 @@ int Gte_RtpBatch(u32* xy, s16* z, int count)
     h   = c[C_H] & 0xFFFF;
     ofx = (s32)c[C_OFX];
     ofy = (s32)c[C_OFY];
+    {
+    LP_BEGIN(LP_RTP_BATCH)
+    if (rows_small(m_rt, 3))
+    {
+        /* MAC = TR << 12 + R.v with R.v within 32 bits (rows_small): MAC >> 12 = TR + (R.v >> 12)
+         * exactly, so the projection gets the same IR1/IR2/SZ from 32-bit arithmetic. TR is within
+         * +-2^30 (s_Small), so the sums don't overflow either. */
+        const s32 r0 = m_rt[0], r1 = m_rt[1], r2 = m_rt[2], r3 = m_rt[3], r4 = m_rt[4], r5 = m_rt[5], r6 = m_rt[6],
+                  r7 = m_rt[7], r8 = m_rt[8];
+        const s32 trx = (s32)c[C_TRX], try_ = (s32)c[C_TRY], trz = (s32)c[C_TRZ];
+        for (i = 0; i < count; i++)
+        {
+            s32 vx = (s16)xy[i], vy = (s16)(xy[i] >> 16), vz = z[i], sz;
+            s32 a1 = trx + ((r0 * vx + r1 * vy + r2 * vz) >> 12);
+            s32 a2 = try_ + ((r3 * vx + r4 * vy + r5 * vz) >> 12);
+            s32 a3 = trz + ((r6 * vx + r7 * vy + r8 * vz) >> 12);
+            u32 n;
+            xy[i] = rtp_project32(a1, a2, a3, h, ofx, ofy, &sz, &n);
+            z[i]  = (s16)sz;
+        }
+        i = count;
+    }
+    else
     for (i = 0; i < count; i++)
     {
         s32 vx = (s16)xy[i], vy = (s16)(xy[i] >> 16), vz = z[i];
@@ -1432,6 +1505,11 @@ int Gte_RtpBatch(u32* xy, s16* z, int count)
         }
         xy[i] = rtp_project(m1, m2, m3, h, ofx, ofy, &sz);
         z[i]  = (s16)sz;
+    }
+    LP_END(LP_RTP_BATCH);
+#ifdef SH_PORT_LITEPROF
+    g_LiteProf[LP_RTP_BATCH][1] += count - 1; /* calls = vertices */
+#endif
     }
     return 1;
 }

@@ -3082,7 +3082,7 @@ void GpuGs_Stats(u32 frames)
                                                      "mesh: packets", "light: collect", "light: batch", "light: apply",
                                                      "map fx (grid)", "map fx: batch", "particles: move",
                                                      "particles: draw", "snow: rtps", "emit: blend exact",
-                                                     "emit: fog pair" };
+                                                     "emit: fog pair", "gte: rtp batch" };
         for (a = 0; a < LP_COUNT; a++)
         {
             printf("liteprof: %-16s %5u kcycles %5u calls a frame\n", NAMES[a], g_LiteProf[a][0] / 1000 / frames,

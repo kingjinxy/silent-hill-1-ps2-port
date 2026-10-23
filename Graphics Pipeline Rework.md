@@ -69,8 +69,20 @@ Left: the mesh-path bypass (parse ~600k + PS1 packet building ~340k a frame in K
 
 Console estimate for Kaufmann-like scenes (exact blending, filtered CLUTs): DrawOTag 8.2M → 3.3M cycles in PCSX2 over today's changes; at ~2.3x, and more for the readbacks and uploads removed, these scenes should gain the most on the console.
 
-### 4. GTE maths on MMI
-Batched transforms, point light dot products and colour maths with 128-bit integer SIMD (`PMULTH`/`PMADDH`), with a range guard falling back to the C path so results and flags stay exact.
+### 4. GTE maths on MMI — done, much smaller than estimated
+Plan: batched transforms, point light dot products and colour maths with 128-bit integer SIMD (`PMULTH`/`PMADDH`), with a range guard falling back to the C path.
+
+What measuring showed (PCSX2, light counters, per frame):
+- The GTE batches matter in lit 3D scenes: CybilFightStart point light batch 1,042k (~260 cycles a vertex, ~4,000 vertices) and transform batch 650k (~166 a vertex), together more than its DrawOTag (1,610k). Kaufmann: transform batch 394k.
+- MMI doesn't fit: the dot products are ~20 of ~160 instructions a vertex; the rest is the projection (UNR divide, clamps, two more multiplies), which is scalar. MMI was already tried for the point light on 2026-10-17 (PHMADH with a 128-bit store and reload around it): slower. The compiled loops have no 64-bit library calls.
+
+Done instead:
+- [x] `Gte_RtpBatch` in 32-bit arithmetic when the rotation rows are small enough (`rows_small`: each row's absolute values sum under 65,536, so a row dotted with a 16-bit vector stays within 32 bits). (TR << 12 + R.v) >> 12 = TR + (R.v >> 12) exactly; the old 64-bit loop stays for other matrices. Transform batch −9% (Kaufmann 394 → 360, CybilFightStart 650 → 594 k-cycles).
+- [x] Tried, reverted: the same for the point light batch (slower: 1,042 → 1,144-1,201, probably register pressure in its longer loop).
+
+Exactness: the check build (`SH1_EXTRA_CFLAGS=-DSH_PORT_CHECK_BATCH`, every batch against the GTE per vertex) in Kaufmann and CybilFightStart: ~12M and ~3M batched vertices, 54,272 point-lit meshes, 0 mismatches; attract demo dumps and `gpu_test.py` identical.
+
+What's left in the GTE batches is mostly the projection's divide and clamps per vertex. The point light (~1M cycles a frame in CybilFightStart, flashlight scenes) is the largest single GTE cost; it needs a closer look at its three passes (collect, batch, apply) rather than SIMD.
 
 ### 5. VU1 packet expansion
 Compact primitive records expanded into GS packets by a VU1 microprogram (integer moves only, so exact): fog pairs, filtered two-pass polygons, sprites.
@@ -94,4 +106,5 @@ So the filtered CLUTs (2026-10-22) had more than doubled Kaufmann's DrawOTag (it
 - 2026-10-23: step 2 done (small uploads inline in the packet stream), console test pending.
 - 2026-10-23: filtered CLUT caches enlarged (Kaufmann readbacks 16 → 0 a frame). Kaufmann dumps shown to depend on build speed.
 - 2026-10-23: step 3 re-scoped after measuring; per-kind state memo (−2% DrawOTag in Kaufmann).
-- 2026-10-23: exact blending once per quad (−11% DrawOTag in Kaufmann). Next: step 4 (GTE on MMI).
+- 2026-10-23: exact blending once per quad (−11% DrawOTag in Kaufmann).
+- 2026-10-23: step 4: MMI doesn't fit; 32-bit transform batch instead (−9% of the batch).

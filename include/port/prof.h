@@ -55,6 +55,7 @@ enum
     LP_SNOW_RTPS,  /* Particle_SnowDraw: the flake's RTPS and its stores (calls = flakes drawn) */
     LP_BLEND_EXACT, /* polygon(): blend_exact's polygons (three draws each) */
     LP_EMIT_UNDER, /* polygon(): fog pairs' quads (underlay and quad) */
+    LP_RTP_BATCH,  /* Gte_RtpBatch (calls = vertices) */
     LP_COUNT
 };
 #ifdef SH_PORT_LITEPROF
