@@ -82,7 +82,14 @@ Done instead:
 
 Exactness: the check build (`SH1_EXTRA_CFLAGS=-DSH_PORT_CHECK_BATCH`, every batch against the GTE per vertex) in Kaufmann and CybilFightStart: ~12M and ~3M batched vertices, 54,272 point-lit meshes, 0 mismatches; attract demo dumps and `gpu_test.py` identical.
 
-What's left in the GTE batches is mostly the projection's divide and clamps per vertex. The point light (~1M cycles a frame in CybilFightStart, flashlight scenes) is the largest single GTE cost; it needs a closer look at its three passes (collect, batch, apply) rather than SIMD.
+What's left in the GTE batches is mostly the projection's divide and clamps per vertex.
+
+### 4b. The point light (func_80057658) — done
+CybilFightStart, k-cycles a frame: point light 1,440 = collect 191 + batch 1,042 + apply 191 (~4,000 vertices).
+- [x] One pass (`Gte_PointLightBatch`): each vertex's vector, its RTPS and its light value in one loop, writing the light value straight to its slot; only the last vertex's vector and the FIFO's earlier results are kept for the GTE run of the last vertex (`Port_PointLightLast`, shared with the old two-pass path). Point light 1,440 → **1,155** (−20%).
+- Meshes under 5 visits keep the original loop (the two-pass path read one element before its arrays at exactly 4).
+- Tried, not kept: the batch's arithmetic in 32 bits (twice; slower in PCSX2 both times: 1,042 → 1,144-1,225). Each vertex needs ~15 multiplies either way, and PCSX2 seems to charge them heavily; the console may differ.
+- Exactness: check build (`Port_PointLightCheck`: light values, scratch fields and all 64 GTE registers against the original loop) 54,272 meshes in CybilFightStart, 0 mismatches; attract demo dumps identical.
 
 ### 5. VU1 packet expansion
 Compact primitive records expanded into GS packets by a VU1 microprogram (integer moves only, so exact): fog pairs, filtered two-pass polygons, sprites.
@@ -108,3 +115,4 @@ So the filtered CLUTs (2026-10-22) had more than doubled Kaufmann's DrawOTag (it
 - 2026-10-23: step 3 re-scoped after measuring; per-kind state memo (−2% DrawOTag in Kaufmann).
 - 2026-10-23: exact blending once per quad (−11% DrawOTag in Kaufmann).
 - 2026-10-23: step 4: MMI doesn't fit; 32-bit transform batch instead (−9% of the batch).
+- 2026-10-23: point light in one pass (−20% in CybilFightStart).

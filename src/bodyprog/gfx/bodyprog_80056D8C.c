@@ -389,6 +389,60 @@ static u32 s_PlXy[PORT_PL_MAX];
 static u16 s_PlSz[PORT_PL_MAX];
 static s16 s_PlIr0[PORT_PL_MAX];
 
+/** Port_PointLight's last vertex: through the GTE, from its vector (s_PlVtx[0]) with the FIFO preset
+ * to the earlier results (s_PlXy[0-2], s_PlSz[0-3]), so the GTE and the scratch fields end as after
+ * the original loop. */
+static void Port_PointLightLast(s_MeshHeader* meshHdr, u8* var_t0, s_GteScratchData* scratchData, s32 temp_t9, u8 temp_v1,
+                                s32 last)
+{
+    MATRIX* mat = &scratchData->field_380.field_0;
+    {
+        /* The last vertex: through the GTE, with the scratch state the original loop leaves. */
+        s_Normal* lastNormal = &meshHdr->normals[meshHdr->normalCount - 1];
+        s32       var_a1, var_v1;
+        *(u32*)&scratchData->field_3A0 = *(u32*)lastNormal;
+        mat->m[1][0] = scratchData->field_3A0.nx << 5;
+        mat->m[1][1] = scratchData->field_3A0.ny << 5;
+        mat->m[1][2] = scratchData->field_3A0.nz << 5;
+        mat->m[2][0] = s_PlVtx[0][0];
+        mat->m[2][1] = s_PlVtx[0][1];
+        mat->m[2][2] = s_PlVtx[0][2];
+        gte_SetRotMatrix_Row0_1(mat->m);
+        Gte_DataWrite(12, s_PlXy[0]);
+        Gte_DataWrite(13, s_PlXy[1]);
+        Gte_DataWrite(14, s_PlXy[2]);
+        Gte_DataWrite(16, s_PlSz[0]);
+        Gte_DataWrite(17, s_PlSz[1]);
+        Gte_DataWrite(18, s_PlSz[2]);
+        Gte_DataWrite(19, s_PlSz[3]);
+        Gte_CmdRtpsRow2(mat->m[2]);
+        gte_stsxy(&scratchData->screenPos_3A4);
+        gte_stdp(&scratchData->depthP_3A8);
+
+        scratchData->screenPos_3A4.vx += 1024;
+        scratchData->screenPos_3A4.vy += 1024;
+        var_a1   = (scratchData->screenPos_3A4.vx * scratchData->screenPos_3A4.vy) + (scratchData->screenPos_3A4.vy * (scratchData->depthP_3A8 >> 4));
+        var_a1 >>= 5;
+        var_a1  -= 16;
+        if (var_a1 < 0)
+        {
+            var_a1 = 0;
+        }
+        var_v1  = (scratchData->screenPos_3A4.vx >> 1) + (scratchData->depthP_3A8 >> 2);
+        var_a1 += temp_t9;
+        if (var_v1 > 48)
+        {
+            var_v1 = 48;
+        }
+        var_a1 += var_v1;
+        if (temp_v1 < var_a1)
+        {
+            var_a1 = temp_v1;
+        }
+        var_t0[last] = var_a1;
+    }
+}
+
 static s32 Port_PointLight(s_MeshHeader* meshHdr, u8* var_t0, s_GteScratchData* scratchData, s32 temp_t9, u8 temp_v1)
 {
     MATRIX*   mat = &scratchData->field_380.field_0;
@@ -396,6 +450,31 @@ static s32 Port_PointLight(s_MeshHeader* meshHdr, u8* var_t0, s_GteScratchData* 
     s16       row1[3];
     u8*       p = var_t0;
     s32       n = 0, idx, last, start;
+
+    {
+        /* One pass (Gte_PointLightBatch): vectors, RTPS and light values together; only the last
+         * vertex's inputs and the FIFO's earlier results are kept for the GTE run below. */
+        u32 xyTail[3];
+        u16 szTail[4];
+        s16 vLast[3];
+        LP_BEGIN(LP_PL_BATCH)
+        n = Gte_PointLightBatch(mat->m[0], (const signed char*)meshHdr->normals, meshHdr->normalCount, var_t0,
+                                (const short*)scratchData->screenXy_0, scratchData->field_18C,
+                                (const short*)&scratchData->field_3AC, var_t0, temp_t9, temp_v1, xyTail, szTail, vLast);
+        LP_END(LP_PL_BATCH);
+        if (n)
+        {
+#ifdef SH_PORT_LITEPROF
+            g_LiteProf[LP_PL_COLLECT][1] += n;
+#endif
+            last = n - 1;
+            memcpy(s_PlVtx[0], vLast, sizeof(vLast));
+            s_PlXy[0] = xyTail[0], s_PlXy[1] = xyTail[1], s_PlXy[2] = xyTail[2];
+            s_PlSz[0] = szTail[0], s_PlSz[1] = szTail[1], s_PlSz[2] = szTail[2], s_PlSz[3] = szTail[3];
+            Port_PointLightLast(meshHdr, var_t0, scratchData, temp_t9, temp_v1, last);
+            return 1;
+        }
+    }
 
     LP_BEGIN(LP_PL_COLLECT)
     /* Pass 1: the vectors, as the original loop visits them (at least one per normal). */
@@ -476,51 +555,12 @@ static s32 Port_PointLight(s_MeshHeader* meshHdr, u8* var_t0, s_GteScratchData* 
         }
         var_t0[idx] = var_a1;
     }
-    {
-        /* The last vertex: through the GTE, with the scratch state the original loop leaves. */
-        s_Normal* lastNormal = &meshHdr->normals[meshHdr->normalCount - 1];
-        s32       var_a1, var_v1;
-        *(u32*)&scratchData->field_3A0 = *(u32*)lastNormal;
-        mat->m[1][0] = scratchData->field_3A0.nx << 5;
-        mat->m[1][1] = scratchData->field_3A0.ny << 5;
-        mat->m[1][2] = scratchData->field_3A0.nz << 5;
-        mat->m[2][0] = s_PlVtx[last][0];
-        mat->m[2][1] = s_PlVtx[last][1];
-        mat->m[2][2] = s_PlVtx[last][2];
-        gte_SetRotMatrix_Row0_1(mat->m);
-        Gte_DataWrite(12, s_PlXy[last - 3]);
-        Gte_DataWrite(13, s_PlXy[last - 2]);
-        Gte_DataWrite(14, s_PlXy[last - 1]);
-        Gte_DataWrite(16, s_PlSz[last - 4]);
-        Gte_DataWrite(17, s_PlSz[last - 3]);
-        Gte_DataWrite(18, s_PlSz[last - 2]);
-        Gte_DataWrite(19, s_PlSz[last - 1]);
-        Gte_CmdRtpsRow2(mat->m[2]);
-        gte_stsxy(&scratchData->screenPos_3A4);
-        gte_stdp(&scratchData->depthP_3A8);
-
-        scratchData->screenPos_3A4.vx += 1024;
-        scratchData->screenPos_3A4.vy += 1024;
-        var_a1   = (scratchData->screenPos_3A4.vx * scratchData->screenPos_3A4.vy) + (scratchData->screenPos_3A4.vy * (scratchData->depthP_3A8 >> 4));
-        var_a1 >>= 5;
-        var_a1  -= 16;
-        if (var_a1 < 0)
-        {
-            var_a1 = 0;
-        }
-        var_v1  = (scratchData->screenPos_3A4.vx >> 1) + (scratchData->depthP_3A8 >> 2);
-        var_a1 += temp_t9;
-        if (var_v1 > 48)
-        {
-            var_v1 = 48;
-        }
-        var_a1 += var_v1;
-        if (temp_v1 < var_a1)
-        {
-            var_a1 = temp_v1;
-        }
-        var_t0[last] = var_a1;
-    }
+    /* (The two-pass path leaves its results in the arrays at their visit positions; the one-pass path
+     * at the arrays' start: tail = the index of the first of the results the GTE run needs.) */
+    memmove(&s_PlVtx[0], &s_PlVtx[last], sizeof(s_PlVtx[0]));
+    memmove(&s_PlXy[0], &s_PlXy[last - 3], 3 * sizeof(s_PlXy[0]));
+    memmove(&s_PlSz[0], &s_PlSz[last - 4], 4 * sizeof(s_PlSz[0]));
+    Port_PointLightLast(meshHdr, var_t0, scratchData, temp_t9, temp_v1, last);
     LP_END(LP_PL_APPLY);
     return 1;
 }

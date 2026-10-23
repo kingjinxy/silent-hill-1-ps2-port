@@ -1647,6 +1647,128 @@ int Gte_RtpsDotBatch(const short* row0, const short* row1, const short (*v)[3], 
     return 1;
 }
 
+/** func_80057658's point light in one pass (Port_PointLight): for each visit k of the mesh (normal by
+ * normal, `count` visits each, at least one), the vector v = vertex idx[k] - off (VX, VY from xy, VZ
+ * from z, each truncated to 16 bits), RTPS on it as Gte_RtpsDotBatch computes it (rows row0, the
+ * normal << 5, v), and from SXY and IR0 the light value the original loop stores at out[k], with
+ * `t9` and the cap `vmax`. Every visit but the last; for the GTE run of the last one, xyTail gets the
+ * SXY of visits last-3..last-1, szTail the SZ of last-4..last-1 and vLast the last vector. Returns
+ * the number of visits, or 0 (nothing written) outside the fast path's range or under 5 visits. */
+int Gte_PointLightBatch(const short* row0, const signed char* normals, int normalCount, const unsigned char* idx,
+                        const short* xy, const short* z, const short* off, unsigned char* out, int t9, int vmax,
+                        unsigned int* xyTail, unsigned short* szTail, short* vLast)
+{
+    u32 h;
+    s32 ofx, ofy, dqa, dqb, n = 0, k, nrm, last;
+    s64 tx, ty, tz;
+    if (g_GteCtrlDirty)
+    {
+        ctrl_refresh();
+    }
+    if (!unr_ready)
+    {
+        unr_init();
+    }
+    if (!s_Small)
+    {
+        return 0;
+    }
+    for (nrm = 0; nrm < normalCount; nrm++)
+    {
+        n += normals[nrm * 4 + 3] ? (u8)normals[nrm * 4 + 3] : 1;
+    }
+    if (n < 5)
+    {
+        return 0;
+    }
+    last = n - 1;
+    h    = c[C_H] & 0xFFFF;
+    ofx  = (s32)c[C_OFX];
+    ofy  = (s32)c[C_OFY];
+    dqa  = (s16)c[C_DQA];
+    dqb  = (s32)c[C_DQB];
+    tx   = (s64)(s32)c[C_TRX] << 12;
+    ty   = (s64)(s32)c[C_TRY] << 12;
+    tz   = (s64)(s32)c[C_TRZ] << 12;
+    for (nrm = 0, k = 0; nrm < normalCount; nrm++)
+    {
+        s32 r0 = normals[nrm * 4] << 5, r1 = normals[nrm * 4 + 1] << 5, r2 = normals[nrm * 4 + 2] << 5;
+        s32 visits = normals[nrm * 4 + 3] ? (u8)normals[nrm * 4 + 3] : 1, end = k + visits;
+        r0 = (s16)r0, r1 = (s16)r1, r2 = (s16)r2;
+        for (; k < end; k++)
+        {
+            u32 vi = idx[k];
+            s32 vx = (s16)(xy[vi * 2] - off[0]), vy = (s16)(xy[vi * 2 + 1] - off[1]), vz = (s16)(z[vi] - off[2]);
+            s64 m1, m2, z3;
+            s32 ir1, ir2, s, sx, sy, q, val, cap;
+            u32 dv;
+            if (k == last)
+            {
+                vLast[0] = (s16)vx, vLast[1] = (s16)vy, vLast[2] = (s16)vz;
+                return n;
+            }
+            m1  = tx + (s64)(row0[0] * vx) + (s64)(row0[1] * vy) + (s64)(row0[2] * vz);
+            m2  = ty + (s64)(r0 * vx) + (s64)(r1 * vy) + (s64)(r2 * vz);
+            z3  = (tz + (s64)(vx * vx) + (s64)(vy * vy) + (s64)(vz * vz)) >> 12;
+            ir1 = (s32)(m1 >> 12);
+            ir1 = ir1 < -0x8000 ? -0x8000 : ir1 > 0x7FFF ? 0x7FFF : ir1;
+            ir2 = (s32)(m2 >> 12);
+            ir2 = ir2 < -0x8000 ? -0x8000 : ir2 > 0x7FFF ? 0x7FFF : ir2;
+            s   = z3 < 0 ? 0 : z3 > 0xFFFF ? 0xFFFF : (s32)z3;
+            if (h < (u32)s * 2)
+            {
+                u32 zz = clz32((u32)s) - 16, nn = h << zz, dd = (u32)s << zz, u;
+                u64 r;
+                u  = unr_table[(dd - 0x7FC0) >> 7] + 0x101;
+                dd = (0x2000080u - (dd * u)) >> 8;
+                dd = (0x0000080u + (dd * u)) >> 8;
+                r  = (((u64)nn * dd) + 0x8000) >> 16;
+                dv = r > 0x1FFFF ? 0x1FFFF : (u32)r;
+            }
+            else
+            {
+                dv = 0x1FFFF;
+            }
+            sx = (s32)((mul32((s32)dv, ir1) + ofx) >> 16);
+            sx = sx < -0x400 ? -0x400 : sx > 0x3FF ? 0x3FF : sx;
+            sy = (s32)((mul32((s32)dv, ir2) + ofy) >> 16);
+            sy = sy < -0x400 ? -0x400 : sy > 0x3FF ? 0x3FF : sy;
+            q  = (s32)((mul32((s32)dv, dqa) + dqb) >> 12);
+            q  = q < 0 ? 0 : q > 0x1000 ? 0x1000 : q;
+            if (k >= last - 4)
+            {
+                if (k >= last - 3)
+                {
+                    xyTail[k - (last - 3)] = ((u32)sx & 0xFFFF) | ((u32)sy << 16);
+                }
+                szTail[k - (last - 4)] = (u16)s;
+            }
+            /* The original loop's light value (SXY as 16-bit values + 1024, IR0). */
+            sx  = (s16)(sx + 1024);
+            sy  = (s16)(sy + 1024);
+            val = ((sx * sy) + (sy * (q >> 4))) >> 5;
+            val -= 16;
+            if (val < 0)
+            {
+                val = 0;
+            }
+            cap = (sx >> 1) + (q >> 2);
+            val += t9;
+            if (cap > 48)
+            {
+                cap = 48;
+            }
+            val += cap;
+            if (vmax < val)
+            {
+                val = vmax;
+            }
+            out[k] = (u8)val;
+        }
+    }
+    return n;
+}
+
 /** Batched NC (normal colour) with sf = 1, lm = 1, as NCT 0x0D80420 computes each of its three
  * vertices: `v` holds `count` normals (VX, VY, VZ triplets), out[i] the colour the command pushes
  * (R | G << 8 | B << 16 | RGBC's code byte << 24), from the current LLM, LCM and BK. The same
