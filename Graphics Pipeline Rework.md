@@ -108,6 +108,21 @@ The Kaufmann cutscene (map3_s00) does ~1,400 filtered CLUT lookups a frame. Ligh
 
 So the filtered CLUTs (2026-10-22) had more than doubled Kaufmann's DrawOTag (it was ~1,500 on 2026-10-17); today's changes take most of that back. Plain CLUT misses stay at most 1 a report with 88 rows. Readbacks matter most on the console (each waits for the GS to finish everything).
 
+### 4c. map6_s00's grid effect (func_800EC4B4) — done
+Found profiling map6_s00 (the user's play session: much faster than the PS1 but not a locked 60). An instrumented profile of the warped attract demo put most of the game logic in one map function: `func_800EC4B4`, a 17x17 grid around Harry drawn every frame ("transition world effect"), which per point ran `func_80055ECC`: the light transform again (same result every time), the point light's formula through a full RTPS with GTE setup and restore, and a DPCS of the world tint. Rain (~270 drops) is next (~480k instrumented).
+- [x] Lighting: point 0 runs as before; points 1-284 from one `Gte_RtpsDotBatch` plus the point light's formula, colours memoized by light value (DPCS depends only on it within a frame); the last four points run as before, so the GTE's FIFOs and registers end as after the original loop.
+- [x] Projection: the 289 grid points are a lattice (unless a row or column wraps past 16 bits: then the GTE loop runs): points 0-284 through `Gte_RtpGrid`, the last triple and the RTPS through the GTE with SZ3 preset (as map6_s02's grid).
+- Result, light counter around the whole function while it runs (PCSX2): 932 → 490 (lighting) → **419** k-cycles a frame (−55%).
+- Exactness: check build (`SH1_EXTRA_CFLAGS=-DSH_PORT_CHECK_BATCH`): ~131k grid points' colours against `func_80055ECC`, the GTE after the loop against all 289 points run as before (no differences), and ~131k projected points against the GTE loop, 0 mismatches; attract demo dumps identical.
+- Left in it: the per-point fade bands (integer divides) and the 16x16 polygon loop.
+
+## Later: record play on the console, replay it anywhere
+Idea (2026-10-23): record a real play session on the console and replay it in PCSX2 (and on the console) to measure performance on real routes, instead of warped attract demos.
+- The game's own demo format does nearly all of it: `MISC/DEMO****.DAT` (options and savegame snapshot) and `MISC/PLAY****.DAT` (16 bytes a frame: pad incl. analog, expected game state, `videoPresentInterval`, RNG seed; include/bodyprog/demo.h). The demo player already replays these deterministically and reports `STEP ERROR` on divergence.
+- To build: a recorder writing that format (snapshot at start, one record a frame), sent off the console through the IOP agent / network log (~58 KB a minute) or to the memory card; a way to start playback of an arbitrary recording.
+- Determinism risks: disc load timing differs (network on the console, host file in PCSX2): record frames held per load and hold playback to match (as `compare_frames.py --ps1-holds`); real-time voice clips (record when they end).
+- Payoff: repeatable runs of real routes (map4_s02, map4_s03) for the light counters, and exact before/after comparisons on hardware.
+
 ## Log
 - 2026-10-23: plan written. Step 1 done (asynchronous GIF sends), console test pending.
 - 2026-10-23: step 2 done (small uploads inline in the packet stream), console test pending.
@@ -116,3 +131,4 @@ So the filtered CLUTs (2026-10-22) had more than doubled Kaufmann's DrawOTag (it
 - 2026-10-23: exact blending once per quad (−11% DrawOTag in Kaufmann).
 - 2026-10-23: step 4: MMI doesn't fit; 32-bit transform batch instead (−9% of the batch).
 - 2026-10-23: point light in one pass (−20% in CybilFightStart).
+- 2026-10-23: map6_s00's grid effect batched (−55% of the effect).

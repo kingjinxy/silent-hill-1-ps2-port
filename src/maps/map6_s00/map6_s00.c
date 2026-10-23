@@ -304,7 +304,15 @@ void func_800EB11C(void) // 0x800EB11C
             break;
     }
 
+#ifdef SH_PORT
+    {
+        LP_BEGIN(LP_MAP_FX)
+        func_800EC4B4(D_800F0044);
+        LP_END(LP_MAP_FX);
+    }
+#else
     func_800EC4B4(D_800F0044);
+#endif
 
     if (g_SysWork.sysStateSteps[0] >= 1 && g_SysWork.sysStateSteps[0] < 17)
     {
@@ -498,6 +506,228 @@ static inline s32 inline_sub(s32 arg0, s32 arg1)
     return arg0 - arg1;
 }
 
+#ifdef SH_PORT
+#include "port/gte.h"
+#include "bodyprog/gfx/world.h"
+#include "port/prof.h"
+extern s_WorldEnvWork g_WorldEnvWork; /* bodyprog_80055028.c */
+/* func_800EC4B4's lighting of its 17x17 grid (port): func_80055ECC on each point is the point light's
+ * value (func_80055F08: rows light, -field_68, point - light position; RTPS with H 16 and offset -1024,
+ * only SXY and IR0 read) followed by a DPCS of the world tint, which depends only on that value. The
+ * first point runs as before (it also leaves the light transform and the GTE setup in place); points
+ * 1-284 come from one Gte_RtpsDotBatch, their colours memoized by light value (a DPCS each the first
+ * time); the last four run as before, so the GTE's FIFOs and every register end as after the original
+ * loop. s_GridLight is filled at point 1. */
+#define PORT_GRID_POINTS 289
+#define PORT_GRID_TAIL   4 /* points run as before at the end: the SZ FIFO's depth */
+static u8  s_GridRet[PORT_GRID_POINTS];
+static s32 s_GridReady;
+
+static void Port_GridLightBatch(s_func_800EC4B4* ptr)
+{
+    static s16 v[PORT_GRID_POINTS][3];
+    static u32 xy[PORT_GRID_POINTS];
+    static u16 sz[PORT_GRID_POINTS];
+    static s16 ir0[PORT_GRID_POINTS];
+    s16        row0[3], row1[3];
+    s32        k, n = PORT_GRID_POINTS - PORT_GRID_TAIL - 1, ofx, ofy, h;
+    s32        t9   = g_WorldEnvWork.field_20 >> 5;
+    u8         vmax = g_WorldEnvWork.field_3;
+
+    s_GridReady = 0;
+    row0[0] = g_WorldEnvWork.light.field_28.vx;
+    row0[1] = g_WorldEnvWork.light.field_28.vy;
+    row0[2] = g_WorldEnvWork.light.field_28.vz;
+    row1[0] = -ptr->field_68.vx;
+    row1[1] = -ptr->field_68.vy;
+    row1[2] = -ptr->field_68.vz;
+    for (k = 0; k < n; k++)
+    {
+        s32 c = k + 1, i = c / 17, j = c % 17;
+        v[k][0] = (s16)((s16)((j << 8) - 0x800) - g_WorldEnvWork.light.field_30.vx);
+        v[k][1] = (s16)(0 - g_WorldEnvWork.light.field_30.vy);
+        v[k][2] = (s16)((s16)(0x800 - (i << 8)) - g_WorldEnvWork.light.field_30.vz);
+    }
+    /* func_80055F08's GTE setup (TR 0, DQA/DQB are still set from point 0). */
+    ReadGeomOffset(&ofx, &ofy);
+    h = ReadGeomScreen();
+    SetGeomOffset(-1024, -1024);
+    SetGeomScreen(16);
+    k = Gte_RtpsDotBatch(row0, row1, (const short(*)[3])v, xy, sz, ir0, n);
+    SetGeomOffset(ofx, ofy);
+    SetGeomScreen(h);
+    if (!k)
+    {
+        return;
+    }
+    for (k = 0; k < n; k++)
+    {
+        s32 sx = (s16)((s16)xy[k] + 1024), sy = (s16)((s16)(xy[k] >> 16) + 1024), dp = ir0[k], ret, cap;
+        ret = ((sx * sy) + (sy * (dp >> 4))) >> 5;
+        ret -= 16;
+        if (ret < 0)
+        {
+            ret = 0;
+        }
+        ret += t9;
+        cap = (sx >> 1) + (dp >> 2);
+        if (cap > 48)
+        {
+            cap = 48;
+        }
+        ret += cap;
+        if (vmax < ret)
+        {
+            ret = vmax;
+        }
+        s_GridRet[k + 1] = (u8)ret;
+    }
+    s_GridReady = 1;
+}
+
+#ifdef SH_PORT_CHECK_BATCH
+/* Check build: each batched point's colour against func_80055ECC, and the GTE after the loop against
+ * all 289 points run as before from the same start. */
+static unsigned int s_GcData0[32], s_GcCtrl0[32];
+static s32          s_GcChecks, s_GcBad;
+static void Port_GridCheckStart(void)
+{
+    memcpy(s_GcData0, g_GteData, sizeof(s_GcData0));
+    memcpy(s_GcCtrl0, g_GteCtrl, sizeof(s_GcCtrl0));
+}
+static void Port_GridCheckEnd(s_func_800EC4B4* ptr)
+{
+    unsigned int d1[32], c1[32];
+    CVECTOR      col  = ptr->field_70;
+    SVECTOR      keep = ptr->field_44[0];
+    s32          c, bad;
+    memcpy(d1, g_GteData, sizeof(d1));
+    memcpy(c1, g_GteCtrl, sizeof(c1));
+    memcpy(g_GteData, s_GcData0, sizeof(d1));
+    memcpy(g_GteCtrl, s_GcCtrl0, sizeof(c1));
+    g_GteCtrlDirty = ~0u;
+    for (c = 0; c < PORT_GRID_POINTS; c++)
+    {
+        *(s32*)&ptr->field_44[0] = (((c % 17) << 8) - 0x800) & 0xFFFF;
+        ptr->field_44[0].vz      = 0x800 - ((c / 17) << 8);
+        func_80055ECC(&col, &ptr->field_44, &ptr->field_68, &ptr->field_24);
+    }
+    ptr->field_44[0] = keep;
+    bad = memcmp(d1, g_GteData, sizeof(d1)) != 0 || memcmp(c1, g_GteCtrl, sizeof(c1)) != 0;
+    memcpy(g_GteData, d1, sizeof(d1));
+    memcpy(g_GteCtrl, c1, sizeof(c1));
+    g_GteCtrlDirty = ~0u;
+    if (bad && s_GcBad++ < 20)
+    {
+        printf("grid light check: GTE state differs after the loop\n");
+    }
+}
+#endif
+
+/** func_80055ECC for grid point (i, j) of func_800EC4B4, through the batch where it can. */
+static void Port_GridLight(s_func_800EC4B4* ptr, s32 i, s32 j)
+{
+    static u32 memo[256], memoValid[8];
+    s32        c = i * 17 + j;
+#ifdef SH_PORT_CHECK_BATCH
+    if (c == 0)
+    {
+        Port_GridCheckStart();
+    }
+    if (c == PORT_GRID_POINTS - 1)
+    {
+        func_80055ECC(&ptr->field_70, &ptr->field_44, &ptr->field_68, &ptr->field_24);
+        Port_GridCheckEnd(ptr);
+        return;
+    }
+#endif
+    if (c == 0 || c >= PORT_GRID_POINTS - PORT_GRID_TAIL)
+    {
+        func_80055ECC(&ptr->field_70, &ptr->field_44, &ptr->field_68, &ptr->field_24);
+        if (c == 0)
+        {
+            Port_GridLightBatch(ptr);
+            memset(memoValid, 0, sizeof(memoValid));
+        }
+        return;
+    }
+    if (!s_GridReady)
+    {
+        func_80055ECC(&ptr->field_70, &ptr->field_44, &ptr->field_68, &ptr->field_24);
+        return;
+    }
+    {
+        u32 r = s_GridRet[c];
+        if (!(memoValid[r >> 5] & (1u << (r & 31))))
+        {
+            func_80055E90(&ptr->field_70, (u8)r); /* the DPCS, as func_80055ECC runs it */
+            memo[r] = ptr->field_70.r | (ptr->field_70.g << 8) | (ptr->field_70.b << 16);
+            memoValid[r >> 5] |= 1u << (r & 31);
+        }
+        ptr->field_70.r = memo[r] & 0xFF;
+        ptr->field_70.g = (memo[r] >> 8) & 0xFF;
+        ptr->field_70.b = (memo[r] >> 16) & 0xFF;
+#ifdef SH_PORT_CHECK_BATCH
+        {
+            CVECTOR col = ptr->field_70;
+            func_80055ECC(&col, &ptr->field_44, &ptr->field_68, &ptr->field_24);
+            s_GcChecks++;
+            if ((col.r != ptr->field_70.r || col.g != ptr->field_70.g || col.b != ptr->field_70.b) && s_GcBad++ < 20)
+            {
+                printf("grid light check: point %d: batch %02x%02x%02x, original %02x%02x%02x\n", (int)c, ptr->field_70.r,
+                       ptr->field_70.g, ptr->field_70.b, col.r, col.g, col.b);
+            }
+            if ((s_GcChecks & 0xFFFF) == 0)
+            {
+                printf("grid light check: %d points, %d mismatches\n", (int)s_GcChecks, (int)s_GcBad);
+            }
+        }
+#endif
+    }
+}
+#define PORT_GRID_LIGHT(ptr, i, j) Port_GridLight(ptr, i, j)
+
+/* func_800EC4B4's grid projection (port): point c is (((c % 17) << 8) - 0x1400 - X, -Y,
+ * -0x800 - Z - ((c / 17) << 8)) as 16-bit values (Math_SetSVectorFastSum), a lattice while no row or
+ * column wraps past 16 bits. Points 0-284 go through Gte_RtpGrid (as RTPT: sf 1, lm 0, the current
+ * matrices) straight into field_0/field_484; the last triple and the RTPS still go through the GTE
+ * (SZ3 preset to point 284's depth, which the next RTPT moves to SZ0), so it ends as after the
+ * original loop. Returns the first point left to the GTE loop (285, or 0 when the batch can't run). */
+#define PORT_GRID_PROJ 285
+#ifdef SH_PORT_CHECK_BATCH
+static u32 s_GpXy[PORT_GRID_PROJ];
+static s32 s_GpZ[PORT_GRID_PROJ], s_GpOk;
+#endif
+static s32 Port_GridProject(s_func_800EC4B4* ptr, s_func_800EC4B4_2* out)
+{
+    static const s16 DU[3] = { 256, 0, 0 };  /* c % 17 steps */
+    static const s16 DV[3] = { 0, 0, -256 }; /* c / 17 steps */
+    s16              v0[3];
+    s32              ok;
+    v0[0] = (s16)(-0x1400 - (u16)ptr->field_5C.vx);
+    v0[1] = (s16)(-ptr->field_5C.vy);
+    v0[2] = (s16)(-0x800 - (u16)ptr->field_5C.vz);
+    if (v0[0] + 16 * 256 > 0x7FFF || v0[2] - 16 * 256 < -0x8000)
+    {
+        return 0; /* a row or column wraps: not a lattice */
+    }
+#ifdef SH_PORT_CHECK_BATCH
+    s_GpOk = Gte_RtpGrid(v0, DU, DV, 17, s_GpXy, s_GpZ, PORT_GRID_PROJ);
+    return 0;
+#else
+    ok = Gte_RtpGrid(v0, DU, DV, 17, (u32*)out->field_0, (int*)out->field_484, PORT_GRID_PROJ);
+    if (!ok)
+    {
+        return 0;
+    }
+    Gte_DataWrite(19, (u32)out->field_484[(PORT_GRID_PROJ - 1) / 17][(PORT_GRID_PROJ - 1) % 17]);
+    return PORT_GRID_PROJ;
+#endif
+}
+#else
+#define PORT_GRID_LIGHT(ptr, i, j) func_80055ECC(&(ptr)->field_70, &(ptr)->field_44, &(ptr)->field_68, &(ptr)->field_24)
+#endif
+
 void func_800EC4B4(s32 arg0) // 0x800EC4B4
 {
     s32                posX;
@@ -542,7 +772,12 @@ void func_800EC4B4(s32 arg0) // 0x800EC4B4
     ptr->field_68.vy   = Q12(-1.0f);
     ptr->field_68.vz   = Q12(0.0f);
 
-    for (i = 0; i < 287; i += 3)
+#ifdef SH_PORT
+    i = Port_GridProject(ptr, ptr2);
+#else
+    i = 0;
+#endif
+    for (; i < 287; i += 3)
     {
         for (j = 0; j < 3; j++)
         {
@@ -556,6 +791,26 @@ void func_800EC4B4(s32 arg0) // 0x800EC4B4
         gte_stsz3c(&ptr2->field_484[i / 17][i % 17]);
     }
 
+#ifdef SH_PORT_CHECK_BATCH
+    if (s_GpOk)
+    {
+        static s32 checks, bad;
+        for (j = 0; j < PORT_GRID_PROJ; j++)
+        {
+            checks++;
+            if ((s_GpXy[j] != *(u32*)&ptr2->field_0[j / 17][j % 17] || s_GpZ[j] != ptr2->field_484[j / 17][j % 17]) &&
+                bad++ < 20)
+            {
+                printf("grid proj check: point %d: batch %08x z %d, GTE %08x z %d\n", (int)j, s_GpXy[j], (int)s_GpZ[j],
+                       *(u32*)&ptr2->field_0[j / 17][j % 17], (int)ptr2->field_484[j / 17][j % 17]);
+            }
+        }
+        if ((checks & 0xFFFF) < PORT_GRID_PROJ)
+        {
+            printf("grid proj check: %d points, %d mismatches\n", (int)checks, (int)bad);
+        }
+    }
+#endif
     for (i = 288; i < 289; i++)
     {
         Math_SetSVectorFastSum(&ptr->field_44[0], inline_sub(((i % 17) << 8) - 0x1400, (u16)ptr->field_5C.vx),
@@ -631,7 +886,7 @@ void func_800EC4B4(s32 arg0) // 0x800EC4B4
                 }
             }
 
-            func_80055ECC(&ptr->field_70, &ptr->field_44, &ptr->field_68, &ptr->field_24);
+            PORT_GRID_LIGHT(ptr, i, j);
 
             ptr2->field_908[i][j][0].r = MIN((ptr->field_70.r * ptr->field_1B4) >> 7, 0xFF);
             ptr2->field_908[i][j][0].g = MIN((ptr->field_70.g * ptr->field_1B4) >> 7, 0xFF);
