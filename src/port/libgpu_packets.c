@@ -181,3 +181,67 @@ void SetDrawEnv(DR_ENV* p, DRAWENV* env)
     }
     LEN(p) = n - 1;
 }
+
+/* --- tmd.o: TIM headers (OpenTMD/ReadTMD are still recompiled) ---------------------------------------*/
+
+extern int printf(const char* fmt, ...);
+
+static u_long* s_TimNext; /* OpenTIM: the next TIM to read */
+
+int OpenTIM(u_long* addr)
+{
+    s_TimNext = addr;
+    return 0;
+}
+
+/** One TIM's header into `tim`; its length in words, or -1 if it isn't a TIM (ID 0x10). The CLUT
+ * block's length is rounded down to a word, as the original adds it. */
+static s32 get_tim(u32* p, TIM_IMAGE* tim)
+{
+    u32 clut = 0, len;
+    if (*p++ != 0x10)
+    {
+        return -1;
+    }
+    tim->mode = *p++;
+    if (GetGraphDebug() == 2)
+    {
+        printf("id  =%08x\n", 0x10);
+    }
+    if (GetGraphDebug() == 2)
+    {
+        printf("mode=%08x\n", tim->mode);
+    }
+    if (GetGraphDebug() == 2)
+    {
+        printf("timaddr=%08x\n", p);
+    }
+    if (tim->mode & 8)
+    {
+        len        = p[0];
+        tim->crect = (RECT*)(p + 1);
+        tim->caddr = (u_long*)(p + 3);
+        clut       = len >> 2;
+        p          = (u32*)((u8*)p + (clut << 2));
+    }
+    else
+    {
+        tim->crect = NULL;
+        tim->caddr = NULL;
+    }
+    len        = p[0];
+    tim->prect = (RECT*)(p + 1);
+    tim->paddr = (u_long*)(p + 3);
+    return clut + (len >> 2) + 2;
+}
+
+TIM_IMAGE* ReadTIM(TIM_IMAGE* timimg)
+{
+    s32 n = get_tim((u32*)s_TimNext, timimg);
+    if (n == -1)
+    {
+        return NULL;
+    }
+    s_TimNext += n;
+    return timimg;
+}

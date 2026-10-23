@@ -513,3 +513,72 @@ void GsMulCoord3(MATRIX* m1, MATRIX* m2)
     m1->t[1] = v.vy + m1->t[1];
     m1->t[2] = v.vz + m1->t[2];
 }
+
+/* --- objt.o: GsLinkObject4 -------------------------------------------------------------------------*/
+
+/** Bytes of a TMD primitive by (mode & 0xFD) - 0x20 (the original's jump table), for flag bit 2 clear
+ * and set; 0 = not a GPU code libgs knows. */
+static const u8 TMD_PRIM_SIZE[30][2] = {
+    { 16, 24 }, { 16, 16 }, { 0, 0 }, { 0, 0 }, { 24, 24 }, { 28, 28 }, { 0, 0 }, { 0, 0 },
+    { 20, 32 }, { 16, 16 }, { 0, 0 }, { 0, 0 }, { 32, 32 }, { 32, 32 }, { 0, 0 }, { 0, 0 },
+    { 20, 28 }, { 24, 24 }, { 0, 0 }, { 0, 0 }, { 28, 28 }, { 36, 36 }, { 0, 0 }, { 0, 0 },
+    { 24, 36 }, { 28, 28 }, { 0, 0 }, { 0, 0 }, { 36, 36 }, { 44, 44 },
+};
+
+/** Object `n` of a TMD to `objp`, and each run of primitives of the same mode and flags gets its
+ * length in the first one's low halfword (for GsSortObject4). */
+void GsLinkObject4(unsigned long tmd_base, GsDOBJ2* objp, int n)
+{
+    u32* obj  = (u32*)(unsigned long)(tmd_base + n * 28);
+    u8*  p    = (u8*)(unsigned long)obj[4];
+    u8*  run  = p;
+    u32  nprim = obj[5], i, mode = 0, flag = 0, count = 0;
+
+    objp->tmd = (unsigned long*)obj;
+    for (i = 0; i < nprim; i++, count++)
+    {
+        u32 prevMode = mode & 0xFF, prevFlag = flag;
+        u32 w        = *(u32*)p, k, size;
+        mode = w >> 24;
+        flag = w >> 16;
+        if (prevMode != 0 && (mode != prevMode || (flag & 0xFF) != (prevFlag & 0xFF)))
+        {
+            *(u16*)run = count;
+            count      = 0;
+            run        = p;
+        }
+        k    = (mode & 0xFD) - 0x20;
+        size = k < 30 ? TMD_PRIM_SIZE[k][(flag & 4) ? 1 : 0] : 0;
+        if (size == 0)
+        {
+            printf("GPU CODE %02xH not assigned.\n", mode);
+        }
+        p += size;
+    }
+    *(u16*)run = count;
+}
+
+/* --- 2d_sp1.o: GsSortFastSprite --------------------------------------------------------------------*/
+
+/** A 16-bit sprite (GP0 64h) with its draw mode packet, at GsOUT_PACKET_P, linked into `ot` at `pri`. */
+void GsSortFastSprite(GsSPRITE* sp, GsOT* ot, unsigned short pri)
+{
+    u32  attr = sp->attribute;
+    u32* p, *at;
+
+    if ((s32)attr < 0 || sp->w == 0 || sp->h == 0)
+    {
+        return;
+    }
+    p    = (u32*)GsOUT_PACKET_P;
+    p[1] = (sp->tpage & 0x1F) | (((attr >> 17) & 0x180) | 0xE1000200) | ((attr >> 23) & 0x60);
+    p[3] = ((sp->x + (u16)GsORGOFSX) & 0xFFFF) | ((u32)(sp->y + (u16)GsORGOFSY) << 16);
+    p[2] = ((attr >> 5) & 0x02000000) | (((attr << 18) & 0x01000000) | 0x64000000) | ((u32)sp->b << 16) |
+           ((u32)sp->g << 8) | sp->r;
+    p[4] = (sp->u | ((u32)sp->v << 8)) | ((u32)sp->cy << 22) | (((u32)sp->cx << 12) & 0x3F0000);
+    p[5] = sp->w | ((u32)sp->h << 16);
+    at   = (u32*)ot->org + pri - ot->offset;
+    p[0] = *at + 0x05000000;
+    GsOUT_PACKET_P = (PACKET*)(p + 6);
+    *at  = (u32)(unsigned long)p & 0xFFFFFF;
+}
