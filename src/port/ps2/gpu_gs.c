@@ -181,22 +181,48 @@ static void dma_send(void* data, u32 qwc)
     PROF_END("gs: dma_send")
 }
 
-/** Kept for the callers that need the GS idle (uploads, readback, display, DrawSync). Sends are
- * synchronous again: an asynchronous version (starting the GIF DMA channel directly and waiting only
- * before the next send) worked in PCSX2 but hung a real PS2 at the first frames with interrupts off
- * (2026-10-09; to investigate). */
+/* GIF DMA (channel 2) registers. Sends are asynchronous: a send starts the channel and returns, and
+ * the EE goes on building the next packet while the GS takes this one. A send waits for the one
+ * before it; GpuGs_Sync waits for the last. Polling only (no DMA interrupt), so it works with
+ * interrupts off. (The 2026-10-09 attempt "hung at the logos" on hardware; the boot freeze found the
+ * same day, ResetCallback dropping the vertical blank callback, is the likelier cause: Planning Doc.md.) */
+#define D2_CHCR (*(volatile u32*)0x1000A000)
+#define D2_MADR (*(volatile u32*)0x1000A010)
+#define D2_QWC  (*(volatile u32*)0x1000A020)
+
 static void pend_flush(void); /* fog pairs, below */
 
+static inline void dma_wait(void)
+{
+    while (D2_CHCR & 0x100) /* STR */
+    {
+    }
+}
+
+/** For the callers that need the last send finished: uploads reusing s_ImgPkt, readback, display,
+ * DrawSync. */
 void GpuGs_Sync(void)
 {
     pend_flush();
+    dma_wait();
 }
 
+/** `data`: in main RAM, its last writes already in memory (the packet buffers are written through
+ * the uncached-accelerated mirror and drained with sync.l; dma_send_cached writes back cached data). */
 static void dma_send_impl(void* data, u32 qwc)
 {
-    FlushCache(0);
-    dmaKit_send(DMA_CHANNEL_GIF, data, qwc);
-    dmaKit_wait(DMA_CHANNEL_GIF, 0);
+    dma_wait();
+    D2_MADR = (u32)data & 0x0FFFFFFF;
+    D2_QWC  = qwc;
+    __asm__ volatile("sync.l" ::: "memory");
+    D2_CHCR = 0x101; /* from memory, normal mode, STR */
+}
+
+/** As dma_send, for data written through the data cache: writes back only its own lines. */
+static void dma_send_cached(void* data, u32 qwc)
+{
+    SyncDCache(data, (u8*)data + qwc * 16);
+    dma_send(data, qwc);
 }
 
 /** Finishes the open tag: loop count, and padding to a whole qword for REGLIST. */
@@ -494,7 +520,7 @@ static void upload_staged_impl(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s
     GpuGs_Flush();
     s_ImgPkt[0] = giftag(qwc, 1, 2, 0);
     s_ImgPkt[1] = 0;
-    dma_send(s_ImgPkt, qwc + 1);
+    dma_send_cached(s_ImgPkt, qwc + 1);
     ad(R_TEXFLUSH, 0);
 }
 
@@ -2861,6 +2887,7 @@ void GpuGs_DisplayShow(s32 x, s32 y, s32 w, s32 h, s32 interlace480, s32 blank)
     if (s_Hires)
     {
         GpuGs_Flush();
+        GpuGs_Sync(); /* the frame's last packet sent before the display switches, as when sends waited */
         dispfb = (u64x)HIRES_FBP | ((u64x)HIRES_BW << 9) | ((u64x)s_HrPsm << 15) | ((u64x)((x << s_HrSh) & 2047) << 32) |
                  ((u64x)((y << s_HrSh) & 2047) << 43);
     }
@@ -2875,6 +2902,7 @@ void GpuGs_DisplayShow(s32 x, s32 y, s32 w, s32 h, s32 interlace480, s32 blank)
 #endif
     {
         GpuGs_Flush();
+        GpuGs_Sync(); /* the frame's last packet sent before the display switches, as when sends waited */
         dispfb = (u64x)VRAM_FBP | ((u64x)VRAM_BW << 9) | ((u64x)PSM_CT16 << 15) |
                  ((u64x)(x & (VRAM_W - 1)) << 32) | ((u64x)(y & (VRAM_H - 1)) << 43);
     }
