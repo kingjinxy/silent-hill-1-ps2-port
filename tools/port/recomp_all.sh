@@ -12,8 +12,11 @@ for o in $LIBGTE; do
     python3 tools/port/recomp.py "lib/libgte/$o.o" "$OUT" --prefix "libgte_$o" --protos $PROTOS 2>&1 \
         | grep -vE '^lib/libgte/.*->|no prototype for (GsTMDfast|AverageSZ)' || true
 done
-# libgs: all objects (port_link.py links the recompiled code as an archive, so only what's used is pulled in).
+# libgs: the objects not yet in C (src/port/libgs_port.c); port_link.py links the recompiled code as an
+# archive, so only what's used is pulled in.
+LIBGS_C="gs_001 gs_002 gs_003 gs_007 gs_008 gs_009 gs_010 gs_104 gs_105 gs_106 gs_111 gs_113 gs_114 gs_121 gs_127"
 for o in lib/libgs/*.o; do
+    case " $LIBGS_C " in *" $(basename "$o" .o) "*) continue;; esac
     python3 tools/port/recomp.py "$o" "$OUT" --prefix "libgs_$(basename "$o" .o)" --protos $PROTOS 2>&1 \
         | grep -vE '^lib/libgs/.*->|no prototype for (gte_init|GsInitCoord2param|print_|Gssub_make_matrix)' || true
 done
