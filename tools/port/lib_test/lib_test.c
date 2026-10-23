@@ -93,6 +93,9 @@ int  DMACallback(int dma, void (*f)(void)) { (void)dma; (void)f; return 0; }
 int  GetVideoMode(void) { return 0; }
 int  SetIntrMask(int m) { (void)m; return 0; }
 int  VSync(int m) { (void)m; return 0; }
+int  EnterCriticalSection(void) { return 0; }
+void ExitCriticalSection(void) { }
+void FlushCache(void) { }
 
 __attribute__((noinline)) void lib_test_done(void) { for (;;) { } }
 
@@ -121,6 +124,19 @@ int main(void)
 }
 
 #else /* EE */
+/* The port's libgs (src/port/libgs_port.c) also refers to these (its display functions); the tests
+ * never call them. */
+void* PutDrawEnv(void* e) { return e; }
+void* PutDispEnv(void* e) { return e; }
+int   ResetGraph(int m) { (void)m; return 0; }
+int   GetVideoMode(void) { return 0; }
+void  SetDispMask(int m) { (void)m; }
+void  DrawOTag(void* p) { (void)p; }
+void* ClearOTagR(void* p, int n) { (void)n; return p; }
+long  SetRCnt(unsigned long s, unsigned short t, long m) { (void)s; (void)t; (void)m; return 0; }
+long  StartRCnt(unsigned long s) { (void)s; return 0; }
+long  GetRCnt(unsigned long s) { (void)s; return 0; }
+long  ResetRCnt(unsigned long s) { (void)s; return 0; }
 
 #include <stdio.h>
 #include "port/gte.h"

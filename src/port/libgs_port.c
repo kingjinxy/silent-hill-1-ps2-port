@@ -10,7 +10,7 @@
 #include <psyq/libgpu.h>
 #include <psyq/libgs.h>
 
-extern MATRIX _LC; /* gs_107.o: the local colour matrix */
+extern MATRIX _LC; /* below */
 
 extern long SetRCnt(unsigned long spec, unsigned short target, long mode);
 extern long StartRCnt(unsigned long spec);
@@ -368,4 +368,148 @@ GsOT* GsSortOt(GsOT* ot_src, GsOT* ot_dest)
     *last = (*last & 0xFF000000) | (*at & 0xFFFFFF);
     *at   = (*at & 0xFF000000) | ((u32)(unsigned long)ot_src->tag & 0xFFFFFF);
     return ot_dest;
+}
+
+/* --- gs_107.o, gs_108.o, gs_110.o: lights ---------------------------------------------------------*/
+
+MATRIX GsLIGHTWSMATRIX; /* light directions (rows), world to screen */
+MATRIX _LC;             /* light colours (columns) */
+
+extern int printf(const char* fmt, ...);
+
+/** A whole matrix, as the originals' eight word moves (with the padding). */
+static void copy_matrix(MATRIX* dst, const MATRIX* src)
+{
+    int i;
+    for (i = 0; i < 8; i++)
+    {
+        ((u32*)dst)[i] = ((const u32*)src)[i];
+    }
+}
+
+/** A colour 0-255 as 0-4096 (x << 12 / 255: the original's multiply by 0x80808081). */
+static s32 colour12(u32 c)
+{
+    s32 x = (s32)(c << 12);
+    return (s32)((((s64)x * (s32)0x80808081) >> 32) + x) >> 7;
+}
+
+/** Light `id` (0-2): its direction (negated, normalised) into a row of GsLIGHTWSMATRIX, its colour
+ * into a column of the colour matrix. Returns -1 for a zero vector. */
+int GsSetFlatLight(int id, GsF_LIGHT* lt)
+{
+    MATRIX l, c;
+    u32    r = lt->r, g = lt->g, b = lt->b;
+    s32    len;
+
+    copy_matrix(&l, &GsLIGHTWSMATRIX);
+    copy_matrix(&c, &_LC);
+    len = SquareRoot0((u32)lt->vx * lt->vx + (u32)lt->vy * lt->vy + (u32)lt->vz * lt->vz);
+    if (len == 0)
+    {
+        return -1;
+    }
+    if (id >= 0 && id <= 2)
+    {
+        l.m[id][0] = (s32)((u32)-lt->vx << 12) / len;
+        l.m[id][1] = (s32)((u32)-lt->vy << 12) / len;
+        c.m[0][id] = colour12(r);
+        c.m[1][id] = colour12(g);
+        c.m[2][id] = colour12(b);
+        l.m[id][2] = (s32)((u32)-lt->vz << 12) / len;
+    }
+    copy_matrix(&GsLIGHTWSMATRIX, &l);
+    copy_matrix(&_LC, &c);
+    SetColorMatrix(&_LC);
+    return 0;
+}
+
+void GsSetLightMode(int mode)
+{
+    switch (mode)
+    {
+        case 0:
+            GsLIGHT_MODE = 0;
+            break;
+        case 1:
+        case 2:
+        case 3:
+            GsLIGHT_MODE = mode;
+            break;
+        default:
+            printf("not supported light mode %d\n", mode);
+    }
+}
+
+void GsSetAmbient(long r, long g, long b)
+{
+    SetBackColor(r >> 4, g >> 4, b >> 4);
+}
+
+/* --- matrix.o: coordinate systems ----------------------------------------------------------------*/
+
+void GsInitCoordinate2(GsCOORDINATE2* super, GsCOORDINATE2* base)
+{
+    copy_matrix(&base->coord, &GsIDMATRIX);
+    base->super = super;
+    base->flg   = 0;
+    if ((unsigned long)super >= 2)
+    {
+        base->super->sub = base;
+    }
+}
+
+void GsSetLsMatrix(MATRIX* mp)
+{
+    SetRotMatrix(mp);
+    SetTransMatrix(mp);
+}
+
+/** The light matrix times mp into LLM; the GTE's rotation is saved around the product. */
+void GsSetLightMatrix(MATRIX* mp)
+{
+    MATRIX l;
+    copy_matrix(&l, &GsLIGHTWSMATRIX);
+    PushMatrix();
+    MulMatrix(&l, mp);
+    PopMatrix();
+    SetLightMatrix(&l);
+}
+
+/** As GsSetLightMatrix, but the product replaces mp. */
+void GsSetLightMatrix2(MATRIX* mp)
+{
+    SetLightMatrix(MulMatrix2(&GsLIGHTWSMATRIX, mp));
+}
+
+/** m3 = m1 * m2, with translation m1 * m2.t + m1.t. */
+void GsMulCoord0(MATRIX* m1, MATRIX* m2, MATRIX* m3)
+{
+    ApplyMatrixLV(m1, (VECTOR*)m2->t, (VECTOR*)m3->t);
+    MulMatrix0(m1, m2, m3);
+    m3->t[0] += m1->t[0];
+    m3->t[1] += m1->t[1];
+    m3->t[2] += m1->t[2];
+}
+
+/** m2 = m1 * m2. */
+void GsMulCoord2(MATRIX* m1, MATRIX* m2)
+{
+    VECTOR v;
+    ApplyMatrixLV(m1, (VECTOR*)m2->t, &v);
+    MulMatrix2(m1, m2);
+    m2->t[0] = v.vx + m1->t[0];
+    m2->t[1] = v.vy + m1->t[1];
+    m2->t[2] = v.vz + m1->t[2];
+}
+
+/** m1 = m1 * m2. */
+void GsMulCoord3(MATRIX* m1, MATRIX* m2)
+{
+    VECTOR v;
+    ApplyMatrixLV(m1, (VECTOR*)m2->t, &v);
+    MulMatrix(m1, m2);
+    m1->t[0] = v.vx + m1->t[0];
+    m1->t[1] = v.vy + m1->t[1];
+    m1->t[2] = v.vz + m1->t[2];
 }

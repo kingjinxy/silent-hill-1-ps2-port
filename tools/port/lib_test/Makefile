@@ -61,7 +61,7 @@ librecomp_ee.a: $(RECOMP_C) $(wildcard $(RECOMP)/bridge_*.c)
 	$(PS2DEV)/ee/bin/mips64r5900el-ps2-elf-ar rcs $@ ee_objs/*.o
 
 # The port's C libraries (src/port/libkmath_*.c, libgte_*.c), built as the game's port C is.
-PORT_LIB_C := libkmath_port libkmath_table libgte_port libgte_tables libgpu_packets
+PORT_LIB_C := libkmath_port libkmath_table libgte_port libgte_tables libgpu_packets libgs_port
 PORT_LIB_O := $(addsuffix .o,$(PORT_LIB_C))
 $(PORT_LIB_O): %.o: $(ROOT)/src/port/%.c
 	$(CC_EE) -O2 -G0 -std=gnu89 -nostdinc -I$(ROOT)/include -I$(ROOT)/include/psyq -I$(ROOT)/include/decomp -Wa,-I$(ROOT)/include \

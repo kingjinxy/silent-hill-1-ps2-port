@@ -21,6 +21,7 @@ LoadAverageShort12 LoadAverageShort0 LoadAverageByte InvSquareRoot VectorNormalS
 Math_Sin Math_Cos Math_RotMatrixZ Math_RotMatrixXyz Math_RotMatrixZxy Math_RotMatrixZxyNeg Math_RotMatrixXyzGte
 Math_RotMatrixZxyNegGte
 GsSetFlatLight GsSetLightMatrix GsSetLsMatrix GsSetProjection GsSetAmbient
+GsSetLightMatrix2 GsMulCoord0 GsMulCoord2 GsMulCoord3 GsSetLightMode
 TermPrim SetPolyG3 SetPolyF4 SetPolyFT4 SetPolyG4 SetTile SetDrawTPage SetDrawMove GetGraphDebug
 SetTexWindow SetDrawArea SetDrawOffset SetPriority SetDrawStp SetDrawMode SetDrawEnv""".split()
 
