@@ -81,9 +81,12 @@ typedef unsigned long long u64x;
 #define SNAP_ADDR  0
 /* CLUT cache: one 256-pixel PSMCT16 row per CLUT (256x128, the last 64 KiB of the page cache area). */
 #define CLUT_ADDR  0x2F0000
-#define CLUT_ROWS  120 /* rows 120-127: filtered CLUTs (filt_get) */
-#define FILT_ROW0  120
-#define FILT_ROWS  8
+#define CLUT_ROWS  104 /* rows 104-127: filtered CLUTs (filt_get) */
+#define FILT_ROW0  104 /* 8-bit: rows 104-111 */
+#define FILT_ROWS8 8
+#define FILT4_ROW0 112 /* 4-bit: 16 a row in rows 112-127 */
+#define FILT4_SETS 128 /* two ways each */
+#define FILT_RAWS  16
 
 #define PSM_CT32 0x00
 #define PSM_CT16 0x02
@@ -137,6 +140,17 @@ static SPR u32  s_Epoch;
 /* Per-frame statistics (GpuGs_Stats): primitives, texture (TEX0) changes, CLUT loads, primitives
  * with destination alpha test (check mask), primitives sampling the VRAM buffer (15-bit pages). */
 static u32 s_StPrims, s_StTex0, s_StClut, s_StDate, s_StRtTex, s_StUploads, s_StReadbacks;
+#ifdef SH_PORT_LITEPROF
+/* Texture cache diagnostics: misses, and entries dropped because their VRAM changed (with the
+ * rectangles that dropped them, a few a report). */
+static u32 s_StFiltCalls, s_StFiltMiss, s_StPageMiss, s_StClutMiss, s_StPageDrop, s_StClutDrop, s_StDropRects;
+static s16 s_DropRect[8][4];
+#define ST_DROP_RECT(x, y, w, h) do { if (s_StDropRects < 8) { s16* r_ = s_DropRect[s_StDropRects]; r_[0] = x; r_[1] = y; r_[2] = w; r_[3] = h; } s_StDropRects++; } while (0)
+#define ST_COUNT(v) ((v)++)
+#else
+#define ST_DROP_RECT(x, y, w, h) do { } while (0)
+#define ST_COUNT(v) do { } while (0)
+#endif
 static SPR u8   s_RegValid[REG_COUNT];
 
 /* Interlaced 480-line display with drawing to the display area off (GP0 E1 bit 10, DFE = 0): the
@@ -430,6 +444,8 @@ static void cache_invalidate(s32 x, s32 y, s32 w, s32 h)
         {
             s_PageMap[s_Slots[i].key] = 0;
             s_Slots[i].key            = -1;
+            ST_COUNT(s_StPageDrop);
+            ST_DROP_RECT(x, y, w, h);
             s_TexGen++;
             s_RegValid[R_TEX0]        = 0; /* prim_state's texture memo: look the page up again */
         }
@@ -448,6 +464,8 @@ static void cache_invalidate(s32 x, s32 y, s32 w, s32 h)
         {
             s_ClutMap[CLUT_MAP(s_Cluts[i].key)] = 0;
             s_Cluts[i].key                      = -1;
+            ST_COUNT(s_StClutDrop);
+            ST_DROP_RECT(x, y, w, h);
             s_TexGen++;
             s_RegValid[R_TEX0]                  = 0;
         }
@@ -582,6 +600,7 @@ static u32 cache_get(u32 depth, u32 tpage)
         s_Slots[i].used = ++s_UseClock;
         return slot_tbp(i);
     }
+    ST_COUNT(s_StPageMiss);
     /* A free slot, else the least recently used one. */
     for (i = 0; i < s_CacheSlots; i++)
     {
@@ -632,6 +651,7 @@ static u32 clut_get(u32 clut, u32 depth)
         s_Cluts[i].used = ++s_UseClock;
         return (u32)i;
     }
+    ST_COUNT(s_StClutMiss);
     for (i = 0; i < CLUT_ROWS; i++)
     {
         if (s_Cluts[i].key < 0)
@@ -675,93 +695,165 @@ static u32 clut_get(u32 clut, u32 depth)
  * quarter-adding mode 3): there the GS's negative dither cells take a level off (darker flare edges,
  * a checkered rectangle where the flashlight draws its black quad). Such primitives use a copy of
  * their CLUT with those semi-transparent entries made transparent (0x0000, dropped by the alpha
- * test). `filt`: the primitive's largest vertex colour per channel | mode 3 << 24. The CLUT as read
- * from VRAM is kept, so another colour only filters it again. */
+ * test). `filt`: filt_canon of the primitive's largest vertex colour per channel | mode 3 << 24. The
+ * CLUT as read from VRAM is kept, so another colour only filters it again. */
+/* The CLUTs as read from VRAM, kept so another colour only filters them again. */
 typedef struct
 {
     s32 key; /* as s_Cluts' (CLUT attribute | depth << 16), -1 = free */
-    u32 filt, used;
+    u32 used;
     u16 raw[256] __attribute__((aligned(16)));
+} FiltRaw;
+static FiltRaw s_FiltRaw[FILT_RAWS];
+
+/* Filtered CLUTs in GS memory: 8-bit ones a whole row each (FILT_ROW0, FILT_ROWS8, least recently
+ * used), 4-bit ones 16 entries each, 16 to a row from FILT4_ROW0 (TEXCLUT's COU picks the entry), in a
+ * two-way cache by CLUT and filter: map4_s02's effects use up to ~110 pairs a frame (7 CLUTs, 20
+ * filters). A new one never replaces the one drawn with last (the GS reads a CLUT row after the
+ * upload that would replace it: measured): the least recently used of two ways never is. */
+typedef struct
+{
+    s32 key; /* as FiltRaw's, -1 = free */
+    u32 filt, used;
 } FiltSlot;
-static FiltSlot s_Filt[FILT_ROWS];
+static FiltSlot s_Filt8[FILT_ROWS8];
+static FiltSlot s_Filt4[FILT4_SETS * 2];
 static u32      s_FiltDrawn; /* the polygon just drawn used a filtered CLUT */
 static u32      s_FiltPass2; /* drawing its second pass (the left-out texels) */
 
-static u32 filt_get(u32 clut, u32 depth, u32 filt)
+/** The filter's inputs from a colour (largest per channel, `mode3`: quarter-adding): per channel (8
+ * bits each), the smallest texel channel kept (texel * colour >= 64, or 256 for mode 3; 32: none) and
+ * bit 6, adding only: that value is the faint channel's raise (it times the colour stays under 80).
+ * Colours with the same thresholds filter a CLUT identically, so they share its row (map4_s02's
+ * effects: ~330 filtered polygons a frame in ~170 colours, but far fewer thresholds). */
+static u32 filt_canon(u32 rgb, u32 mode3)
 {
-    s32 key = (s32)((clut & 0x7FFF) | (depth << 16));
-    s32 i, best = -1, n = depth == 0 ? 16 : 256, k;
-    u32 lim = ((filt >> 24) & 1) ? 16 * 16 : 4 * 16; /* (texel << 3) * colour >> 7 >= 4 (16): texel * colour >= 64 (256) */
-    u16 row[256] __attribute__((aligned(16)));
-    for (i = 0; i < FILT_ROWS; i++)
+    u32 ch, out = mode3 << 24;
+    u32 lim = mode3 ? 16 * 16 : 4 * 16;
+    for (ch = 0; ch < 3; ch++)
     {
-        if (s_Filt[i].key == key && s_Filt[i].filt == filt)
+        u32 c = (rgb >> (ch * 8)) & 0xFF;
+        u32 kmin = c ? (lim + c - 1) / c : 32;
+        if (kmin > 32)
         {
-            s_Filt[i].used = ++s_UseClock;
-            return (u32)(FILT_ROW0 + i);
+            kmin = 32;
+        }
+        out |= kmin << (ch * 8);
+        if (!mode3 && c && kmin * c < 80 && kmin <= 31)
+        {
+            out |= 0x40u << (ch * 8);
         }
     }
-    /* A new filtered row goes to the least recently used slot, never over one just drawn with (the GS
-     * reads a CLUT row after the upload that would replace it: measured). The CLUT as read from VRAM
-     * comes from a slot holding the same CLUT if there is one (no readback). */
-    for (i = 0; i < FILT_ROWS; i++)
+    return out;
+}
+
+/** The CLUT `key` (`n` entries) as read from VRAM, kept in s_FiltRaw. */
+static const u16* filt_raw(s32 key, u32 clut, s32 n)
+{
+    s32      i, best = 0;
+    FiltRaw* r;
+    for (i = 0; i < FILT_RAWS; i++)
     {
-        if (s_Filt[i].key < 0)
+        if (s_FiltRaw[i].key == key)
+        {
+            s_FiltRaw[i].used = ++s_UseClock;
+            return s_FiltRaw[i].raw;
+        }
+        if (s_FiltRaw[best].key >= 0 && (s_FiltRaw[i].key < 0 || s_FiltRaw[i].used < s_FiltRaw[best].used))
         {
             best = i;
-            break;
-        }
-        if (best < 0 || s_Filt[i].used < s_Filt[best].used)
-        {
-            best = i;
         }
     }
-    for (i = 0; i < FILT_ROWS; i++)
-    {
-        if (s_Filt[i].key == key)
-        {
-            break;
-        }
-    }
-    if (i < FILT_ROWS)
-    {
-        if (i != best)
-        {
-            memcpy(s_Filt[best].raw, s_Filt[i].raw, sizeof(s_Filt[best].raw));
-        }
-    }
-    else
+    r = &s_FiltRaw[best];
     {
         s32 x = (s32)(clut & 0x3F) * 16, y = (s32)((clut >> 6) & 0x1FF);
         if (x + n <= VRAM_W)
         {
-            download_rect(x, y, n, 1, s_Filt[best].raw, n);
+            download_rect(x, y, n, 1, r->raw, n);
         }
         else
         {
-            download_rect(x, y, VRAM_W - x, 1, s_Filt[best].raw, n);
-            download_rect(0, y, x + n - VRAM_W, 1, s_Filt[best].raw + (VRAM_W - x), n);
+            download_rect(x, y, VRAM_W - x, 1, r->raw, n);
+            download_rect(0, y, x + n - VRAM_W, 1, r->raw + (VRAM_W - x), n);
         }
     }
+    r->key  = key;
+    r->used = ++s_UseClock;
+    return r->raw;
+}
+
+/** TEXCLUT for `clut` (a 4- or 8-bit page's) filtered by `filt`. */
+static u64x filt_get(u32 clut, u32 depth, u32 filt)
+{
+    s32        key = (s32)((clut & 0x7FFF) | (depth << 16));
+    s32        i, best = -1, n = depth == 0 ? 16 : 256, k, cou, cov;
+    const u16* raw;
+    FiltSlot*  s;
+    u16        row[256] __attribute__((aligned(16)));
+    ST_COUNT(s_StFiltCalls);
+    if (depth == 0)
+    {
+        u32 h = ((u32)key * 0x9E3779B1u) ^ (filt * 0x85EBCA77u);
+        h     = ((h >> 15) ^ h) & (FILT4_SETS - 1);
+        s     = &s_Filt4[h * 2];
+        for (i = 0; i < 2; i++)
+        {
+            if (s[i].key == key && s[i].filt == filt)
+            {
+                s[i].used = ++s_UseClock;
+                best      = (s32)h * 2 + i;
+                return 4 | ((u64x)(best & 15) << 6) | ((u64x)(FILT4_ROW0 + best / 16) << 12);
+            }
+        }
+        best = (s32)h * 2 + (s[0].key < 0 ? 0 : s[1].key < 0 ? 1 : s[1].used < s[0].used ? 1 : 0);
+        s    = &s_Filt4[best];
+        cou  = best & 15;
+        cov  = FILT4_ROW0 + best / 16;
+    }
+    else
+    {
+        for (i = 0; i < FILT_ROWS8; i++)
+        {
+            if (s_Filt8[i].key == key && s_Filt8[i].filt == filt)
+            {
+                s_Filt8[i].used = ++s_UseClock;
+                return 4 | ((u64x)(FILT_ROW0 + i) << 12);
+            }
+        }
+        for (i = 0; i < FILT_ROWS8; i++)
+        {
+            if (s_Filt8[i].key < 0)
+            {
+                best = i;
+                break;
+            }
+            if (best < 0 || s_Filt8[i].used < s_Filt8[best].used)
+            {
+                best = i;
+            }
+        }
+        s   = &s_Filt8[best];
+        cou = 0;
+        cov = FILT_ROW0 + best;
+    }
+    ST_COUNT(s_StFiltMiss);
+    raw = filt_raw(key, clut, n);
     for (k = 0; k < n; k++)
     {
-        u32 t = s_Filt[best].raw[k], c, ch, out = t;
-        u32 keep = !(t & 0x8000) || (t & 31) * (filt & 0xFF) >= lim || ((t >> 5) & 31) * ((filt >> 8) & 0xFF) >= lim ||
-                   ((t >> 10) & 31) * ((filt >> 16) & 0xFF) >= lim;
+        u32 t = raw[k], ch, out = t;
+        /* (texel << 3) * colour >> 7 >= 4 (16): texel * colour >= 64 (256), as filt_canon's thresholds */
+        u32 keep = !(t & 0x8000) || (t & 31) >= (filt & 0x3F) || ((t >> 5) & 31) >= ((filt >> 8) & 0x3F) ||
+                   ((t >> 10) & 31) >= ((filt >> 16) & 0x3F);
         if (keep && (t & 0x8000) && !((filt >> 24) & 1))
         {
             /* Adding: a faint channel of a kept entry raised to exactly 4 after modulation, which the
              * dither never takes over or under a level (adds 0, as the PS1's faint channel). */
             for (ch = 0; ch < 3; ch++)
             {
-                c = (filt >> (ch * 8)) & 0xFF;
-                if (c && ((t >> (ch * 5)) & 31) * c < 64)
+                u32 v = (filt >> (ch * 8)) & 0x3F;
+                if (((filt >> (ch * 8)) & 0x40) && ((t >> (ch * 5)) & 31) < v)
                 {
-                    u32 v = (64 + c - 1) / c;
-                    if (v * c < 80 && v <= 31)
-                    {
-                        out = (out & ~(31u << (ch * 5))) | (v << (ch * 5));
-                    }
+                    out = (out & ~(31u << (ch * 5))) | (v << (ch * 5));
                 }
             }
         }
@@ -774,29 +866,51 @@ static u32 filt_get(u32 clut, u32 depth, u32 filt)
             row[k] = keep ? (u16)out : 0;
         }
     }
-    upload(CLUT_ADDR / 256, 4, PSM_CT16, 0, FILT_ROW0 + best, n, 1, row, (u32)(n * 2));
-    s_Filt[best].key   = key;
-    s_Filt[best].filt  = filt;
-    s_Filt[best].used  = ++s_UseClock;
+    upload(CLUT_ADDR / 256, 4, PSM_CT16, cou * 16, cov, n, 1, row, (u32)(n * 2));
+    s->key             = key;
+    s->filt            = filt;
+    s->used            = ++s_UseClock;
     s_RegValid[R_TEX0] = 0; /* this row's contents changed: load it again */
-    return (u32)(FILT_ROW0 + best);
+    return 4 | ((u64x)cou << 6) | ((u64x)cov << 12);
 }
 
-/** Drops the filtered CLUTs a VRAM write at (x, y, w, h) touches. */
+/** Whether a VRAM write at (x, y, w, h) changes the CLUT `key` (as s_Cluts'; -1: none). */
+static int filt_touched(s32 key, s32 x, s32 y, s32 w, s32 h)
+{
+    s32 cx = (key & 0x3F) * 16, cy = (key >> 6) & 0x1FF;
+    s32 cw = (key >> 16) == 0 ? 16 : 256;
+    return key >= 0 && ((x < cx + cw && cx < x + w) || cx + cw > VRAM_W) && y <= cy && cy < y + h;
+}
+
+/** Drops the filtered CLUTs (and their VRAM copies) a VRAM write at (x, y, w, h) touches. */
 static void filt_invalidate(s32 x, s32 y, s32 w, s32 h)
 {
     s32 i;
-    for (i = 0; i < FILT_ROWS; i++)
+    for (i = 0; i < FILT_RAWS; i++)
     {
-        s32 cx = (s_Filt[i].key & 0x3F) * 16, cy = (s_Filt[i].key >> 6) & 0x1FF;
-        s32 cw = (s_Filt[i].key >> 16) == 0 ? 16 : 256;
-        if (s_Filt[i].key >= 0 && ((x < cx + cw && cx < x + w) || cx + cw > VRAM_W) && y <= cy && cy < y + h)
+        if (filt_touched(s_FiltRaw[i].key, x, y, w, h))
         {
-            s_Filt[i].key      = -1;
+            s_FiltRaw[i].key = -1;
+        }
+    }
+    for (i = 0; i < FILT_ROWS8; i++)
+    {
+        if (filt_touched(s_Filt8[i].key, x, y, w, h))
+        {
+            s_Filt8[i].key     = -1;
+            s_RegValid[R_TEX0] = 0;
+        }
+    }
+    for (i = 0; i < FILT4_SETS * 2; i++)
+    {
+        if (filt_touched(s_Filt4[i].key, x, y, w, h))
+        {
+            s_Filt4[i].key     = -1;
             s_RegValid[R_TEX0] = 0;
         }
     }
 }
+
 
 /* --- Setup ------------------------------------------------------------------------------------*/
 
@@ -822,9 +936,17 @@ static void init(void)
     {
         s_Cluts[i].key = -1;
     }
-    for (i = 0; i < FILT_ROWS; i++)
+    for (i = 0; i < FILT_RAWS; i++)
     {
-        s_Filt[i].key = -1;
+        s_FiltRaw[i].key = -1;
+    }
+    for (i = 0; i < FILT_ROWS8; i++)
+    {
+        s_Filt8[i].key = -1;
+    }
+    for (i = 0; i < FILT4_SETS * 2; i++)
+    {
+        s_Filt4[i].key = -1;
     }
     memset(s_PageMap, 0, sizeof(s_PageMap));
     memset(s_ClutMap, 0, sizeof(s_ClutMap));
@@ -1041,7 +1163,7 @@ static void tex_state(const Prim* p)
     tex0 = e->tex0;
     if (depth < 2)
     {
-        u64x texclut = p->filt ? 4 | ((u64x)filt_get(p->clut, depth, p->filt) << 12) : e->texclut;
+        u64x texclut = p->filt ? filt_get(p->clut, depth, p->filt) : e->texclut;
         if (!s_RegValid[R_TEXCLUT] || s_Reg[R_TEXCLUT] != texclut)
         {
             s_RegValid[R_TEX0] = 0; /* the CLUT is loaded when TEX0 is written */
@@ -1635,7 +1757,7 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
                 ((rgb[i] & 0xFF00) > (m & 0xFF00) ? rgb[i] & 0xFF00 : m & 0xFF00) |
                 ((rgb[i] & 0xFF0000) > (m & 0xFF0000) ? rgb[i] & 0xFF0000 : m & 0xFF0000);
         }
-        p.filt = m | ((u32)(p.semiMode == 3) << 24) | (1u << 25); /* bit 25: never 0 */
+        p.filt = filt_canon(m, p.semiMode == 3) | (1u << 25); /* bit 25: never 0 */
         if (s_FiltPass2)
         {
             p.dither = 0;
@@ -2808,6 +2930,16 @@ void GpuGs_Stats(u32 frames)
            s_StDate / frames, s_StRtTex / frames, s_StUploads / frames, s_StReadbacks / frames);
     s_StPrims = s_StTex0 = s_StClut = s_StDate = s_StRtTex = s_StUploads = s_StReadbacks = 0;
 #ifdef SH_PORT_LITEPROF
+    printf("gs filtered CLUTs per frame: %u lookups, %u misses\n", s_StFiltCalls / frames, s_StFiltMiss / frames);
+    s_StFiltCalls = s_StFiltMiss = 0;
+    printf("gs cache per frame: %u page misses, %u CLUT misses, %u pages and %u CLUTs dropped by VRAM writes (%u drops; first rects:",
+           s_StPageMiss / frames, s_StClutMiss / frames, s_StPageDrop / frames, s_StClutDrop / frames, s_StDropRects / frames);
+    for (a = 0; a < (s32)s_StDropRects && a < 8; a++)
+    {
+        printf(" %d,%d %dx%d", s_DropRect[a][0], s_DropRect[a][1], s_DropRect[a][2], s_DropRect[a][3]);
+    }
+    printf(")\n");
+    s_StPageMiss = s_StClutMiss = s_StPageDrop = s_StClutDrop = s_StDropRects = 0;
     {
         static const char* const NAMES[LP_COUNT] = { "DrawOTag", "GpuGs_Commands", "polygon: parse", "polygon: state",
                                                      "polygon: emit", "rectangle", "lines", "flush (DMA)",

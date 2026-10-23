@@ -19,6 +19,7 @@ Known issues, tabled for now (collected 2026-10-19, mostly from the console cuts
 - **"STEP ERROR" on screen during attract demos.**
   - The original game's debug text in demo playback (demo.c): a recorded attract demo found the game in a different state than it expects. It's harmless and seen on hardware, probably when a soft reset interrupts a demo.
   - It's logged now ("demo: STEP ERROR at step ..."); still to find out which demo and step.
+- **map4_s02 warp: jump to address 0.** One of five PCSX2 warp runs into map4_s02 (2026-10-23) ended in a TLB miss at pc 0x82000, address 0, after ~25 s. Not seen in normal play yet.
 - **Warm-restart hang.**
   - What happens: after a remote deploy or restart, the game sometimes hangs at the title, and the PS2 needs a power cycle.
   - Clue (2026-10-18): rom0:MCSERV was loaded a second time, not by the port, just before the log stopped. The IOP SIF0 DMA was busy. See Planning Doc.md.
@@ -51,6 +52,7 @@ Known issues, tabled for now (collected 2026-10-19, mostly from the console cuts
   - Not used with the 2x or 32-bit shadow buffer, for fog pairs, or past a 256x128 box: those keep the 1-2 level differences.
 - **Filtered CLUT cost not measured on hardware.**
   - The flare's filtered CLUTs read the CLUT back from the GS once per CLUT, then refilter and upload 16 entries per new sprite colour, and each filtered polygon is drawn twice (the mask-bit pass).
+  - map4_s02's effects use them on ~340 polygons a frame; since 2026-10-23 they're cached by filter thresholds in 256 slots (PS2 Optimizations.md), ~23 misses a frame left there.
 - **2x prototype limits.**
   - Lines stay 1 pixel wide.
   - A clip area straddling the 2x area's edge is drawn at 1x (logged "hires: clip area ... straddles").
