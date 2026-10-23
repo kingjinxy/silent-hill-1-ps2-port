@@ -528,3 +528,7 @@ Plan, in order:
 - Not exact in one case: normalising a zero vector, where the PS1 reads 128 bytes before its table (only IR0 can differ).
 - Speed, attract demos 0-4 in PCSX2 (benchmark build, frames per vertical blank), b95f79e03 against 69e9212cd: 34.55 → 34.76, 64.49 → 65.07, 79.06 → 80.00, 145.58 → 147.53, 200.61 → 209.84 fps (+0.6% to +4.6%, more in light scenes where per-frame library calls weigh more). PCSX2 doesn't model the caches; hardware may differ.
 - Still recompiled: 31 functions (libgs display/OT/lighting/coordinates/model drawing, libgte GsTMDfast*LFG, libgpu tmd.o).
+
+### 2026-10-22: the rest of the PS1 libraries in C: libgs, GsTMDfast*LFG, libgpu tmd.o (kept)
+- libgs (src/port/libgs_port.c: display, double buffers, OTs, 3D setup, lights, coordinates, GsLinkObject4, GsSortFastSprite, GsSortObject4J, and libgs's variables), the four GsTMDfast*LFG renderers (libgte_port.c) and OpenTIM/ReadTIM/OpenTMD/ReadTMD (libgpu_packets.c; the TMD primitive table generated from the original's switch). No recompiled code is linked any more (recomp_all.sh recompiles nothing).
+- Checked: lib_test against the PS1 (100 functions); functions that store addresses or call function pointers against the recompiled originals on the EE, same memory, everything written compared (sprites, TIMs, TMD links, GsSortObject4J's renderer calls, the renderers with all GTE registers, 4,153 TMD primitives of all 32 types): no differences. Kaufmann and attract demo dumps unchanged (apart from the usual subtitle glyph).

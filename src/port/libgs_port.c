@@ -20,6 +20,14 @@ extern int  GetVideoMode(void);
 
 #define RCNT_VBLANK 0xF2000001 /* RCntCNT1 */
 
+/* --- global.o, gs_123.o: libgs's variables --------------------------------------------------------*/
+
+long    GsADIVZ;
+short   GsADIVW = 1023, GsADIVH = 511; /* subdivision limits */
+u_long  GsDISPON, GsLIOFF, GsLMODE, GsLIGNR, GsZOVER, GsBACKC, GsMATE_C, GsTRATE, GsTON, GsNDIV;
+PACKET* GsOUT_PACKET_P;                /* where the next packet is built */
+MATRIX  GsWSMATRIX_ORG, GsIDMATRIX, GsWSMATRIX, GsIDMATRIX2;
+
 /* --- gs_001.o: display and drawing environments, double buffering ------------------------------*/
 
 /** The two background fills of GsSortClear (BLK_FILL), one per buffer. */
