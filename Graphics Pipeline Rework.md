@@ -3,7 +3,8 @@
 Goal: change how the port's renderer uses the PS2 so the EE stops being the limit (ideally the GS becomes it), without changing a single output pixel. Background: [PS2 Decomps Analysis.md](PS2%20Decomps%20Analysis.md) (how Dark Cloud and ICO feed VU1 and the GS) and [PS2 Optimizations.md](PS2%20Optimizations.md) (measurements so far).
 
 Every step must keep the output identical. The checks:
-- `tools/port/bench_frames.sh` (attract demo 0 frame dumps) and `tools/port/bench_cutscene.sh 4` (Kaufmann) against the build before the step.
+- `tools/port/bench_frames.sh` (attract demo 0 frame dumps) against the build before the step.
+- `tools/port/bench_cutscene.sh 4` (Kaufmann) only between builds of the same speed: the cutscene follows its voice clips, which play in emulated time while the benchmark runs uncapped, so a faster or slower build reaches each line at another frame (different shots and poses in the dumps). Shown 2026-10-23: the same build twice gives identical dumps; the same build with only a delay loop added in GpuGs_Commands gives 7 of 10 different. Earlier "Kaufmann dumps identical" checks across speed changes were luck.
 - `tools/port/gpu_test.py` results unchanged.
 - `tools/port/gte_test` and `tools/port/lib_test` for anything touching GTE maths.
 
@@ -61,6 +62,18 @@ Compact primitive records expanded into GS packets by a VU1 microprogram (intege
 ### 6. Hardware profile of the game logic
 EE performance counters (cache misses, stalls) on the console; the scratchpad change from 2026-10-22; compiler flags (`-G0`).
 
+### Found on the way: the filtered CLUTs cost Kaufmann more than map4_s02
+The Kaufmann cutscene (map3_s00) does ~1,400 filtered CLUT lookups a frame. Light counters, k-cycles a frame (PCSX2):
+
+| | DrawOTag | texture state | flush/DMA | uploads | readbacks |
+|---|---|---|---|---|---|
+| 714abc587 (before today) | 8,172 | 5,377 | 2,936 | 470 | 121 |
+| d11e842fb (steps 1-2) | 3,879 | 666 | 5 | 91 | 16 |
+| larger caches (4-bit filtered slots 256 → 512, CLUT sources 16 → 64, plain CLUT rows 104 → 88) | **3,778** | **555** | 5 | **32** | **0** |
+
+So the filtered CLUTs (2026-10-22) had more than doubled Kaufmann's DrawOTag (it was ~1,500 on 2026-10-17); today's changes take most of that back. Plain CLUT misses stay at most 1 a report with 88 rows. Readbacks matter most on the console (each waits for the GS to finish everything).
+
 ## Log
 - 2026-10-23: plan written. Step 1 done (asynchronous GIF sends), console test pending.
 - 2026-10-23: step 2 done (small uploads inline in the packet stream), console test pending.
+- 2026-10-23: filtered CLUT caches enlarged (Kaufmann readbacks 16 → 0 a frame). Kaufmann dumps shown to depend on build speed.

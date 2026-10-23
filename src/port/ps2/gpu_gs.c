@@ -81,12 +81,12 @@ typedef unsigned long long u64x;
 #define SNAP_ADDR  0
 /* CLUT cache: one 256-pixel PSMCT16 row per CLUT (256x128, the last 64 KiB of the page cache area). */
 #define CLUT_ADDR  0x2F0000
-#define CLUT_ROWS  104 /* rows 104-127: filtered CLUTs (filt_get) */
-#define FILT_ROW0  104 /* 8-bit: rows 104-111 */
+#define CLUT_ROWS  88 /* rows 88-127: filtered CLUTs (filt_get) */
+#define FILT_ROW0  88 /* 8-bit: rows 88-95 */
 #define FILT_ROWS8 8
-#define FILT4_ROW0 112 /* 4-bit: 16 a row in rows 112-127 */
-#define FILT4_SETS 128 /* two ways each */
-#define FILT_RAWS  16
+#define FILT4_ROW0 96 /* 4-bit: 16 a row in rows 96-127 */
+#define FILT4_SETS 256 /* two ways each */
+#define FILT_RAWS  64
 
 #define PSM_CT32 0x00
 #define PSM_CT16 0x02
