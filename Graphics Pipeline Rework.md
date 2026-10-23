@@ -50,8 +50,20 @@ Results (map4_s02 warp, PCSX2): sends 31 → **6** a frame; DrawOTag 632 → **6
 
 Console estimate: ~25 fewer send waits a frame (each a wait for the GS to take the packet so far, and before step 1 a full cache writeback); ~0.2-0.4M cycles. map4_s02 **~47-52 fps**.
 
-### 3. GS packets straight from the hot mesh paths
-World mesh, character mesh and particles write GS packets into a side buffer and leave a marker in the OT, skipping the GP0 encode/decode (~1,300 cycles a primitive today). Checked per mesh against the PS1 packets' translation.
+### 3. Cheaper primitive translation — in progress
+Original idea: world mesh, character mesh and particles write GS packets into a side buffer and leave a marker in the OT, skipping the GP0 encode/decode. Measuring first changed the order:
+- map4_s02 barely uses the mesh paths (mesh packets ~1k cycles a frame); its primitives are effects and particles.
+- Kaufmann, per polygon (~1,550 a frame, PCSX2): parse ~390 cycles, state ~780, emit ~850. Of emit, exact blending (`blend_exact`, modes 0/2/3, three draws each) is 752k a frame for 132 polygons (~5,700 cycles each). Of state, ~1,070 recomputes a frame came from the primitive kind alternating against a one-entry memo.
+- So skipping the GP0 decode only saves the ~390 of parse; state and emit have to happen at DrawOTag time either way.
+
+Done:
+- [x] Larger filtered CLUT caches (see below): Kaufmann readbacks 16 → 0 a frame.
+- [x] Per-kind state memo (`prim_state`, 1x only): a kind seen again under the same drawing settings only re-sets its six registers. Kaufmann "state: other" 458 → 157 k-cycles, DrawOTag 3,815 → 3,745 (−2%).
+- [x] Tried, reverted: `blend_exact` restoring the registers it changed instead of dropping every memo (memo drops 262 → 1 a frame, but the restores cost as much: DrawOTag unchanged).
+
+Exactness for these: `gpu_test.py` identical; the 7 DuckStation captures replayed through the renderer (`compare_frames.py --replay`, timing-independent) byte-identical VRAM to HEAD's; attract demo 0 dumps identical.
+
+Left: the mesh-path bypass (parse ~600k + PS1 packet building ~340k a frame in Kaufmann), and cheaper `blend_exact` packets.
 
 ### 4. GTE maths on MMI
 Batched transforms, point light dot products and colour maths with 128-bit integer SIMD (`PMULTH`/`PMADDH`), with a range guard falling back to the C path so results and flags stay exact.
@@ -77,3 +89,4 @@ So the filtered CLUTs (2026-10-22) had more than doubled Kaufmann's DrawOTag (it
 - 2026-10-23: plan written. Step 1 done (asynchronous GIF sends), console test pending.
 - 2026-10-23: step 2 done (small uploads inline in the packet stream), console test pending.
 - 2026-10-23: filtered CLUT caches enlarged (Kaufmann readbacks 16 → 0 a frame). Kaufmann dumps shown to depend on build speed.
+- 2026-10-23: step 3 re-scoped after measuring; per-kind state memo (−2% DrawOTag in Kaufmann).

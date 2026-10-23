@@ -53,6 +53,8 @@ enum
     LP_SNOW_MOVE,  /* Particle_Update: the particle state/movement loop */
     LP_SNOW_DRAW,  /* Particle_Update: the draw loop (Particle_SnowDraw / Particle_RainDraw) */
     LP_SNOW_RTPS,  /* Particle_SnowDraw: the flake's RTPS and its stores (calls = flakes drawn) */
+    LP_BLEND_EXACT, /* polygon(): blend_exact's polygons (three draws each) */
+    LP_EMIT_UNDER, /* polygon(): fog pairs' quads (underlay and quad) */
     LP_COUNT
 };
 #ifdef SH_PORT_LITEPROF

@@ -143,7 +143,8 @@ static u32 s_StPrims, s_StTex0, s_StClut, s_StDate, s_StRtTex, s_StUploads, s_St
 #ifdef SH_PORT_LITEPROF
 /* Texture cache diagnostics: misses, and entries dropped because their VRAM changed (with the
  * rectangles that dropped them, a few a report). */
-static u32 s_StRbFilt, s_StRbStore;
+static u32 s_StMemoKind;
+static u32 s_StRbFilt, s_StRbStore, s_StMemoEpoch, s_StMemoGen, s_StMemoKey;
 static u32 s_StFiltCalls, s_StFiltMiss, s_StPageMiss, s_StClutMiss, s_StPageDrop, s_StClutDrop, s_StDropRects;
 static s16 s_DropRect[8][4];
 #define ST_DROP_RECT(x, y, w, h) do { if (s_StDropRects < 8) { s16* r_ = s_DropRect[s_StDropRects]; r_[0] = x; r_[1] = y; r_[2] = w; r_[3] = h; } s_StDropRects++; } while (0)
@@ -1126,6 +1127,41 @@ static u64x prim_state(const Prim* p)
           (p->hr << 7);
     if (memoEpoch != s_Epoch || memoGen != s_StateGen || memoKey != key)
     {
+        /* Kinds alternate (~1,200 changes a frame in the Kaufmann cutscene): each kind's registers
+         * are kept for the current drawing settings, and a kind seen again only sets those (set()
+         * skips the ones already right). At 1x only: state_other also marks the clip area at 2x. */
+        static struct
+        {
+            u32  epoch, gen;
+            u64x prim, clamp, test, fba, dthe, alpha, pabe;
+        } kinds[256] __attribute__((aligned(64)));
+        __typeof__(&kinds[0]) e = &kinds[key & 255];
+        if (!s_Sh && memoEpoch == s_Epoch && memoGen == s_StateGen && e->epoch == s_Epoch && e->gen == s_StateGen &&
+            s_RegValid[R_FRAME])
+        {
+            if (p->textured)
+            {
+                set(R_CLAMP, e->clamp);
+            }
+            set(R_TEST, e->test);
+            set(R_FBA, e->fba);
+            set(R_DTHE, e->dthe);
+            if (p->semi)
+            {
+                set(R_ALPHA, e->alpha);
+                set(R_PABE, e->pabe);
+            }
+            memoPrim = e->prim;
+            memoKey  = key;
+            ST_COUNT(s_StMemoKind);
+        }
+        else
+        {
+#ifdef SH_PORT_LITEPROF
+        if (memoEpoch != s_Epoch) s_StMemoEpoch++;
+        else if (memoGen != s_StateGen) s_StMemoGen++;
+        else s_StMemoKey++;
+#endif
         LP_BEGIN(LP_STATE_OTHER)
         PROF_BEGIN("gs: prim_state (other)")
         memoPrim = state_other(p);
@@ -1134,6 +1170,19 @@ static u64x prim_state(const Prim* p)
         memoEpoch = s_Epoch;
         memoGen   = s_StateGen;
         memoKey   = key;
+        if (!s_Sh)
+        {
+            e->epoch = s_Epoch;
+            e->gen   = s_StateGen;
+            e->prim  = memoPrim;
+            e->clamp = s_Reg[R_CLAMP];
+            e->test  = s_Reg[R_TEST];
+            e->fba   = s_Reg[R_FBA];
+            e->dthe  = s_Reg[R_DTHE];
+            e->alpha = s_Reg[R_ALPHA];
+            e->pabe  = s_Reg[R_PABE];
+        }
+        }
     }
     if (p->textured)
     {
@@ -1697,7 +1746,6 @@ static void blend_exact(const Prim* p, u64x prim, const u64x* rgbaq, const u64x*
     ad(R_XYZ2, (u64x)((2048 + bx) << 4) | ((u64x)((2048 + by) << 4) << 16));
     ad(R_UV, (u64x)(bw << 4) | ((u64x)(bh << 4) << 16));
     ad(R_XYZ2, (u64x)((2048 + bx + bw) << 4) | ((u64x)((2048 + by + bh) << 4) << 16));
-    set(R_TEXA, 0x40 | (1 << 15) | ((u64x)0x80 << 32)); /* back to init()'s */
     s_Epoch++; /* every memo of the registers set above */
     s_StateGen++;
     s_RegValid[R_TEX0] = 0;
@@ -1853,6 +1901,7 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
     if (p.semi && p.semiMode != 1 && !under && s_HrLayout == 0 && !s_Sh &&
         blend_exact_box(x, y, nv, &bxx, &byy, &bww, &bhh))
     {
+        LP_BEGIN(LP_BLEND_EXACT)
         for (i = 0; i < nv; i++)
         {
             rgbaq[i] = (u64x)(rgb[i] & colorMask) | a;
@@ -1875,6 +1924,7 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
                 }
             }
         }
+        LP_END(LP_BLEND_EXACT);
     }
     else if (nv == 4 && quad_fits(x, y))
     {
@@ -1888,6 +1938,7 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
         }
         if (under)
         {
+            LP_BEGIN(LP_EMIT_UNDER)
             s_StDate += s_CheckMask * 2;
             o    = quad_loop(1);
             *o++ = (prim & ~(u64x)((1 << 4) | (1 << 6))) | 4;
@@ -1897,6 +1948,7 @@ static inline __attribute__((always_inline)) u32 polygon_t(const u32* w, s32 n, 
                 *o++ = uv[i];
                 *o++ = xyz[i];
             }
+            LP_END(LP_EMIT_UNDER);
         }
         o    = quad_loop((int)textured);
         *o++ = prim | 4;
@@ -2998,6 +3050,9 @@ void GpuGs_Stats(u32 frames)
     printf("gs filtered CLUTs per frame: %u lookups, %u misses\n", s_StFiltCalls / frames, s_StFiltMiss / frames);
     printf("gs readbacks per frame: %u filtered CLUT sources, %u StoreImage calls\n", s_StRbFilt / frames, s_StRbStore / frames);
     s_StRbFilt = s_StRbStore = 0;
+    printf("gs state memo misses per frame: %u epoch, %u drawing settings, %u primitive kind (%u kinds seen again)\n",
+           s_StMemoEpoch / frames, s_StMemoGen / frames, s_StMemoKey / frames, s_StMemoKind / frames);
+    s_StMemoEpoch = s_StMemoGen = s_StMemoKey = s_StMemoKind = 0;
     s_StFiltCalls = s_StFiltMiss = 0;
     printf("gs cache per frame: %u page misses, %u CLUT misses, %u pages and %u CLUTs dropped by VRAM writes (%u drops; first rects:",
            s_StPageMiss / frames, s_StClutMiss / frames, s_StPageDrop / frames, s_StClutDrop / frames, s_StDropRects / frames);
@@ -3013,7 +3068,8 @@ void GpuGs_Stats(u32 frames)
                                                      "state: texture", "state: other", "mesh: light", "mesh: transform",
                                                      "mesh: packets", "light: collect", "light: batch", "light: apply",
                                                      "map fx (grid)", "map fx: batch", "particles: move",
-                                                     "particles: draw", "snow: rtps" };
+                                                     "particles: draw", "snow: rtps", "emit: blend exact",
+                                                     "emit: fog pair" };
         for (a = 0; a < LP_COUNT; a++)
         {
             printf("liteprof: %-16s %5u kcycles %5u calls a frame\n", NAMES[a], g_LiteProf[a][0] / 1000 / frames,
