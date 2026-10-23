@@ -143,6 +143,7 @@ static u32 s_StPrims, s_StTex0, s_StClut, s_StDate, s_StRtTex, s_StUploads, s_St
 #ifdef SH_PORT_LITEPROF
 /* Texture cache diagnostics: misses, and entries dropped because their VRAM changed (with the
  * rectangles that dropped them, a few a report). */
+static u32 s_StRbFilt, s_StRbStore;
 static u32 s_StFiltCalls, s_StFiltMiss, s_StPageMiss, s_StClutMiss, s_StPageDrop, s_StClutDrop, s_StDropRects;
 static s16 s_DropRect[8][4];
 #define ST_DROP_RECT(x, y, w, h) do { if (s_StDropRects < 8) { s16* r_ = s_DropRect[s_StDropRects]; r_[0] = x; r_[1] = y; r_[2] = w; r_[3] = h; } s_StDropRects++; } while (0)
@@ -524,9 +525,43 @@ static void upload_staged_impl(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s
     ad(R_TEXFLUSH, 0);
 }
 
-/** Host-to-local image transfer of `bytes` (a multiple of 16) from `src`. */
+/** Small uploads (CLUT rows, small LoadImages): the transfer's registers and an IMAGE tag with the
+ * data go into the packet being built, the same GS commands in the same order as upload_staged's
+ * three sends (the packet so far, the registers, the data), without any of them. */
+#define UPLOAD_INLINE_MAX 2048
+
+static void upload_inline(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s32 h, const void* src, u32 bytes)
+{
+    u32        qwc = bytes / 16, k;
+    const u64* in  = (const u64*)src;
+    s_StUploads++;
+    pend_flush();
+    ad(R_BITBLTBUF, ((u64x)dbp << 32) | ((u64x)dbw << 48) | ((u64x)psm << 56));
+    ad(R_TRXPOS, ((u64x)x << 32) | ((u64x)y << 48));
+    ad(R_TRXREG, (u64x)w | ((u64x)h << 32));
+    ad(R_TRXDIR, 0);
+    room((int)(qwc * 2 + 2));
+    tag_close();
+    s_Pkt[s_Pos]     = giftag(qwc, 0, 2, 0); /* IMAGE */
+    s_Pkt[s_Pos + 1] = 0;
+    s_LastTag        = s_Pos;
+    s_Pos += 2;
+    for (k = 0; k < qwc * 2; k++)
+    {
+        s_Pkt[s_Pos + (s32)k] = in[k];
+    }
+    s_Pos += (s32)(qwc * 2);
+    ad(R_TEXFLUSH, 0);
+}
+
+/** Host-to-local image transfer of `bytes` (a multiple of 16) from `src` (8-byte aligned). */
 static void upload(u32 dbp, u32 dbw, u32 psm, s32 x, s32 y, s32 w, s32 h, const void* src, u32 bytes)
 {
+    if (bytes <= UPLOAD_INLINE_MAX && !((u32)src & 7))
+    {
+        upload_inline(dbp, dbw, psm, x, y, w, h, src, bytes);
+        return;
+    }
     GpuGs_Sync(); /* s_ImgPkt may still be on its way to the GS */
     memcpy(&s_ImgPkt[2], src, bytes);
     upload_staged(dbp, dbw, psm, x, y, w, h, bytes);
@@ -791,6 +826,7 @@ static const u16* filt_raw(s32 key, u32 clut, s32 n)
         }
     }
     r = &s_FiltRaw[best];
+    ST_COUNT(s_StRbFilt);
     {
         s32 x = (s32)(clut & 0x3F) * 16, y = (s32)((clut >> 6) & 0x1FF);
         if (x + n <= VRAM_W)
@@ -2544,6 +2580,7 @@ void GpuGs_StoreImage(s32 x, s32 y, s32 w, s32 h, u16* dst)
         return;
     }
     PROF_BEGIN("gs: StoreImage (VRAM readback)")
+    ST_COUNT(s_StRbStore);
     pend_flush();
     init();
     x &= VRAM_W - 1;
@@ -2959,6 +2996,8 @@ void GpuGs_Stats(u32 frames)
     s_StPrims = s_StTex0 = s_StClut = s_StDate = s_StRtTex = s_StUploads = s_StReadbacks = 0;
 #ifdef SH_PORT_LITEPROF
     printf("gs filtered CLUTs per frame: %u lookups, %u misses\n", s_StFiltCalls / frames, s_StFiltMiss / frames);
+    printf("gs readbacks per frame: %u filtered CLUT sources, %u StoreImage calls\n", s_StRbFilt / frames, s_StRbStore / frames);
+    s_StRbFilt = s_StRbStore = 0;
     s_StFiltCalls = s_StFiltMiss = 0;
     printf("gs cache per frame: %u page misses, %u CLUT misses, %u pages and %u CLUTs dropped by VRAM writes (%u drops; first rects:",
            s_StPageMiss / frames, s_StClutMiss / frames, s_StPageDrop / frames, s_StClutDrop / frames, s_StDropRects / frames);
