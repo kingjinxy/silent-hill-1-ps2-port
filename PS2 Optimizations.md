@@ -533,3 +533,20 @@ Plan, in order:
 - libgs (src/port/libgs_port.c: display, double buffers, OTs, 3D setup, lights, coordinates, GsLinkObject4, GsSortFastSprite, GsSortObject4J, and libgs's variables), the four GsTMDfast*LFG renderers (libgte_port.c) and OpenTIM/ReadTIM/OpenTMD/ReadTMD (libgpu_packets.c; the TMD primitive table generated from the original's switch). No recompiled code is linked any more (recomp_all.sh recompiles nothing).
 - Checked: lib_test against the PS1 (100 functions); functions that store addresses or call function pointers against the recompiled originals on the EE, same memory, everything written compared (sprites, TIMs, TMD links, GsSortObject4J's renderer calls, the renderers with all GTE registers, 4,153 TMD primitives of all 32 types): no differences. Kaufmann and attract demo dumps unchanged (apart from the usual subtitle glyph).
 - Speed, same measure as above (attract demos 0-4, fps): before the library work (b95f79e03) 34.55 / 64.49 / 79.06 / 145.58 / 200.61; libgte etc. in C (69e9212cd) 34.76 / 65.07 / 80.00 / 147.53 / 209.84; everything in C (8a5b4bf2c) 34.86 / 65.24 / 80.23 / 148.41 / 204.66. Demos 0-3: +0.9% to +1.9% over b95f79e03, a little faster than 69e9212cd. Demo 4 plays a different number of frames per run (5104 / 5374 / 5156: the demo's present interval follows the frame time), so its fps varies by a few percent between builds and isn't a reliable comparison.
+
+### 2026-10-22/23: console test (PS2 hardware, 77c0e2ae5, normal 60 fps build)
+Gameplay fps from the heartbeat (movies at 15 fps left out), 480i, idle = spare share of the frame:
+
+| Map | Played | Mean fps | Seconds at 60 | Lowest | Mean idle |
+|---|---|---|---|---|---|
+| map4_s01 | 104 s | 59.9 | 99% | 46 | 36% |
+| map4_s02 | 135 s | 35.9 | 1% | 24 | 2% |
+| map4_s03 | 321 s | 55.3 | 57% | 35 | 18% |
+| map4_s04 | 8 s | 59.4 | 75% | 57 | 43% |
+
+Every slow stretch is EE-bound (idle 0-2%). map4_s02 never reaches 60 (mostly 30-45); map4_s03 has 3-21 s stretches at 35-57. Menus and screens mostly hold 60. Next: a light-counter profile (SH1_LITEPROF) of map4_s02 and map4_s03 on hardware.
+
+Open issues found:
+- Crash in map4_s05 at the Floatstinger fight's first frame, twice, identically: address load in Anim_BonesUpdate (pc 00169DF8, badvaddr FC008A36), from Game_NpcUpdate > Floatstinger_Update > func_800D37E8 > Anim_PlayLoop. The animation header arrives as FC008A30; the table (g_CharaModelAnimsData[1].activeAnmHdr) holds 00728A30, so its upper halfword became FC00 on the way (spilled at Floatstinger_Update's sp+0, then in s2 in func_800D37E8). A build with pointer checks in Floatstinger_Update/func_800D37E8 didn't crash and the checks never fired: layout-dependent (uninitialised local, a stack overrun elsewhere, or a write from an interrupt or DMA). Next: the crashing build with a hardware write watch on that stack slot.
+- With 480p set from the menu, the inventory and the game's other interlaced (480i) screens stay 480i; they should follow the setting. A boot with 480p saved came up with no picture on the user's display (the game ran).
+- Analog mode is set by the game at startup only; after the pad is unplugged and plugged back it stays digital. Fix in pad_ps2.c: re-apply the last PadSetMainMode when a pad becomes stable again.
