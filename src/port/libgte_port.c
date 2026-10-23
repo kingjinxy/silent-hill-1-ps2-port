@@ -9,6 +9,8 @@
 
 #include "common.h"
 #include <psyq/libgte.h>
+#include <psyq/libgpu.h>
+#include <psyq/libgs.h> /* GsOT, GsTON (the GsTMDfast* renderers) */
 #include "port/gte.h"
 
 extern s16 SQRT[]; /* libgte_tables.c */
@@ -1133,4 +1135,214 @@ long ratan2(long y, long x)
         a = -a;
     }
     return a;
+}
+
+/* --- GsTMDfast*LFG (g3.o, g4.o, gt3.o, gt4.o): TMD renderers, lit with fog --------------------------*/
+
+#define NCLIP  0x1400006
+#define AVSZ3  0x158002D
+#define AVSZ4  0x168002E
+#define NCDS   0x0E80413
+#define NCDT   0x0F80416
+#define MAC0   24
+
+/** Vertex or normal `w` of a primitive word (vertex index in the high half, normal in the low) into
+ * V0, V1 or V2 (`v` = 0, 2, 4). */
+#define LOAD_VERT(v, w)   do { u32* q_ = (u32*)(vert + ((w) >> 16) * 8); MTC((v), q_[0]); MTC((v) + 1, q_[1]); } while (0)
+#define LOAD_NORMAL(v, w) do { u32* q_ = (u32*)(normal + ((w) & 0xFFFF) * 8); MTC((v), q_[0]); MTC((v) + 1, q_[1]); } while (0)
+
+/** Links packet `p` (`words` after the tag) into the OT entry for `otz`, as the renderers do. */
+static void ot_link(u32* p, u32 words, GsOT* ot, u32 shift, u32 otz)
+{
+    u32* e = (u32*)ot->org + (((otz - ot->offset) >> (shift & 31)) & 0xFFFF);
+    u32  t = *e;
+    p[0]   = (words << 24) | (t & 0xFFFFFF);
+    *e     = (((u32)(unsigned long)p ^ t) & 0xFFFFFF) ^ t;
+}
+
+/** The textured renderers' RGBC: grey (80h) with the primitive's code, semi-transparent with GsTON. */
+static u32 tex_rgbc(const u32* prim)
+{
+    return (((u32)(s32)((s8*)prim)[3] | (GsTON << 1)) << 24) | 0x808080;
+}
+
+u32* GsTMDfastG3LFG(u32* prim, u32 vert, u32 normal, u32* p, u32 n, u32 shift, GsOT* ot, u32* scratch)
+{
+    (void)scratch;
+    for (; n != 0; n--, prim += 5)
+    {
+        u32 otz;
+        LOAD_VERT(VXY0, prim[2]);
+        LOAD_VERT(VXY1, prim[3]);
+        LOAD_VERT(VXY2, prim[4]);
+        Gte_Command(RTPT);
+        if ((s32)CFC(C_FLAG) < 0)
+        {
+            continue;
+        }
+        Gte_Command(NCLIP);
+        MTC(RGBC, prim[1] | (GsTON << 25));
+        if ((s32)MFC(MAC0) <= 0)
+        {
+            continue;
+        }
+        Gte_Command(AVSZ3);
+        LOAD_NORMAL(VXY0, prim[2]);
+        LOAD_NORMAL(VXY1, prim[3]);
+        LOAD_NORMAL(VXY2, prim[4]);
+        otz = MFC(OTZ);
+        Gte_Command(NCDT);
+        ot_link(p, 6, ot, shift, otz);
+        SWC(SXY0, p, 8);
+        SWC(SXY1, p, 16);
+        SWC(SXY2, p, 24);
+        SWC(RGB0, p, 4);
+        SWC(RGB1, p, 12);
+        SWC(RGB2, p, 20);
+        p += 7;
+    }
+    return p;
+}
+
+/** As G3LFG for quads: the fourth vertex by RTPS (its own flag check), its colour by NCDS. The first
+ * three screen positions are stored before that check, as the original does. */
+u32* GsTMDfastG4LFG(u32* prim, u32 vert, u32 normal, u32* p, u32 n, u32 shift, GsOT* ot, u32* scratch)
+{
+    (void)scratch;
+    for (; n != 0; n--, prim += 6)
+    {
+        u32 otz;
+        LOAD_VERT(VXY0, prim[2]);
+        LOAD_VERT(VXY1, prim[3]);
+        LOAD_VERT(VXY2, prim[4]);
+        Gte_Command(RTPT);
+        if ((s32)CFC(C_FLAG) < 0)
+        {
+            continue;
+        }
+        Gte_Command(NCLIP);
+        LOAD_VERT(VXY0, prim[5]);
+        if ((s32)MFC(MAC0) <= 0)
+        {
+            continue;
+        }
+        SWC(SXY0, p, 8);
+        SWC(SXY1, p, 16);
+        SWC(SXY2, p, 24);
+        Gte_Command(RTPS);
+        MTC(RGBC, prim[1] | (GsTON << 25));
+        LOAD_NORMAL(VXY1, prim[3]);
+        LOAD_NORMAL(VXY2, prim[4]);
+        if ((s32)CFC(C_FLAG) < 0)
+        {
+            continue;
+        }
+        Gte_Command(AVSZ4);
+        LOAD_NORMAL(VXY0, prim[5]);
+        otz = MFC(OTZ);
+        Gte_Command(NCDS);
+        SWC(RGB2, p, 28);
+        LOAD_NORMAL(VXY0, prim[2]);
+        Gte_Command(NCDT);
+        ot_link(p, 8, ot, shift, otz);
+        SWC(SXY2, p, 32);
+        SWC(RGB0, p, 4);
+        SWC(RGB1, p, 12);
+        SWC(RGB2, p, 20);
+        p += 9;
+    }
+    return p;
+}
+
+u32* GsTMDfastTG3LFG(u32* prim, u32 vert, u32 normal, u32* p, u32 n, u32 shift, GsOT* ot, u32* scratch)
+{
+    (void)scratch;
+    for (; n != 0; n--, prim += 7)
+    {
+        u32 otz;
+        LOAD_VERT(VXY0, prim[4]);
+        LOAD_VERT(VXY1, prim[5]);
+        LOAD_VERT(VXY2, prim[6]);
+        Gte_Command(RTPT);
+        MTC(RGBC, tex_rgbc(prim));
+        if ((s32)CFC(C_FLAG) < 0)
+        {
+            continue;
+        }
+        Gte_Command(NCLIP);
+        if ((s32)MFC(MAC0) <= 0)
+        {
+            continue;
+        }
+        Gte_Command(AVSZ3);
+        LOAD_NORMAL(VXY0, prim[4]);
+        LOAD_NORMAL(VXY1, prim[5]);
+        LOAD_NORMAL(VXY2, prim[6]);
+        otz = MFC(OTZ);
+        Gte_Command(NCDT);
+        ot_link(p, 9, ot, shift, otz);
+        p[3] = prim[1];
+        p[6] = prim[2];
+        p[9] = prim[3];
+        SWC(SXY0, p, 8);
+        SWC(SXY1, p, 20);
+        SWC(SXY2, p, 32);
+        SWC(RGB0, p, 4);
+        SWC(RGB1, p, 16);
+        SWC(RGB2, p, 28);
+        p += 10;
+    }
+    return p;
+}
+
+u32* GsTMDfastTG4LFG(u32* prim, u32 vert, u32 normal, u32* p, u32 n, u32 shift, GsOT* ot, u32* scratch)
+{
+    (void)scratch;
+    for (; n != 0; n--, prim += 9)
+    {
+        u32 otz;
+        LOAD_VERT(VXY0, prim[5]);
+        LOAD_VERT(VXY1, prim[6]);
+        LOAD_VERT(VXY2, prim[7]);
+        Gte_Command(RTPT);
+        MTC(RGBC, tex_rgbc(prim));
+        if ((s32)CFC(C_FLAG) < 0)
+        {
+            continue;
+        }
+        Gte_Command(NCLIP);
+        LOAD_VERT(VXY0, prim[8]);
+        if ((s32)MFC(MAC0) <= 0)
+        {
+            continue;
+        }
+        SWC(SXY0, p, 8);
+        SWC(SXY1, p, 20);
+        SWC(SXY2, p, 32);
+        Gte_Command(RTPS);
+        LOAD_NORMAL(VXY1, prim[6]);
+        LOAD_NORMAL(VXY2, prim[7]);
+        if ((s32)CFC(C_FLAG) < 0)
+        {
+            continue;
+        }
+        Gte_Command(AVSZ4);
+        LOAD_NORMAL(VXY0, prim[8]);
+        otz = MFC(OTZ);
+        Gte_Command(NCDS);
+        p[3]  = prim[1];
+        p[6]  = prim[2];
+        p[9]  = prim[3];
+        p[12] = prim[4];
+        SWC(RGB2, p, 40);
+        LOAD_NORMAL(VXY0, prim[5]);
+        Gte_Command(NCDT);
+        ot_link(p, 12, ot, shift, otz);
+        SWC(SXY2, p, 44);
+        SWC(RGB0, p, 4);
+        SWC(RGB1, p, 16);
+        SWC(RGB2, p, 28);
+        p += 13;
+    }
+    return p;
 }

@@ -582,3 +582,120 @@ void GsSortFastSprite(GsSPRITE* sp, GsOT* ot, unsigned short pri)
     GsOUT_PACKET_P = (PACKET*)(p + 6);
     *at  = (u32)(unsigned long)p & 0xFFFFFF;
 }
+
+/* --- objt3.o: GsSortObject4J -------------------------------------------------------------------------*/
+
+_GsFCALL GsFCALL4; /* the renderers per primitive type, set by the game (ItemScreen_TmdGsFCallInit) */
+
+/** The renderers, as GsSortObject4J calls them: lit types with the normals, the unlit ("n") ones
+ * without (one argument fewer). */
+typedef PACKET* (*GsRenderLit)(u32 prim, u32 vert, u32 normal, PACKET* out, u32 n, u32 shift, GsOT* ot, u32* scratch);
+typedef PACKET* (*GsRenderUnlit)(u32 prim, u32 vert, PACKET* out, u32 n, u32 shift, GsOT* ot, u32* scratch);
+
+/** Per (mode & 0xFD) - 0x20, as the original's jump table: the table entry (byte offset into
+ * GsFCALL4; for F3, G3, F4 and G4 with flag bit 2 the gradation one, [light] only), whether it's lit,
+ * and the primitive's bytes (plain / gradation). Offset 0xFFFF: not supported. */
+typedef struct
+{
+    u16 at, atGrad; /* lit: [div][light] base / [light] base for flag bit 2; unlit: [div] base */
+    u8  lit;
+    u8  size, sizeGrad;
+} SortCase;
+
+static const SortCase SORT_CASES[30] = {
+    { 0, 256, 1, 16, 24 },     /* 20h F3: f3 / f3g */
+    { 24, 24, 0, 16, 16 },     /* 21h: nf3 */
+    { 0xFFFF }, { 0xFFFF },
+    { 64, 64, 1, 24, 24 },     /* 24h FT3: tf3 */
+    { 88, 88, 0, 28, 28 },     /* 25h: ntf3 */
+    { 0xFFFF }, { 0xFFFF },
+    { 128, 280, 1, 20, 32 },   /* 28h F4: f4 / f4g */
+    { 152, 152, 0, 16, 16 },   /* 29h: nf4 */
+    { 0xFFFF }, { 0xFFFF },
+    { 192, 192, 1, 32, 32 },   /* 2Ch FT4: tf4 */
+    { 216, 216, 0, 32, 32 },   /* 2Dh: ntf4 */
+    { 0xFFFF }, { 0xFFFF },
+    { 32, 268, 1, 20, 28 },    /* 30h G3: g3 / g3g */
+    { 56, 56, 0, 24, 24 },     /* 31h: ng3 */
+    { 0xFFFF }, { 0xFFFF },
+    { 96, 96, 1, 28, 28 },     /* 34h GT3: tg3 */
+    { 120, 120, 0, 36, 36 },   /* 35h: ntg3 */
+    { 0xFFFF }, { 0xFFFF },
+    { 160, 292, 1, 24, 36 },   /* 38h G4: g4 / g4g */
+    { 184, 184, 0, 28, 28 },   /* 39h: ng4 */
+    { 0xFFFF }, { 0xFFFF },
+    { 224, 224, 1, 36, 36 },   /* 3Ch GT4: tg4 */
+    { 248, 248, 0, 44, 44 },   /* 3Dh: ntg4 */
+};
+
+/** Draws a TMD object (GsLinkObject4) through the GsFCALL4 renderers, one call per run of
+ * primitives of the same type. The attribute's bits go to the libgs globals the renderers read. */
+void GsSortObject4J(GsDOBJ2* objp, GsOT* ot, int shift, u_long* scratch)
+{
+    u32 attr = objp->attribute;
+    u32 div, light, *obj, nprim, vert, normal;
+    u8* p;
+
+    if ((s32)attr < 0)
+    {
+        return;
+    }
+    GsMATE_C = attr & 7;
+    GsLMODE  = (attr >> 3) & 3;
+    GsLIGNR  = (attr >> 5) & 1;
+    GsLIOFF  = (attr >> 6) & 1;
+    GsNDIV   = (attr >> 9) & 7;
+    GsTON    = (attr >> 30) & 1;
+    div      = 0;
+    if (GsNDIV != 0)
+    {
+        scratch[0] = GsNDIV;
+        scratch[1] = HWD0;
+        scratch[2] = VWD0;
+        div        = 1;
+    }
+    if (GsLIOFF == 1)
+    {
+        light = 2;
+    }
+    else if (GsLIGNR != 0)
+    {
+        light = (GsLIGNR == 1 && (GsLMODE & 1)) ? 1 : 0;
+    }
+    else
+    {
+        light = GsLIGHT_MODE & 1;
+    }
+
+    obj    = (u32*)objp->tmd;
+    p      = (u8*)(unsigned long)obj[4];
+    nprim  = obj[5];
+    vert   = obj[0];
+    normal = obj[2];
+    while (nprim != 0)
+    {
+        u32             code = p[3] & 0xFD, k = code - 0x20, n, grad;
+        const SortCase* c;
+        if (k >= 30 || SORT_CASES[k].at == 0xFFFF)
+        {
+            printf("non supported code %x %x\n", code, p); /* and as the original, no progress */
+            continue;
+        }
+        c    = &SORT_CASES[k];
+        n    = *(u16*)p;
+        grad = c->lit && (*(u16*)(p + 2) & 4) && c->atGrad != c->at;
+        if (c->lit)
+        {
+            u32 at = grad ? c->atGrad + light * 4 : c->at + div * 12 + light * 4;
+            GsOUT_PACKET_P = (*(GsRenderLit*)((u8*)&GsFCALL4 + at))((u32)(unsigned long)p, vert, normal, GsOUT_PACKET_P, n,
+                                                                    shift, ot, (u32*)scratch);
+        }
+        else
+        {
+            GsOUT_PACKET_P = (*(GsRenderUnlit*)((u8*)&GsFCALL4 + c->at + div * 4))((u32)(unsigned long)p, vert, GsOUT_PACKET_P,
+                                                                                 n, shift, ot, (u32*)scratch);
+        }
+        nprim -= n;
+        p += n * (grad ? c->sizeGrad : c->size);
+    }
+}
