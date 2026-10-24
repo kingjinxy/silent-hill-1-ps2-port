@@ -123,6 +123,9 @@ Idea (2026-10-23): record a real play session on the console and replay it in PC
 - Determinism risks: disc load timing differs (network on the console, host file in PCSX2): record frames held per load and hold playback to match (as `compare_frames.py --ps1-holds`); real-time voice clips (record when they end).
 - Payoff: repeatable runs of real routes (map4_s02, map4_s03) for the light counters, and exact before/after comparisons on hardware.
 
+## Console test 2026-10-23 (5244326ad)
+Boots, a cold restart and a warm restart (deploy) into a debug build were tried; the session went to the Floatstinger crash (docs/ToFix.md), so no frame-rate measurements yet. The warm restart from a kept crash state hung (the known stall), a cold boot ran normally. Still to do: map4_s02/s03, map6_s00 door 7, and the cutscenes.
+
 ## Log
 - 2026-10-23: plan written. Step 1 done (asynchronous GIF sends), console test pending.
 - 2026-10-23: step 2 done (small uploads inline in the packet stream), console test pending.

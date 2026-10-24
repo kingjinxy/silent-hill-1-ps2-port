@@ -262,6 +262,8 @@ def main():
         # Memory card self-test at the first card load (src/port/psx_card.c; test cards only): SH1_MC_SELFTEST=1.
         solo += ["-DSH_PORT_MC_SELFTEST"] if os.environ.get("SH1_MC_SELFTEST") else []
         solo += ["-DSH_PORT_SCREENREAD"] if os.environ.get("SH1_SCREENREAD") else []
+        # Floatstinger crash: check of its saved pointer from GTE commands and Math_Sin/Cos (gte.c): SH1_SENTINEL=1.
+        solo += ["-DSH_PORT_SENTINEL"] if os.environ.get("SH1_SENTINEL") else []
         run([CC, "-c", *PORT_CFLAGS, *prof, *solo, *bench, src, "-o", obj])
         port_objs.append(obj)
     # PS2-side HAL code (src/port/ps2/): compiled against ps2sdk's headers, not the game's.

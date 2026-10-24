@@ -1127,8 +1127,32 @@ void Gte_Command(unsigned int cmd)
 #define Gte_Command gte_command
 static
 #endif
+#ifdef SH_PORT_SENTINEL
+/* Floatstinger crash on hardware (docs/ToFix.md): Floatstinger_Update keeps the animation header
+ * pointer at 0x01FFEB10 across func_800D35F0, and its upper half becomes 0xFC00. Checked from port code
+ * that the collision code calls (GTE commands, Math_Sin/Cos), which is linked after the game's, so the
+ * game's code and stack layout stay as in the crashing build. Reports the first sighting once, with
+ * the caller. (The hardware data breakpoint doesn't fire under Neutrino.) */
+extern char           g_CharaModelAnimsData[];
+static SPR unsigned int s_SentinelSeen;
+void Port_Sentinel(const char* where, unsigned int ra)
+{
+    unsigned int slot = *(volatile unsigned int*)0x01FFEB10;
+    unsigned int hdr  = *(unsigned int*)(g_CharaModelAnimsData + 0x18 + 8); /* [1].activeAnmHdr */
+    if (!s_SentinelSeen && (slot >> 16) == 0xFC00 && (slot & 0xFFFF) == (hdr & 0xFFFF) && hdr)
+    {
+        s_SentinelSeen = 1;
+        printf("SENTINEL: 0x01FFEB10 = %08X (header %08X) first seen in %s, called from %08X\n", slot, hdr, where, ra);
+    }
+}
+#define SENTINEL(where) Port_Sentinel(where, (unsigned int)__builtin_return_address(0))
+#else
+#define SENTINEL(where)
+#endif
+
 void Gte_Command(unsigned int cmd)
 {
+    SENTINEL("Gte_Command");
     int sf = (cmd >> 19) & 1;
     int mx = (cmd >> 17) & 3;
     int v  = (cmd >> 15) & 3;

@@ -33,13 +33,22 @@ extern const s16 g_SineTable[5120]; /* libkmath_table.c */
 #define GTE_GPL_SF1 0x01A8003E /* gpl 1 */
 #define GTE_GPF_SF1 0x0198003D /* gpf 1 */
 
+#ifdef SH_PORT_SENTINEL
+extern void Port_Sentinel(const char* where, unsigned int ra); /* gte.c */
+#define SENTINEL(where) Port_Sentinel(where, (unsigned int)__builtin_return_address(0))
+#else
+#define SENTINEL(where)
+#endif
+
 q19_12 Math_Sin(q19_12 angle) // 0x8009687C
 {
+    SENTINEL("Math_Sin");
     return SIN(angle);
 }
 
 q19_12 Math_Cos(q19_12 angle) // 0x8009689C
 {
+    SENTINEL("Math_Cos");
     return COS(angle);
 }
 
