@@ -62,6 +62,13 @@ void Event_Update(bool disableButtonEvents) // 0x800373CC
         {
             return;
         }
+        {
+            extern int Port_DoorTestStart(void); /* demo_menu.c: door test (capture.txt door=) */
+            if (Port_DoorTestStart())
+            {
+                return;
+            }
+        }
     }
 #endif
 

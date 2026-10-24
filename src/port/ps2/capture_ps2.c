@@ -34,6 +34,7 @@ static int   s_Open = -1; /* frame whose packets are being written */
 static int   s_Demo = 1;  /* which demo (1: the first played) */
 static int   s_Mode = -1; /* rendering option bits forced, -1 none */
 static int   s_LoadSave;  /* load a save instead of a demo */
+static int   s_Door = -1, s_DoorAt; /* `door=N:F` (with load=): map event N triggered after F gameplay ticks (Port_DoorTestStart) */
 static int   s_LoadFile, s_LoadData; /* its save: File N, Data N as the Load screen numbers them */
 static int   s_Replay[MAX_FRAMES], s_ReplayCount; /* DuckStation frames to replay */
 static int   s_StateA = -1, s_StateB = -1; /* `state=A:B`: game state of demo steps A-B (Capture_State) */
@@ -63,6 +64,10 @@ static void load(void)
         if (!strncmp(tok, "demo=", 5))
         {
             s_Demo = atoi(tok + 5);
+        }
+        else if (!strncmp(tok, "door=", 5))
+        {
+            sscanf(tok + 5, "%d:%d", &s_Door, &s_DoorAt);
         }
         else if (!strncmp(tok, "load=", 5))
         {
@@ -134,6 +139,17 @@ int Capture_Demo(void)
 }
 
 /** Whether the capture loads a save (title.c, saveload.c), and which. */
+/** `door=N:F`: the map event to trigger (-1 none) and after how many gameplay ticks. */
+int Capture_Door(int* at)
+{
+    if (s_Loaded < 0)
+    {
+        load();
+    }
+    *at = s_DoorAt;
+    return s_Loaded > 0 ? s_Door : -1;
+}
+
 int Capture_Load(int* file, int* data)
 {
     if (s_Loaded < 0)

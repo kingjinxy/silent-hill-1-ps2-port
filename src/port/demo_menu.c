@@ -118,6 +118,32 @@ void Port_DemoBegin(int idx)
     s_ControlFrames = 0;
 }
 
+/** Door test (host:capture.txt `load=F:D door=N:F`, capture_ps2.c): after F gameplay ticks in the
+ * loaded save's map, map event N runs as if triggered (an area transition, for measuring the map it
+ * leads to with Harry where the door puts him). Once. */
+int Port_DoorTestStart(void)
+{
+    extern int   Capture_Door(int* at);
+    static int   ticks, done;
+    s_EventData* ev;
+    int          at, n;
+    if (done || (n = Capture_Door(&at)) < 0)
+    {
+        return 0;
+    }
+    if (++ticks < at)
+    {
+        return 0;
+    }
+    done = 1;
+    ev   = &g_MapOverlayHdr.mapEvents[n];
+    printf("door test: map event %d (map %d, point %d)\n", n, (int)ev->mapIdx, (int)ev->eventParam);
+    g_MapEventData     = ev;
+    g_MapEventSysState = ev->sysState;
+    g_MapEventParam    = ev->eventParam;
+    return 1;
+}
+
 int Port_DemoEventStart(void)
 {
     s_EventData* ev;
