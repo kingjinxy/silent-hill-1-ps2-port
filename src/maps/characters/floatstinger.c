@@ -201,7 +201,11 @@ void Floatstinger_ControlUpdate(s_SubCharacter* floatstinger) // 0x800D1B98
     // Handle control state.
     if (D_800D7A04[floatstinger->model.controlState] != NULL)
     {
-        D_800D7A04[floatstinger->model.controlState]();
+        // Port: with the Floatstinger, which all but `func_800D341C` take. The PS1 code left it in a0 by
+        // chance; here a0 is whatever `func_800D1968` left there (a stack address), and the state
+        // functions wrote the Floatstinger's fields into the stack: its saved animation header became
+        // FC00xxxx (-1024, Q12_ANGLE(-90.0f)), and Anim_BonesUpdate faulted (docs/ToFix.md).
+        D_800D7A04[floatstinger->model.controlState](floatstinger);
     }
 }
 

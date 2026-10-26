@@ -84,7 +84,7 @@ extern q19_12          D_800D7858;
 extern q3_12           D_800D785C;
 extern s32             D_800D7860;
 extern s32             D_800D799C;
-extern void          (*D_800D7A04[])(void);
+extern void          (*D_800D7A04[])(s_SubCharacter* floatstinger); // `func_800D341C` takes none.
 extern SVECTOR         D_800D7A20[];
 extern SVECTOR         D_800D7A30;
 extern s16             D_800D7A38[];
