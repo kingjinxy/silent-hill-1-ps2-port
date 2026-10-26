@@ -10,6 +10,7 @@ sh1agent.irx (src/port/iop/sh1agent, UDP port 62968) and prints its answer.
     python3 tools/port/ps2_ctl.py where        # where the game was at the last 16 vertical blanks
     python3 tools/port/ps2_ctl.py demo "map3_s00 func_800D0CF8"   # play a Demo menu cutscene (name or number)
     python3 tools/port/ps2_ctl.py newgame      # start a New Game (normal difficulty), from anywhere
+    python3 tools/port/ps2_ctl.py rec route1   # record from the next save loaded (8 chars; "rec stop" stops)
     python3 tools/port/ps2_ctl.py options 3    # Debug Options rendering: bit 0 Resolution x2, bit 1 32-bit, bit 2 480p
 
 md takes an address (hex) or a symbol of the running build (build/port/sh1.elf, e.g. g_WorldMapWork or
@@ -36,7 +37,7 @@ NM = os.path.join(os.environ.get("PS2DEV", os.path.expanduser("~/ps2dev")), "ee"
 
 PORT = 62968
 COMMANDS = {"ping": b"PI", "restart": b"RS", "deploy": b"RS", "osd": b"OS", "md": b"MD", "where": b"WH",
-            "demo": b"DM", "newgame": b"NG", "options": b"OP"}
+            "demo": b"DM", "newgame": b"NG", "options": b"OP", "rec": b"RC"}
 
 
 def address(text):
@@ -124,6 +125,15 @@ def main():
                       timeout=2.0)
         print(answer if answer is not None else "ps2_ctl: no answer from %s" % args.ip)
         sys.exit(0 if answer is not None else 1)
+    if args.command == "rec":
+        name = (args.addr or "").encode()
+        if name == b"stop":
+            name = b""
+        if len(name) > 8 or not all(chr(c).isalnum() or chr(c) in "_-" for c in name):
+            sys.exit("ps2_ctl: a recording name is up to 8 letters, digits, _ or -")
+        answer = send(args.ip, "rec", payload=name.ljust(8, b"\0"), tries=1, timeout=2.0)
+        print(answer if answer is not None else "ps2_ctl: no answer from %s" % args.ip)
+        return 0 if answer is not None else 1
     if args.command == "demo":
         sys.path.insert(0, HERE)
         import cutscene_list

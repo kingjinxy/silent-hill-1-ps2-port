@@ -121,6 +121,10 @@ void Joy_ControllerDataUpdate(void) // 0x80034494
 
 #ifdef SH_PORT
     Port_CaptureWalk();
+    {
+        extern void Port_RecPad(void);
+        Port_RecPad(); // Play recorder (src/port/demo_rec.c)
+    }
 #endif
 
     // Update controller button flags.

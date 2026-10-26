@@ -2592,6 +2592,12 @@ void SaveScreen_Continue(void) // 0x801E6F38
     {
         case 0:
             MemCard_SysDisable();
+#ifdef SH_PORT
+            {
+                extern void Port_RecContinue(void);
+                Port_RecContinue(); // Play recorder (src/port/demo_rec.c): replaces the loaded save on playback.
+            }
+#endif
 
             D_800A97D7          = 1;
             g_GameWork.autosave = g_GameWork.savegame;

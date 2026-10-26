@@ -285,6 +285,12 @@ void MainLoop(void) // 0x80032EE0
             }
             while (g_VBlanks < interval);
 #endif
+#ifdef SH_PORT
+            {
+                extern void Port_RecInterval(void);
+                Port_RecInterval(); // Play recorder (src/port/demo_rec.c): records the step's vertical blanks.
+            }
+#endif
 
             g_UncappedVBlanks = g_VBlanks;
             g_VBlanks         = MIN(g_VBlanks, 4);

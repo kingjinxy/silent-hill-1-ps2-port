@@ -56,6 +56,10 @@ bool Fs_QueueChunksLoad(void)
             isFinished = false;
         }
     }
+    {
+        extern int Port_RecHold(int isFinished);
+        isFinished = Port_RecHold(isFinished); // Play recorder (src/port/demo_rec.c): recorded chunk load timing.
+    }
 #endif
 
     return isFinished;

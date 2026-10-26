@@ -140,6 +140,12 @@ static void agent(void* arg)
             extern void Port_OptionsRemote(int bits); /* src/port/demo_menu.c */
             Port_OptionsRemote((int)mailbox()->arg);
         }
+        else if (cmd == CMD('R', 'C'))
+        {
+            extern void  Port_RecRemote(const char* name8); /* src/port/demo_rec.c */
+            unsigned int name[2] = { mailbox()->arg, mailbox()->arg2 };
+            Port_RecRemote((const char*)name);
+        }
         else if (cmd == CMD('N', 'G'))
         {
             extern void Port_NewGameRemote(void); /* src/port/demo_menu.c */

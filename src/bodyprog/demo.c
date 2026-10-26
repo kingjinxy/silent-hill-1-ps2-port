@@ -177,6 +177,17 @@ void Demo_GameRandSeedRestore(void) // 0x8008F370
 bool g_Demo_Play = false;
 
 #ifdef SH_PORT
+// Port: play recorder (src/port/demo_rec.c), in the demo player's mode.
+extern int  Port_RecActive(void);
+extern int  Port_RecSteps(void);
+extern int  Port_RecController(void);
+extern int  Port_RecStep(s32 gameState);
+extern int  Port_RecSeed(void);
+extern int  Port_RecExit(void);
+extern void Port_RecDiverged(void);
+#endif
+
+#ifdef SH_PORT
 // Port: attract demo start/stop lines for profiling runs (displayed frames and vertical blanks between
 // them; in SH1_BENCH=1 builds the demo runs uncapped, so frames per vertical blank is the headroom).
 extern int Display_FrameCount(void); // src/port/ps2/display_ps2.c
@@ -268,6 +279,12 @@ s32 Demo_StateGet(s32 gameState)
 
 void Demo_ExitDemo(void) // 0x8008F4E4
 {
+#ifdef SH_PORT
+    if (Port_RecExit())
+    {
+        return;
+    }
+#endif
     g_Demo_FrameCount          = SECONDS_60_FPS(999);
     g_Demo_ActivePlaybackFrame = NULL;
     g_Demo_DemoStep            = 0;
@@ -353,7 +370,11 @@ bool Demo_Update(void) // 0x8008F5D8
     }
 
     demoStep = g_Demo_DemoStep;
+#ifdef SH_PORT
+    if (Port_RecActive() ? (u32)Port_RecSteps() <= demoStep : g_Demo_ActiveState->frameCount <= demoStep)
+#else
     if (g_Demo_ActiveState->frameCount <= demoStep)
+#endif
     {
         nullsub_8008F518();
         Demo_ExitDemo();
@@ -382,6 +403,13 @@ bool Demo_Update(void) // 0x8008F5D8
     switch (Demo_StateGet(gameWork->gameState))
     {
         case DemoState_Step:
+#ifdef SH_PORT
+            if (Port_RecStep(gameWork->gameState))
+            {
+                nullsub_8008F518();
+                return true;
+            }
+#endif
             g_Demo_ActivePlaybackFrame = &g_Demo_PlaybackFrames[g_Demo_DemoStep];
 
             if (g_Demo_ActivePlaybackFrame->expectedGameState != gameWork->gameState)
@@ -395,6 +423,7 @@ bool Demo_Update(void) // 0x8008F5D8
 #ifdef SH_PORT
                 printf("demo: STEP ERROR at step %d: expected game state %d, now %d\n", (int)g_Demo_DemoStep,
                        (int)g_Demo_ActivePlaybackFrame->expectedGameState, (int)gameWork->gameState);
+                Port_RecDiverged();
 #endif
 
                 g_Demo_ActivePlaybackFrame = NULL;
@@ -431,6 +460,13 @@ bool Demo_Update(void) // 0x8008F5D8
 bool Demo_ControllerDataUpdate(void) // 0x8008F7CC
 {
     u32 butFlags;
+
+#ifdef SH_PORT
+    if (Port_RecController())
+    {
+        return true;
+    }
+#endif
 
     if (!(g_SysWork.sysFlags & SysFlag_DemoActive))
     {
@@ -475,6 +511,12 @@ bool Demo_PresentIntervalUpdate(void) // 0x8008F87C
 
 bool Demo_GameRandSeedSet(void) // 0x8008F8A8
 {
+#ifdef SH_PORT
+    if (Port_RecSeed())
+    {
+        return true;
+    }
+#endif
     if (!(g_SysWork.sysFlags & SysFlag_DemoActive))
     {
         return true;
