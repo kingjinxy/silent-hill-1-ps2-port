@@ -447,6 +447,9 @@ static void alarm(s32 id, u16 time, void* arg)
     ExitHandler();
 }
 
+#ifdef SH_PORT_SENTINEL
+extern void Port_SentinelCheck(const char* where); /* sentinel_ps2.c */
+#endif
 static void tick_thread(void* arg)
 {
     (void)arg;
@@ -456,8 +459,14 @@ static void tick_thread(void* arg)
         if (s_TickOn)
         {
             PROF_BEGIN("spu: sound driver tick (thread)")
+#ifdef SH_PORT_SENTINEL
+            Port_SentinelCheck("sound tick (before)");
+#endif
             Port_EventDeliver(0xF2000002UL, 0x0002); /* RCntCNT2, EvSpINT */
             Port_SpuFlush();
+#ifdef SH_PORT_SENTINEL
+            Port_SentinelCheck("sound tick (after)");
+#endif
             PROF_END("spu: sound driver tick (thread)")
         }
     }

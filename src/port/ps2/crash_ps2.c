@@ -191,8 +191,14 @@ static void countdown_and_restart(void)
 
 static int crash_handler(EE_RegFrame* frame);
 
+#ifdef SH_PORT_SENTINEL
+extern void Port_SentinelReport(void); /* sentinel_ps2.c */
+#endif
 static void crash_report(void)
 {
+#ifdef SH_PORT_SENTINEL
+    Port_SentinelReport();
+#endif
     {
         extern void Port_LogDirect(void); /* log_ps2.c */
         Port_LogDirect();

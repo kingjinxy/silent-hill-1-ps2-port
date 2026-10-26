@@ -141,6 +141,11 @@ static void hang_watch(void)
     *(volatile unsigned long long*)0x120000E0 = rgb; /* BGCOLOR (B, G, R from the top byte down) */
 }
 
+#ifdef SH_PORT_SENTINEL
+extern void Port_SentinelReport(void);          /* sentinel_ps2.c */
+extern void Port_SentinelIsr(const char* where);
+extern void Port_SentinelStart(void);
+#endif
 static void heartbeat(void* arg)
 {
     unsigned int beats = 0;
@@ -149,6 +154,9 @@ static void heartbeat(void* arg)
     {
         WaitSema(s_HeartbeatSema);
         s_HeartbeatRuns++;
+#ifdef SH_PORT_SENTINEL
+        Port_SentinelReport();
+#endif
         /* idle: share of the last second the game spent waiting for a vertical blank (EE at
          * 294.912 MHz: 2,949,120 cycles = 1%). */
         printf("heartbeat: vblank %d frame %d idle %u%%\n", s_VBlanks, Display_FrameCount(), s_WaitCycles / 2949120);
@@ -190,6 +198,9 @@ static int vblank_handler(int cause)
     (void)cause;
     __asm__ volatile("mfc0 %0, $14" : "=r"(epc));
     Port_PcSamples[Port_PcSampleCount++ & 15] = epc;
+#ifdef SH_PORT_SENTINEL
+    Port_SentinelIsr("vblank");
+#endif
     __asm__ volatile("mfc0 %0, $9" : "=r"(now));
     if (now - s_VBlankCycles > g_PortVBlankMaxGap)
     {
@@ -261,6 +272,9 @@ static void init(void)
     }
     s_HandlerId = AddIntcHandler(INTC_VBLANK_S, vblank_handler, 0);
     EnableIntc(INTC_VBLANK_S);
+#ifdef SH_PORT_SENTINEL
+    Port_SentinelStart();
+#endif
 }
 
 /** The game runs in the main thread at a low priority, so the heartbeat (and anything else that

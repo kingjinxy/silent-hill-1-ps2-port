@@ -250,6 +250,8 @@ def main():
     dump += ["-DSH_PORT_HIRES"] if os.environ.get("SH1_HIRES") else []
     # 32-bit colour (true colour) forced on (src/port/ps2/gpu_gs.c HIRES_ADDR): SH1_TRUECOLOR=1.
     dump += ["-DSH_PORT_TRUECOLOR"] if os.environ.get("SH1_TRUECOLOR") else []
+    # Floatstinger crash: timer, vertical blank and sound tick checks of its saved pointer (sentinel_ps2.c): SH1_SENTINEL=1.
+    dump += ["-DSH_PORT_SENTINEL"] if os.environ.get("SH1_SENTINEL") else []
     # The Demo menu's cutscene list (src/port/demo_menu.c), found in the decomp's map code.
     run([sys.executable, "tools/port/cutscene_list.py", "--c", os.path.join(OUT, "demo_cutscenes.c")])
     for src in sorted(glob.glob("src/port/*.c")) + [os.path.join(OUT, "demo_cutscenes.c")]:
