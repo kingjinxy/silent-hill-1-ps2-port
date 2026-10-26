@@ -71,6 +71,7 @@ Known issues, tabled for now (collected 2026-10-19, mostly from the console cuts
 
 - **The PCSX2 memory card's options have brightness 0** (the default is 3): the port auto-loads them at boot, so test runs from it are darker than a fresh DuckStation run. DuckStation's card 1 now holds the same PS1 card image (backup: shared_card_1.mcd.empty_backup).
 - **Attract demos need the PS1's load timing to stay exactly in sync**: the port's chunk loads finish faster (demo 4: 17 vs 33 frames at step 881) and Harry's animation runs on meanwhile. `compare_frames.py --ps1-holds` reproduces the PS1's timing for comparisons only.
+- **Play recordings don't replay on the console yet** (src/port/demo_rec.c): playback reads host:rec/NAME.dem and host:rec.txt, and host: files don't open on the console (fd -19). To add: a remote `ps2_ctl.py play NAME`, with the recording sent through the remote control agent or built into the ISO. Commit af0a16c62's title says "or on the console": only PCSX2 replay works.
 
 ## Options / UI
 
