@@ -11,6 +11,7 @@ sh1agent.irx (src/port/iop/sh1agent, UDP port 62968) and prints its answer.
     python3 tools/port/ps2_ctl.py demo "map3_s00 func_800D0CF8"   # play a Demo menu cutscene (name or number)
     python3 tools/port/ps2_ctl.py newgame      # start a New Game (normal difficulty), from anywhere
     python3 tools/port/ps2_ctl.py rec route1   # record from the next save loaded (8 chars; "rec stop" stops)
+    python3 tools/port/ps2_ctl.py replay docks1  # send rec/docks1.dem and play it (title: REPLAY, Start)
     python3 tools/port/ps2_ctl.py options 3    # Debug Options rendering: bit 0 Resolution x2, bit 1 32-bit, bit 2 480p
 
 md takes an address (hex) or a symbol of the running build (build/port/sh1.elf, e.g. g_WorldMapWork or
@@ -37,7 +38,10 @@ NM = os.path.join(os.environ.get("PS2DEV", os.path.expanduser("~/ps2dev")), "ee"
 
 PORT = 62968
 COMMANDS = {"ping": b"PI", "restart": b"RS", "deploy": b"RS", "osd": b"OS", "md": b"MD", "where": b"WH",
-            "demo": b"DM", "newgame": b"NG", "options": b"OP", "rec": b"RC"}
+            "demo": b"DM", "newgame": b"NG", "options": b"OP", "rec": b"RC",
+            "upload": b"UP", "replay": b"RP"}
+REC_DIR = os.path.join(HERE, "..", "..", "build", "port", "rec")  # tools/port/rec_extract.py
+UPLOAD_MAX = 1024  # the IOP agent's UPLOAD_MAX
 
 
 def address(text):
@@ -73,6 +77,53 @@ def memory(ip, addr, length, timeout=20):
     else:
         sys.exit("ps2_ctl: no complete answer in the log (is tools/port/ps2_log.py running?)")
     return b"".join(data[a] for a in sorted(data) if addr <= a < addr + length)
+
+
+def log_wait(start, pattern, timeout):
+    """Waits for `pattern` in the log after byte `start`; returns the match, or None."""
+    end = time.time() + timeout
+    while time.time() < end:
+        with open(LOG, errors="replace") as f:
+            f.seek(start)
+            m = re.search(pattern, f.read())
+        if m:
+            return m
+        time.sleep(0.02)
+    return None
+
+
+def replay(ip, name):
+    """Uploads rec/NAME.dem a chunk at a time (each acknowledged in the log), then starts it: the game
+    plays it once the REPLAY screen is waiting (Start there)."""
+    data = open(os.path.join(REC_DIR, name + ".dem"), "rb").read()
+    for off in range(0, len(data), UPLOAD_MAX):
+        chunk = data[off:off + UPLOAD_MAX]
+        for _ in range(3):
+            start = os.path.getsize(LOG)
+            if send(ip, "upload", payload=struct.pack("<II", off, len(chunk)) + chunk, tries=1, timeout=2.0) is None:
+                continue
+            m = log_wait(start, r"rec upload %d %d\b|rec: upload at %d refused \((.*)\)" % (off, len(chunk), off), 3)
+            if m and m.group(1):
+                sys.exit("ps2_ctl: upload refused: " + m.group(1))
+            if m:
+                break
+        else:
+            sys.exit("ps2_ctl: no acknowledgement for the upload at %d (is tools/port/ps2_log.py running?)" % off)
+        print("\rps2_ctl: sent %d of %d bytes" % (off + len(chunk), len(data)), end="", flush=True)
+    print()
+    start = os.path.getsize(LOG)
+    if send(ip, "replay", payload=name.encode().ljust(8, b"\0"), tries=1, timeout=2.0) is None:
+        sys.exit("ps2_ctl: no answer from %s" % ip)
+    m = log_wait(start, r"rec: received \S+: (\d+) bytes, sum ([0-9A-F]{8})|rec: replay \S+ refused \((.*)\)", 5)
+    if not m or m.group(3):
+        sys.exit("ps2_ctl: replay not accepted: %s" % (m.group(3) if m else "no answer in the log"))
+    total = 0
+    for b in data:
+        total = (total * 31 + b) & 0xFFFFFFFF
+    if int(m.group(1)) != len(data) or int(m.group(2), 16) != total:
+        sys.exit("ps2_ctl: the console received %s bytes, sum %s; sent %d, sum %08X" % (m.group(1), m.group(2), len(data), total))
+    print("ps2_ctl: %s received intact (%d bytes); it plays once the REPLAY screen waits (Start there)" % (name, len(data)))
+    return 0
 
 
 def send(ip, command, timeout=1.0, tries=3, payload=b""):
@@ -134,6 +185,11 @@ def main():
         answer = send(args.ip, "rec", payload=name.ljust(8, b"\0"), tries=1, timeout=2.0)
         print(answer if answer is not None else "ps2_ctl: no answer from %s" % args.ip)
         return 0 if answer is not None else 1
+    if args.command == "replay":
+        name = args.addr or ""
+        if not name or len(name) > 8 or not all(c.isalnum() or c in "_-" for c in name):
+            sys.exit("ps2_ctl: a recording name is up to 8 letters, digits, _ or -")
+        return replay(args.ip, name)
     if args.command == "demo":
         sys.path.insert(0, HERE)
         import cutscene_list

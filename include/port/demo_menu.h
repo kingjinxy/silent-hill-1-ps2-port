@@ -26,6 +26,9 @@ int  Port_DemoRemoteTake(void);   /* main menu: the requested cutscene, or -1 */
 int  Port_DemoRemotePending(void);
 void Port_MoviesRemote(void);    /* every FMV in a row, from the main menu (host:demo.txt "movies") */
 void Port_MoviePlayAll(void);    /* src/screens/stream/stream.c: every FMV in a row */
+/* Debug Options rendering bits set outside gameplay (options.c, ps2_ctl.py options), to replace the next
+ * loaded save's (memcard.c); -1: none. */
+extern int g_PortDebugPending;
 void Port_NewGameRemote(void);    /* network request (agent_ps2.c "NG", tools/port/ps2_ctl.py newgame) */
 int  Port_NewGameRemoteTake(void); /* main menu: 1 once after a request */
 int  Port_DemoAutoPress(int site, int waiting); /* Demo cutscenes: 1 when X should be pressed for the player */

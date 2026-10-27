@@ -20,7 +20,18 @@
  * next save loaded (which save doesn't matter: the recording's replaces it; PCSX2 runs: capture.txt
  * `999999 load=F:D`), then prints the frame rate and gives control back.
  *
- * Disc timing: a chunk load's length in steps is recorded (field_A) and held to on playback (waited
+ * Console replay: the title's REPLAY entry (options.c, s_PortReplay) shows the Debug Options settings;
+ * Start there waits for a recording. `tools/port/ps2_ctl.py replay NAME` uploads rec/NAME.dem
+ * (Port_RecUpload, a chunk at a time) and starts it (Port_RecRemotePlay): the game starts from the
+ * recording's save (Port_RecReplayBegin, as SaveScreen_Continue), with the REPLAY screen's settings in
+ * place of the recording's Debug Options. In PCSX2, Start on that screen plays host:rec.txt's `play NAME`.
+ *
+ * File loads: the step at which each file finishes loading (its post-processing, which is when the game
+ * sees it) is recorded (field_A[1]: the queue's postLoad index at the step, % 255 + 1) and held to on
+ * playback (Port_RecFileSync, Port_RecFileHold): a file landing one step later started an enemy
+ * differently (docks1, step 1844) and the run went elsewhere. 0: not recorded (older recordings).
+ *
+ * Disc timing: a chunk load's length in steps is recorded (field_A[0]) and held to on playback (waited
  * for when slower). Other waits on the disc or on voice clips aren't: a divergence shows as STEP
  * ERROR, which stops the replay.
  */
@@ -29,9 +40,12 @@
 
 #include "bodyprog/bodyprog.h"
 #include "bodyprog/demo.h"
+#include "bodyprog/game_boot/game_boot.h"
+#include "bodyprog/memcard.h"
 #include "bodyprog/sys/joy.h"
 #include "main/fsqueue.h"
 #include "main/rng.h"
+#include "port/demo_rec.h"
 
 #include <string.h>
 
@@ -58,6 +72,11 @@ static int  s_Frame0, s_VBlank0;
 static int  s_Sent;                 /* bytes of the recording streamed to the log */
 static volatile int s_Remote;       /* armed by ps2_ctl.py: no host: files */
 static volatile int s_StopRequest;  /* ps2_ctl.py rec stop */
+static volatile int s_Uploaded;     /* bytes of s_Rec received from ps2_ctl.py replay (Port_RecUpload) */
+static volatile int s_RemotePlay;   /* ps2_ctl.py replay: s_Rec holds the recording, start it */
+int                 g_PortReplayMenu;
+int                 g_PortReplayBits = -1;
+static int          s_Override = -1; /* Debug Options rendering bits replacing the recording's (REPLAY screen) */
 
 static int mode(void)
 {
@@ -70,9 +89,63 @@ static int mode(void)
 
 static u16 hold_get(int step)
 {
-    u16 v;
-    memcpy(&v, s_Rec.frames[step].field_A, 2);
-    return v;
+    return (u8)s_Rec.frames[step].field_A[0];
+}
+
+/** The file queue's post-load index as stored per step: 1..255 (0: none recorded). */
+static u8 file_mark(void)
+{
+    return (u8)(g_FsQueue.postLoad.idx % 255 + 1);
+}
+
+/** How far the queue's post-loads are past step `step`'s recorded mark (negative: behind); 0 without one. */
+static int file_delta(int step)
+{
+    int r = (u8)s_Rec.frames[step].field_A[1], d;
+    if (r == 0)
+    {
+        return 0;
+    }
+    d = ((int)file_mark() - r) % 255;
+    return d > 127 ? d - 255 : d < -127 ? d + 255 : d;
+}
+
+/** Demo step start: records the file queue's post-load mark, or on playback waits for the files the
+ * recording had loaded by this step (more can't have loaded: Port_RecFileHold). */
+static void file_sync(void)
+{
+    int step = g_Demo_DemoStep, n = 0;
+    if (!s_Active || step >= s_Steps)
+    {
+        return;
+    }
+    if (s_Mode == 1)
+    {
+        s_Rec.frames[step].field_A[1] = (s8)file_mark();
+        return;
+    }
+    if (file_delta(step) < 0)
+    {
+        s_Waits++;
+        while (file_delta(step) < 0 && n++ < 600)
+        {
+            VSync(SyncMode_Wait);
+            Fs_QueueUpdate();
+        }
+        if (file_delta(step) < 0)
+        {
+            printf("rec: step %d: file loads still behind the recording after 10 s\n", step);
+        }
+    }
+}
+
+/** Fs_QueueUpdate: 1 to hold a file's post-processing on playback (the recording hadn't loaded it yet
+ * at the next step). */
+int Port_RecFileHold(void)
+{
+    int step = g_Demo_DemoStep;
+    return s_Active && s_Mode == 2 && step < s_Steps && s_Rec.frames[step].field_A[1] != 0 && file_delta(step) >= 0 &&
+           g_FsQueue.postLoadState == FsQueuePostLoadState_Init; /* between files, never part-way through one */
 }
 
 /** Streams the recording's bytes up to `end` through the log. */
@@ -154,7 +227,8 @@ void Port_RecContinue(void)
     }
     else
     {
-        n = Rec_Read(s_Name, &s_Rec, sizeof(s_Rec));
+        n = s_RemotePlay ? s_Uploaded : Rec_Read(s_Name, &s_Rec, sizeof(s_Rec));
+        s_RemotePlay = 0;
         if (n < (int)sizeof(s_DemoState))
         {
             printf("rec: host:rec/%s.dem not found\n", s_Name);
@@ -164,6 +238,10 @@ void Port_RecContinue(void)
         s_Steps              = MIN((int)s_Rec.state.frameCount, (n - (int)sizeof(s_DemoState)) / (int)sizeof(s_DemoPlaybackFrame));
         g_GameWork.config    = s_Rec.state.config;
         g_GameWork.savegame  = s_Rec.state.savegame;
+        if (s_Override >= 0)
+        {
+            g_GameWork.config.unused_26 = (g_GameWork.config.unused_26 & ~7) | s_Override;
+        }
     }
     g_Demo_RandSeed             = s_Rec.state.randSeed;
     g_Demo_PrevRandSeed         = Rng_GetSeed();
@@ -176,7 +254,15 @@ void Port_RecContinue(void)
     s_Waits                     = 0;
     s_Frame0                    = Display_FrameCount();
     s_VBlank0                   = VSync(SyncMode_Count);
-    printf(s_Mode == 1 ? "rec: recording %s (stop: Select + Start + L1 + R1)\n" : "rec: replaying %s (%d steps)\n", s_Name, s_Steps);
+    if (s_Mode == 1)
+    {
+        printf("rec: recording %s (stop: Select + Start + L1 + R1)\n", s_Name);
+    }
+    else
+    {
+        printf("rec: replaying %s (%d steps; Debug Options rendering bits %d%s)\n", s_Name, s_Steps,
+               g_GameWork.config.unused_26 & 7, s_Override >= 0 ? ", from the REPLAY screen" : "");
+    }
 }
 
 int Port_RecActive(void)
@@ -230,6 +316,22 @@ void Port_RecPad(void)
 int Port_RecStep(s32 gameState)
 {
     s_DemoPlaybackFrame* frame;
+    file_sync();
+    if (s_Active)
+    {
+        // Dense trace (same when recording and replaying): the first step that differs, and the system
+        // state (events, doors) around it.
+        static s32 lastSysState = -1;
+        if (g_Demo_DemoStep % 30 == 0 || g_SysWork.sysState != lastSysState)
+        {
+            printf("rec step %d: sys %d/%d, Harry %d %d %d hp %d, delta %d, seed %08X, files %d queued, read %d\n",
+                   (int)g_Demo_DemoStep, (int)g_SysWork.sysState, (int)g_SysWork.sysStateSteps[0],
+                   g_SysWork.playerWork.player.position.vx, g_SysWork.playerWork.player.position.vy,
+                   g_SysWork.playerWork.player.position.vz, (int)g_SysWork.playerWork.player.health, (int)g_DeltaTime,
+                   (unsigned)Rng_GetSeed(), Fs_QueueGetLength(), (int)g_FsQueue.read.idx);
+            lastSysState = g_SysWork.sysState;
+        }
+    }
     if (s_Active && g_Demo_DemoStep % 600 == 0)
     {
         // Same lines when recording and replaying: the replay is exact.
@@ -294,7 +396,7 @@ int Port_RecHold(int isFinished)
     {
         if (isFinished && v == 0)
         {
-            memcpy(s_Rec.frames[step].field_A, &fr, 2);
+            s_Rec.frames[step].field_A[0] = (s8)MIN(fr, 255);
         }
         return isFinished;
     }
@@ -364,4 +466,69 @@ void Port_RecRemote(const char* name8)
     s_Remote  = 1;
     s_Mode    = 1;
     printf("rec: armed %s: load a save to start (stop: Select + Start + L1 + R1, or ps2_ctl.py rec stop)\n", s_Name);
+}
+
+/** ps2_ctl.py replay (agent thread): `len` bytes of the recording at `offset`, acknowledged in the log. */
+void Port_RecUpload(unsigned int offset, const void* data, unsigned int len)
+{
+    if (s_Active || offset + len > sizeof(s_Rec) || len > 1024)
+    {
+        printf("rec: upload at %u refused (%s)\n", offset, s_Active ? "recording or replaying" : "too large");
+        return;
+    }
+    if (offset == 0)
+    {
+        s_Uploaded = 0;
+    }
+    memcpy((u8*)&s_Rec + offset, data, len);
+    s_Uploaded = MAX(s_Uploaded, (int)(offset + len));
+    printf("rec upload %u %u\n", offset, len);
+}
+
+/** ps2_ctl.py replay NAME (agent thread), after the upload: the REPLAY screen starts it. */
+void Port_RecRemotePlay(const char* name8)
+{
+    u32 sum = 0;
+    int i;
+    if (s_Active || s_Uploaded < (int)sizeof(s_DemoState))
+    {
+        printf("rec: replay %s refused (%s)\n", name8, s_Active ? "recording or replaying" : "nothing uploaded");
+        return;
+    }
+    for (i = 0; i < s_Uploaded; i++)
+    {
+        sum = sum * 31 + ((u8*)&s_Rec)[i];
+    }
+    memcpy(s_Name, name8, 8);
+    s_Name[8]    = 0;
+    s_Remote     = 1;
+    s_Mode       = 2;
+    s_RemotePlay = 1;
+    printf("rec: received %s: %d bytes, sum %08X; waiting for the REPLAY screen\n", s_Name, s_Uploaded, (unsigned)sum);
+}
+
+/** The REPLAY screen while waiting: a recording to start (uploaded, or host:rec.txt's `play NAME`). */
+int Port_RecReplayReady(void)
+{
+    return !s_Active && (s_RemotePlay || mode() == 2);
+}
+
+/** The REPLAY screen: starts the replay with Debug Options rendering bits `bits`, as SaveScreen_Continue
+ * does a loaded save; the screen then fades out and goes to the load screen. 0 when it couldn't start. */
+int Port_RecReplayBegin(int bits)
+{
+    s_Override = bits;
+    Port_RecContinue();
+    s_Override = -1;
+    if (!s_Active)
+    {
+        return 0;
+    }
+    MemCard_SysDisable();
+    D_800A97D7          = 1;
+    g_GameWork.autosave = g_GameWork.savegame;
+    GameBoot_WorldInit();
+    g_SysWork.processFlags = ProcessFlag_LoadSave;
+    GameBoot_MapLoad(g_SavegamePtr->mapIdx);
+    return 1;
 }

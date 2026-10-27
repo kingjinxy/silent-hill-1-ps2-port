@@ -207,6 +207,8 @@ def main():
     port_objs = []
     # Profiling counters (include/port/prof.h): SH1_PROF=1.
     prof = ["-DSH_PORT_PROF"] if os.environ.get("SH1_PROF") else []
+    # Per-GTE-command counters too (src/port/gte.c): SH1_PROF_GTE=1.
+    prof += ["-DSH_PORT_PROF_GTE"] if os.environ.get("SH1_PROF") and os.environ.get("SH1_PROF_GTE") else []
     # Light counters inside DrawOTag (include/port/prof.h LP_*): SH1_LITEPROF=1.
     prof += ["-DSH_PORT_LITEPROF"] if os.environ.get("SH1_LITEPROF") else []
     # Benchmark builds (SH1_BENCH=1, as tools/port/ee_compile_check.sh): the Demo menu's frame dumps.
@@ -276,8 +278,10 @@ def main():
              "-iquote", "include", src, "-o", obj])
         port_objs.append(obj)
     # IOP module embedded in the ELF: sh1agent.irx (remote control on hardware, src/port/ps2/agent_ps2.c).
-    env = dict(os.environ, PS2SDK=PS2SDK, PATH=os.environ["PATH"] + os.pathsep + os.path.join(os.path.dirname(PS2SDK), "iop", "bin")
-               + os.pathsep + os.path.join(PS2SDK, "bin"))
+    # ps2dev's IOP compiler first: another mipsel-none-elf-gcc on PATH (PSn00bSDK's) assembles with relocations
+    # in an order iopfixup rejects ("R_MIPS_LO16 without R_MIPS_HI16").
+    env = dict(os.environ, PS2SDK=PS2SDK, PATH=os.path.join(os.path.dirname(PS2SDK), "iop", "bin") + os.pathsep
+               + os.path.join(PS2SDK, "bin") + os.pathsep + os.environ["PATH"])
     # sh1spu.irx (sound on SPU2 core 0, src/port/ps2/spu_ps2.c) with ps2sdk's freesd.irx (libsd).
     for name in ("sh1agent", "sh1spu"):
         subprocess.run(["make", "-s", "-C", "src/port/iop/" + name], env=env, check=True)

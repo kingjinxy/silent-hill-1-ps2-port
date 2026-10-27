@@ -83,12 +83,16 @@ typedef enum _MainMenuEntry
     // Port: the Demo entry (src/port/demo_menu.c) takes the unused Extra slot, between New Game and Option.
     MainMenuEntry_Demo     = 3,
     MainMenuEntry_Option   = 4,
+    // Port: console replay of a play recording (src/port/demo_rec.c), below Option.
+    MainMenuEntry_Replay   = 5,
+
+    MainMenuEntry_Count    = 6
 #else
     MainMenuEntry_Option   = 3,
     MainMenuEntry_Extra    = 4, /** @unused The extra options menu may have been accessible via the main menu. */
-#endif
 
     MainMenuEntry_Count    = 5
+#endif
 } e_MainMenuEntry;
 
 typedef enum _MainMenuState

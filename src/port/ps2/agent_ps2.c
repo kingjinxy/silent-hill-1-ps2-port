@@ -43,6 +43,7 @@ typedef struct
 } Mailbox;
 
 static Mailbox      s_Mailbox __attribute__((aligned(64)));
+static unsigned char s_Upload[1024] __attribute__((aligned(64))); /* "UP" data (the IOP's UPLOAD_MAX) */
 static unsigned int s_LastSeq;
 static volatile unsigned int s_Request; /* a command from the game itself (Port_AgentRequest) */
 static int          s_Sema = -1;
@@ -145,6 +146,17 @@ static void agent(void* arg)
             extern void  Port_RecRemote(const char* name8); /* src/port/demo_rec.c */
             unsigned int name[2] = { mailbox()->arg, mailbox()->arg2 };
             Port_RecRemote((const char*)name);
+        }
+        else if (cmd == CMD('U', 'P'))
+        {
+            extern void Port_RecUpload(unsigned int offset, const void* data, unsigned int len); /* src/port/demo_rec.c */
+            Port_RecUpload(mailbox()->arg, (const void*)((unsigned int)s_Upload | 0x20000000), mailbox()->arg2);
+        }
+        else if (cmd == CMD('R', 'P'))
+        {
+            extern void  Port_RecRemotePlay(const char* name8); /* src/port/demo_rec.c */
+            unsigned int name[2] = { mailbox()->arg, mailbox()->arg2 };
+            Port_RecRemotePlay((const char*)name);
         }
         else if (cmd == CMD('N', 'G'))
         {
@@ -299,7 +311,7 @@ void Port_ModuleLoadInit(void)
 
 void Port_AgentInit(void)
 {
-    char         args[24];
+    char         args[40];
     int          len, id, result = 0;
     ee_sema_t    sema;
     ee_thread_t  th;
@@ -318,6 +330,7 @@ void Port_AgentInit(void)
     s_Mailbox.seq = 0;
     FlushCache(0); /* no dirty lines of the mailbox left to overwrite what the IOP writes */
     len = sprintf(args, "mb=0x%08x", (unsigned int)&s_Mailbox & 0x1FFFFFFF) + 1;
+    len += sprintf(args + len, "up=0x%08x", (unsigned int)s_Upload & 0x1FFFFFFF) + 1;
     Port_ModuleLoadInit();
     id = SifExecModuleBuffer(sh1agent_irx, size_sh1agent_irx, len, args, &result);
     if (id < 0 || result == 1) /* 1: MODULE_NO_RESIDENT_END */

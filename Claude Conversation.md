@@ -30210,3 +30210,1266 @@ Update the docs
 
 - tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p='Running Walkthrough.md'; s=open(p).read() s+=""" ## 2x resolution against DuckStation (2026
 
+
+# Session 2026-10-26: Docks profiling and console replays
+
+
+## User
+
+<command-name>/clear</command-name>
+            <command-message>clear</command-message>
+            <command-args></command-args>
+
+## User
+
+I want to do some testing on the map which I'm in right now on the console. I want to use "Docks" as a shorthand for whatever its internal name is. This map has historically been a sore spot for performance. I'm in this map with the 2x resolution and 32-bit color options in order to see where the bottlenecks lie.
+
+- tool `Bash`: Survey repo docs and tools
+
+- tool `Bash`: Find Docks references in docs
+
+- tool `Bash`: List port tools
+
+- tool `Bash`: Inspect console control tool
+
+- tool `Bash`: Query console location and recent log
+
+- tool `Write`: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/docks-is-map6-s00.md
+
+- tool `Bash`: Add memory index entry
+
+## Claude
+
+I'll use "Docks" for **map6_s00** from now on. The console log's latest map loads are `map2_s02` → `map6_s01` → `map6_s00`, so that's where you are, and I've saved the shorthand to memory.
+
+One early sign: I asked the console where the game was at its last 16 vertical blanks, and all 16 samples landed at the same spot, `0x81fe0`. That spot is in the pthread mutex code, so the game is blocked in a wait there. Sixteen samples of one moment don't prove much yet. If the frame rate drops anyway, that would point to the time going to the GS or graphics side, or to a sync wait, rather than to the game's own code. We need real timing numbers to confirm that.
+
+How do you want to start?
+1. **Many samples:** run `where` repeatedly while you stand still and while you move, to see where the time goes.
+2. **Settings comparison:** switch between `options 0`, 1, 2 and 3 in the same spot, to separate the cost of 2x resolution from the cost of 32-bit color.
+3. **Something specific you've noticed:** a spot or camera angle where it drops.
+
+## User
+
+I'm paused right now, so that's probably why you're getting those readings at the moment. Let's go with #1, and I'll unpause momentarily.
+
+- tool `Bash`: Write sampling script and time one query
+
+- tool `Bash`: Symbolize the sampled address properly
+
+- tool `Bash`: Sample console PCs for 60 seconds
+
+## Claude
+
+Sampling has started and runs for 60 seconds. It takes 16 samples about every half second, roughly 2,000 in total. Unpause and play normally, mixing standing still with moving and turning the camera. I'll post a breakdown of where the time went once it finishes.
+
+- tool `Bash`: Show sampling results
+
+- tool `Bash`: Check sample addresses and where-capture code
+
+## Claude
+
+The game was unpaused (the log shows it in gameplay), yet every sample landed on the same kernel address. So the problem is the sampler, not the game. Checking how it records the address:
+
+- tool `Bash`: Locate the where-sampler implementation
+
+- tool `Bash`: Show where PC samples are taken
+
+## Claude
+
+The 60-second run didn't work. All 2,144 samples landed on the same kernel address, `0x81fe0`, even though the log shows the game was in normal gameplay the whole time (`gameState 11`).
+
+**Why:** the vblank handler at [libetc_ps2.c:199-200](src/port/ps2/libetc_ps2.c#L199-L200) reads the CPU's saved return address (`EPC`). By the time the kernel calls our handler, that value already points at the kernel's own interrupt dispatcher, not at the game code that was interrupted. So `where` always gives the same answer. It isn't even useful for spotting the hangs it was written to catch. It is still in the code unchanged; I haven't touched it.
+
+**What the log does show** for the Docks while you played, per frame:
+- about 920–960 primitives
+- about 620–650 texture switches (`TEX0`), each with its own palette load (`CLUT`), so roughly two out of three primitives force a texture and palette reload
+- 15 uploads and 2 readbacks of video memory
+
+That rate of texture and palette switching is my top suspect. The GS has to stall on every palette load, and at 32-bit color each one costs more. This is a reading of the log, not a measurement yet.
+
+**Next step I'd suggest:** add timing to the build instead of sampling. I'd read the CPU's cycle counter at the main stages of each frame:
+- game logic
+- building the draw list
+- converting it to GS packets
+- waiting for the GS to finish
+- waiting for vblank
+
+The ps2 log would then print the averages once a second. That tells us directly whether the CPU or the GS is the bottleneck in the Docks, and how much each of 2x resolution and 32-bit color adds.
+
+It needs a rebuild and redeploy, which restarts the game, so you'd have to load back into the Docks. Should I go ahead?
+
+## User
+
+Yes. Attempt to restart the game remotely. If it doesn't work, I'll restart manually.
+
+- tool `Bash`: Find frame stage code locations
+
+- tool `Bash`: Read VSync, heartbeat and DrawOTag code
+
+## Claude
+
+There's already a `PROF_BEGIN` profiler in the code. Checking how to switch it on:
+
+- tool `Bash`: Find profiler macro definition and usage
+
+- tool `Bash`: Read profiler header and build switches
+
+## Claude
+
+Profiling is already built in: `./build-and-deploy --prof`. Checking what that script does before running it:
+
+- tool `Bash`: Read deploy script and profiler report code
+
+## Claude
+
+Running the profiling build and deploy now. The server is up, so the script will tell the console to restart into the new build:
+
+- tool `Bash`: Build profiling ISO and restart console
+
+## Claude
+
+The profiling build is compiling now. When it finishes, the script will tell the console to restart into it, and I'll let you know whether the remote restart worked.
+
+I didn't need to write any new timing code: the port already has two profiling modes, and this build turns both on:
+- **Per-frame stage times:** game logic, sound and files, draw submission, and time spent idle waiting for vblank.
+- **Draw-path counters:** finer timings inside the draw path, for parsing polygons, texture state changes, building GS packets, and waiting on GS DMA.
+
+One caveat: the stage profiler also times every GTE (geometry coprocessor) operation, which adds some CPU overhead. CPU-side numbers will read a bit high in this build.
+
+- tool `Bash`: Show deploy result and console log tail
+
+- tool `Bash`: Wait for new build to report in
+
+## Claude
+
+The remote restart worked: the console is running the profiling build (built Oct 26 18:09).
+
+Please load back into the Docks with Debug Options set to 2x resolution and 32-bit color. If the setting didn't survive the restart, I can turn it back on from here with `ps2_ctl.py options 3`. Tell me when you're in and playing, and I'll collect about 30 seconds of profiling output from the log.
+
+## User
+
+The remote restart did not work. The PS2 is on a black screen. When I load the save, start recording my inputs, and after we're done testing on console, replay the inputs in PCSX2 and compare performance numbers.
+
+- tool `Bash`: Check console state after restart
+
+## Claude
+
+The game started, then froze. The new build booted (the log shows its first frames and the memory card check), but the vblank counter has been stuck at 300 since then, about 5 seconds after boot. So the remote restart failed here, as you saw. Please power-cycle the console (hold power) and start Neutrino again. It will load the profiling build.
+
+Once it's back, here's the plan:
+1. **Arm the recorder before you load the save:** I'll send `ps2_ctl.py rec docks1` as soon as the console answers. Recording starts from the next save you load, so I'll confirm it's armed before you load.
+2. **Test on the console:** load the save and play in the Docks at 2x resolution and 32-bit color. I'll collect the profiling output from the log while you play.
+3. **Stop and pull the recording:** I'll send `rec stop`, then use `rec_extract.py` to copy the recording off the console.
+4. **Replay in PCSX2 and compare:** I'll replay it in PCSX2 with the same build and settings and line up the profiling numbers against the console's.
+
+Tell me once Neutrino has the game running, and I'll arm the recorder.
+
+## User
+
+Arm the recorder
+
+- tool `Bash`: Arm the console input recorder
+
+- tool `Bash`: Confirm recorder armed message
+
+## Claude
+
+The recorder is armed as `docks1` and will start recording when you load a save.
+
+Before you load the save, switch Debug Options back to 2x resolution and 32-bit color. A fresh boot may have reset them; I can set them from here with `options 3` if you'd rather.
+
+To stop recording, either press Select + Start + L1 + R1 together or tell me and I'll send `rec stop`. I'll collect the profiling numbers from the log while you play.
+
+## User
+
+stop the recording
+
+- tool `Bash`: Stop recording and check result
+
+- tool `Bash`: Extract recording and console profiling window
+
+- tool `Bash`: Average console profile counters in Docks
+
+- tool `Bash`: Find PCSX2 replay options
+
+- tool `Bash`: Find how replay is started
+
+- tool `Bash`: Read replay instructions
+
+- tool `Bash`: See recorder commit for PCSX2 replay steps
+
+- tool `Bash`: Check replay setup files and options handling
+
+- tool `Bash`: Read capture.txt option format
+
+## Claude
+
+Starting the PCSX2 replay with the same settings (2x resolution + 32-bit, forced via `mode=3`):
+
+- tool `Bash`: Replay docks1 recording in PCSX2
+
+## Claude
+
+I've stopped the recording and saved it to `build/port/rec/docks1.dem`. It's 51.8 seconds and complete, with no lines missing from the log. It covers your load into map6_s01 and then the walk into the Docks.
+
+**Console, in the Docks:** the game holds about **30 fps**. The EE is busy for about 80% of the frame budget (idle 8–28%), and waiting on the GS takes almost nothing. So the CPU is the bottleneck, not the GS. Each frame needs about 26 ms of CPU, just over the 16.7 ms that 60 fps allows, so every frame misses a vblank and waits for the next one.
+
+| Where the time goes, per frame | ms |
+|---|---|
+| Converting draw packets for the GS | ~14 |
+| ↳ texture state changes | **~8** |
+| Game logic | ~10 |
+| Everything else | ~2 |
+
+Texture state is the clear outlier: about 4,000 cycles for each of roughly 600 texture and palette switches per frame. That cost is in our own GS code, so we can fix it in the port. The game logic figure reads high in this build, because this profiling build also times every GTE operation, which adds overhead.
+
+The PCSX2 replay is running now with the same settings (2x resolution, 32-bit color, software renderer). I'll put its numbers next to the console's when it finishes.
+
+- tool `Bash`: Check PCSX2 replay outcome
+
+- tool `Bash`: Compare console and PCSX2 Docks profiles
+
+## Claude
+
+The PCSX2 replay ran to the end without a desync (3,107 of 3,107 steps). Comparing just the Docks stretch on each side:
+
+- tool `Bash`: Summarise fps and texture-state cost per side
+
+- tool `Bash`: Read tex_state implementation
+
+- tool `Bash`: Read tex_state caller and helper locations
+
+## Claude
+
+I compared the Docks stretch on both sides: from the map6_s00 load until the recording moved into map6_s02.
+
+| | Console | PCSX2 |
+|---|---|---|
+| Frame rate | 27.0 fps | 28.2 fps |
+| EE idle | 19% | 52% |
+| Primitives / texture switches per frame | ~1,100 / ~760 | ~1,010 / ~700 |
+| Game logic update (kcycles/frame) | 2,908 | 2,734 |
+| Draw submission (kcycles/frame) | 4,135 | 2,065 |
+| ↳ texture state (`tex_state`) | **3,057** | **645** |
+| Cost per texture switch | **~4,000 cycles** | ~920 cycles |
+
+**What this tells us:**
+- **The replay matches the console.** It ran to the end in sync, the draw counts are close, and the game logic costs the same on both. So it's a fair comparison.
+- **Nearly all of the console's extra cost is texture state switching.** It costs about 4× more on real hardware. Everything else in the draw path costs about the same on both. PCSX2 doesn't model the EE's cache misses and memory stalls properly, so this is almost certainly memory access on hardware: lookups in the large page and palette tables, or work that runs when the texture cache misses. That's why PCSX2 has been hiding this.
+- **PCSX2 is only just over budget too.** A frame costs about 5,000 kcycles there against the 4,915 a 60 fps frame allows. On the console we need to cut about 3,000 kcycles a frame. Making texture switching as cheap as PCSX2 says it should be would cover about 2,400 of that, and the rest has to come from elsewhere.
+- **2x resolution and 32-bit aren't the bottleneck here.** GS DMA waits are close to zero on both sides, so the GS isn't what's holding the frame rate down. I haven't run the Docks at other settings yet, so I haven't confirmed how much they add.
+
+**Next step I'd suggest:** add a few counters inside `tex_state` ([gpu_gs.c:1221](src/port/ps2/gpu_gs.c#L1221)). I'd count:
+- how often its 64-entry lookup table hits versus misses
+- how many misses go on to search the page and palette caches
+- how many times the filtered-palette path (`filt_get`) runs
+- how many full-resolution scale-downs (epoch changes) happen
+
+My guess is that the table keeps overwriting its own entries. With roughly 700 switches a frame, each miss would then go into a 64 KB table and stall on memory. The counters would confirm or rule that out before I change anything.
+
+Replaying recordings on the console isn't built yet, so measuring on hardware again means rebuilding and having you walk the Docks once more. Should I add the counters?
+
+## User
+
+Let's try getting replays to work on console. Add another menu option below "OPTION" called "REPLAY". When selecting this option, display the background picture from the Options menu and show the options from the debug options menu. If the settings are changed here, they override any debug options that were saved in the save file, when the replay starts. When ready, the player can press start on this screen and the console will wait to receive the "replay start" command over the network. The replay files that we create should include the requisite save file, so the console knows which area to load and what state to load the game in, but again, the debug options in the replay menu should override anything set in the save file transferred over the network. Prompt me for any further questions.
+
+## Claude
+
+Before deciding anything, I'm reading the title menu, the Debug Options menu, the recorder and the console agent.
+
+- tool `Bash`: Locate menus and recorder host code
+
+- tool `Bash`: Read rest of recorder and host file uses
+
+- tool `Bash`: Read title menu and debug page references
+
+- tool `Bash`: Read debug options entries and entry path
+
+- tool `Bash`: Read title menu state machine
+
+- tool `Bash`: Read Continue path and menu enums
+
+- tool `Bash`: Read load continue path and agent commands
+
+- tool `Bash`: Read agent mailbox and payload limits
+
+- tool `Bash`: Check UDPFS server and agent protocol
+
+- tool `AskUserQuestion`: 
+
+- tool `Bash`: Read IOP agent packet handling
+
+- tool `Bash`: Read options screen init states
+
+- tool `Bash`: Read extra options state handling
+
+- tool `Bash`: Read leave-extra and draw code
+
+- tool `Bash`: Read agent init and IOP arg parsing
+
+- tool `Bash`: Read IOP start and how it's built
+
+## Claude
+
+Starting with the IOP agent: an `UP` command that carries up to 1 KB of data and copies it into an EE buffer ahead of the mailbox.
+
+- tool `Bash`: Add upload command to IOP agent
+
+## Claude
+
+Now the EE side of the agent: the upload buffer, plus `UP` (upload a chunk) and `RP` (replay start) commands.
+
+- tool `Bash`: Add upload and replay commands to EE agent
+
+- tool `Bash`: Check declarations needed for replay start
+
+## Claude
+
+Now the recorder: receiving a recording over the network, applying the REPLAY screen's settings, and starting the game from the recording's save.
+
+- tool `Bash`: Add remote replay support to recorder
+
+- tool `Bash`: Make replay begin report failure
+
+## Claude
+
+Now the title menu entry. Checking the remaining uses of the entry count before changing it:
+
+- tool `Bash`: Check entry-count users in title menu
+
+- tool `Bash`: Read next-state table and option load
+
+- tool `Bash`: Add REPLAY entry to title menu
+
+- tool `Bash`: Find where port globals are declared
+
+- tool `Bash`: Read demo_menu header and includers
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/include/port/demo_rec.h
+
+- tool `Bash`: Wire replay header into title and recorder
+
+## Claude
+
+Wiring the REPLAY page into the options screen now: it opens straight on the Debug Options list, Start waits for a recording, and backing out returns to the title.
+
+- tool `Bash`: View exact text at edit points
+
+- tool `Bash`: Add REPLAY page to options screen
+
+- tool `Bash`: Use plain characters in status text
+
+## Claude
+
+Now the host side: `ps2_ctl.py replay NAME`.
+
+- tool `Bash`: Read ps2_ctl main and log waiting
+
+- tool `Bash`: Add replay upload command to ps2_ctl
+
+## Claude
+
+Building to check it compiles. This doesn't deploy yet:
+
+- tool `Bash`: Compile and link the port
+
+- tool `Bash`: Show IOP agent build error
+
+- tool `Bash`: Check IOP Makefile and baseline build
+
+## Claude
+
+The error also happens with my IOP change stashed, so the IOP module fails to build on this machine regardless of my edit. Earlier builds just reused the existing `.irx`. Looking into it:
+
+- tool `Bash`: Inspect IOP objects' relocations
+
+- tool `Bash`: Rebuild IOP agent without explicit relocs
+
+## Claude
+
+That flag is already set, so I've reverted my Makefile change. Finding the unpaired relocation directly:
+
+- tool `Bash`: Find unpaired LO16 relocations
+
+- tool `Bash`: Disassemble to_ee around the bad reloc
+
+- tool `Bash`: Disassemble on_packet near offset 0xac
+
+- tool `Bash`: Show reloc table order and srxfixup step
+
+- tool `Bash`: Check iopfixup binary and history
+
+- tool `Bash`: Print the first text relocations in order
+
+## Claude
+
+Still on the IOP agent build failure. The relocation table is missing a `%hi` entry where GCC put the `lui` in a call's delay slot. Trying a build with delay-slot filling turned off:
+
+- tool `Bash`: Try IOP compiler flags to fix relocs
+
+- tool `Bash`: Show flag-test compile error
+
+- tool `Bash`: Retry IOP flags via optimization variable
+
+- tool `Bash`: Run srxfixup verbosely on linked module
+
+- tool `Bash`: Show full make output for IOP build
+
+- tool `Bash`: Find bad relocs and inspect generated asm
+
+- tool `Bash`: Build IOP agent with assembler reordering off
+
+- tool `Bash`: Compare relocs and disassembly of main.o
+
+- tool `Bash`: Check whether HI16 reloc exists at bc
+
+- tool `Bash`: View compiler asm around the call
+
+- tool `Bash`: Show assembler arguments gcc passes
+
+- tool `Bash`: Check reloc order with assembler -O0
+
+## Claude
+
+With `-Wa,-O0` the relocations come out in order. Putting that in the module's Makefile and checking the full build:
+
+- tool `Bash`: Build IOP agent with fixed Makefile
+
+- tool `Bash`: Show compile command make uses
+
+- tool `Bash`: Check whether debug info flips reloc order
+
+- tool `Bash`: Isolate the flag that breaks reloc order
+
+- tool `Bash`: Build IOP agent with ps2dev toolchain first
+
+- tool `Bash`: View IOP build environment lines
+
+- tool `Bash`: Fix toolchain PATH order and relink
+
+- tool `Bash`: Read scripted input format
+
+- tool `Bash`: Boot PCSX2 and dump title screen frames
+
+- tool `Bash`: Convert dumped frames to PNG
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5ef18049-7950-455b-b3e8-d202abb92998/scratchpad/f0320.png
+
+## Claude
+
+Only the Konami logo had appeared by 14 s. Running longer, pressing Start to skip ahead, and dumping a frame after each step:
+
+- tool `Bash`: Navigate title menu in PCSX2 with dumps
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5ef18049-7950-455b-b3e8-d202abb92998/scratchpad/grid.png
+
+- tool `Bash`: Move title menu column up for sixth entry
+
+## Claude
+
+Next, a full PCSX2 test of the REPLAY flow. First I'm adding the rendering bits the replay ends up with to the "replaying" log line, so the override is easy to check:
+
+- tool `Bash`: Log override bits and rebuild ISO
+
+- tool `Bash`: Test REPLAY page flow in PCSX2
+
+## Claude
+
+The run has gone past 10 minutes; the earlier PCSX2 replay finished much faster. Checking where it got to:
+
+- tool `Bash`: Inspect the running PCSX2 test log
+
+- tool `Bash`: Tile the four dumped frames
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5ef18049-7950-455b-b3e8-d202abb92998/scratchpad/grid2.png
+
+- tool `ToolSearch`: 
+
+- tool `TaskStop`: 
+
+- tool `Bash`: Rerun REPLAY flow test with intro skips
+
+## Claude
+
+The REPLAY page started the replay, the Debug Options override applied (bits 1 from the REPLAY page, in place of the recording's 3), and it ran to the end in sync. Checking the screen frames:
+
+- tool `Bash`: Tile REPLAY page frames
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5ef18049-7950-455b-b3e8-d202abb92998/scratchpad/grid3.png
+
+- tool `Bash`: Deploy profiling build to the console
+
+- tool `ToolSearch`: 
+
+- tool `PushNotification`: 
+
+## Claude
+
+The REPLAY entry works in PCSX2. A recording plays from the REPLAY page, uses that page's Debug Options settings, and runs in sync to the end. It hasn't run on the console yet: the PS2 didn't answer the restart, so please power-cycle it and start Neutrino. It will load the new build, which has profiling turned on.
+
+**In PCSX2:**
+- The title menu now has REPLAY below OPTION. I moved the menu up 20 pixels so it doesn't overlap the copyright line.
+- REPLAY opens the three Debug Options entries over the Options background, with "Press START to wait" underneath.
+- Pressing Start started `docks1` from the save stored in the recording, with no memory card load. The log showed it took the REPLAY page's value (x2, 16-bit) instead of the recording's x2 + 32-bit.
+- The replay ran all 3,107 steps with no divergence (35.31 fps, against 35.32 in the earlier PCSX2 replay).
+
+**How it works:**
+- **REPLAY page:** Start waits for a recording, and Cancel goes back to the title (and also stops waiting). Its settings stay set until the console restarts, and on first open they copy the current Debug Options. They only apply to replays.
+- **Sending a recording:** `python3 tools/port/ps2_ctl.py replay docks1` uploads `build/port/rec/docks1.dem` in 1 KB chunks. The console acknowledges each chunk in the log, then the script checks the total size and a checksum before telling the console to start. The `.dem` file already contains the save, the full config and the RNG seed.
+- **At the end:** you keep control and play on, and the fps line goes to the log.
+- **Code:** the page is in [options.c](src/screens/options/options.c), the title entry in [title.c](src/bodyprog/events/title.c), receiving and starting in [demo_rec.c](src/port/demo_rec.c), and the new commands in [agent_ps2.c](src/port/ps2/agent_ps2.c) and the IOP agent [main.c](src/port/iop/sh1agent/main.c).
+
+**A separate problem I found and fixed:** the console's two IOP modules haven't rebuilt since about Oct 19. The link script added ps2dev's IOP compiler to the end of PATH, and your `~/.bashrc` now puts PSn00bSDK's compiler of the same name earlier in PATH. Its assembler writes relocations in an order the SDK's `iopfixup` rejects, and each build kept using the old `.irx`. So the console has been running the **Oct 19 `sh1agent.irx`**: your Oct 20 change in `86c88b97c` ("Still attempting to fix the stupid reboot bug") never reached it. The sound module may have been stale as well. The fix puts ps2dev first in [port_link.py](tools/port/port_link.py#L279). This build carries both modules rebuilt from current source, so the reboot fix gets its first real test, and that may be why the remote restarts have been failing.
+
+**Once Neutrino is running the game:**
+1. On the title menu, choose REPLAY and set x2 / 32-bit (or whatever you want to test).
+2. Press Start; the page will say "Waiting for replay".
+3. Tell me, and I'll send `docks1` and collect the console's profiling numbers to compare with PCSX2's.
+
+Nothing is committed yet.
+
+## User
+
+Starting neutrino seems to give a black screen, and then I get booted back to ODSYS
+
+- tool `Bash`: Check console and UDPFS logs from boot
+
+- tool `Bash`: Restart UDPFS server and log receiver
+
+## Claude
+
+I've restarted the UDPFS server and the console log receiver, and the server is listening again. The game itself never got to start: both of your Neutrino attempts failed while reading the disc image from this PC. The first couldn't read `SYSTEM.CNF` from the ISO, and the second couldn't open `sh1_ps2.iso` at all. Neutrino then dropped back to the PS2 browser (OSDSYS).
+
+The server had been running for about 59 hours with 63 files open and had just switched them all to the new build during the deploy, so it had most likely got into a bad state. The ISO itself is fine: it's the profiling build with the REPLAY menu, 608,055,296 bytes, built at 18:46.
+
+Please start Neutrino again. If you still get a black screen, tell me and I'll look at what the server logged during the attempt.
+
+## User
+
+Now waiting for replay
+
+- tool `Bash`: Upload and start docks1 replay on console
+
+- tool `Bash`: Wait for console replay to finish
+
+## Claude
+
+The console replay ran all 3,107 steps with no divergence. Comparing the Docks stretch across the original session, this console replay and the PCSX2 replay:
+
+- tool `Bash`: Compare original, console replay, PCSX2
+
+- tool `Bash`: Inspect console replay heartbeat lines
+
+- tool `Bash`: Show heartbeat changes during replay
+
+## Claude
+
+Two sets of lines are mixed in that window: one has the frame counter stuck at 943 with 0% idle, the other is advancing normally. Checking whether two log receivers are writing to the same file:
+
+- tool `Bash`: Check for duplicate log receivers
+
+- tool `Bash`: Recompare using only this replay's lines
+
+## Claude
+
+The console replay ran exactly the same game as the PCSX2 replay: about 1,008 against 1,011 primitives and 695 against 698 texture switches per frame. On the console, a replay is now a reliable way to repeat a test run.
+
+The Docks section, per frame (kcycles; a 60 fps frame is 4,915):
+
+| | Original session (console) | Console replay | PCSX2 replay |
+|---|---|---|---|
+| fps | 27.0 | 27.9 | 28.2 |
+| EE idle | 19% | 38% | 52% |
+| Primitives / texture switches | 1,106 / 764 | 1,008 / 695 | 1,011 / 698 |
+| Game logic | 3,217 | 3,148 | 2,734 |
+| Draw submission | 4,992 | 2,860 | 2,065 |
+| ↳ texture state | **3,058** | **803** | 645 |
+| Fetching from GS (VRAM readback) | 168 | 157 | 1 |
+| Sound driver tick | 219 | 183 | 47 |
+
+**The texture-state cost from the first session didn't come back.** On the same console, drawing almost the same scene, it dropped from about 4,000 cycles per switch to about 1,150, close to PCSX2's figure. So that was not a steady console-versus-emulator cost. Something specific to that first run made it four times slower. Three things differ between the two console runs:
+1. **480p:** your REPLAY settings had it on (bits 7); the first session had it off (bits 3).
+2. **IOP modules:** this build has the rebuilt `sh1agent` and `sh1spu`; the first session ran the stale ones.
+3. **Live play versus replay:** the original was played by hand, so it also includes the 10% difference in primitives.
+
+**Where the Docks stand now:** the console replay still runs at about 28 fps, not 60. Game logic (~10.7 ms) plus draw submission (~9.7 ms) comes to about 20 ms a frame, past the 16.7 ms budget, so frames still miss every other vblank. Game logic is now the largest single cost. It also reads high in this build because of the GTE profiling overhead I mentioned before.
+
+**Next step I'd suggest:** to pin down the texture-state change, replay `docks1` again with only 480p switched off (bits 3, matching your original session). If texture state jumps back to ~3,000, 480p is the cause. If it doesn't, the stale IOP modules are the main suspect. You'd need to return to the title, choose REPLAY, turn Video Mode back to 480i, and press Start. I'll send the replay again.
+
+Nothing is committed yet. The changes are the REPLAY menu, the upload and replay commands, and the PATH fix for building the IOP modules.
+
+## User
+
+I want to change something specific to fix a mistake I made earlier. During the replay, I changed the resolution, but I didn't mean to and want to record another replay to overwrite the old one. To achieve this, I want the game to work so that if I go into the debug option menu and change its settings before loading a save file, those settings should override the debug options in the save file, and should be changed in the save file if I save again.
+
+## Claude
+
+Looking at where loading a save replaces the config, which includes the Debug Options byte:
+
+- tool `Bash`: Find where config is loaded from saves
+
+- tool `Bash`: Read memcard config load and save
+
+- tool `Bash`: Carry title Debug Options over loaded saves
+
+- tool `Bash`: Include the port header in memcard.c
+
+- tool `Bash`: Compile and check for warnings
+
+## Claude
+
+That compiles. Linking and deploying the profiling build to the console:
+
+- tool `Bash`: Build and deploy to console
+
+- tool `Bash`: Confirm console is still running
+
+## Claude
+
+The new build is on the console, but the game froze about 7 seconds after the remote restart: the vblank count stopped at 402 and isn't moving. The earlier remote restart froze the same way, at vblank 300. So remote restarts consistently hang this early, even with the rebuilt IOP agent, and a cold boot from Neutrino works. That is the reboot bug, and it isn't fixed yet.
+
+**The change:** if you set Debug Options from the title (Option, then Triangle) and then load a save, your settings replace the ones stored in the save. The log will show `port: Debug Options from the title replace the save's: rendering bits N`. They stay active in the game, so your next save writes them into the save file. A new recording also captures them, since it copies the config after the load. This applies once, to the next save you load. `ps2_ctl.py options N` sent from the title works the same way. Changing settings in-game behaves as before. It compiles, but I haven't tested it in PCSX2: scripting the Options menu and a save load together was too fiddly there, so the log line on the console will be the first check.
+
+**To re-record `docks1`:**
+1. Power-cycle the PS2 and start Neutrino. It will load the new build (built 19:03).
+2. On the title, go to Option, press Triangle, set the Debug Options you want (x2 / 32-bit / 480i to match the original), then back out.
+3. Tell me before you load the save, and I'll arm the recorder as `docks1`.
+4. Load the save, play the Docks, and tell me when to stop. Extracting it overwrites `build/port/rec/docks1.dem`.
+
+## User
+
+Begin recording after I load the save
+
+- tool `Bash`: Arm the recorder as docks1
+
+- tool `Bash`: Check for a save load before arming
+
+## Claude
+
+The recorder is armed as `docks1` and will start when you load a save. The override has already been applied, though. Opening the Load Game screen read the config from the memory card (the log shows `gameState 8`), and that is when your title Debug Options replaced the card's.
+
+What it applied was **rendering bits 7: x2, 32-bit and 480p**. If you meant to match the original recording, which was x2 and 32-bit with 480i, 480p is still on. It only changes how the image is shown on screen, not what the game draws.
+
+Once you load the save, I'll check the settings the recording actually captured.
+
+## User
+
+stop recording
+
+- tool `Bash`: Stop recording and extract docks1
+
+## Claude
+
+Recording stopped and extracted: `docks1` is now 2,647 steps (44.1 s), complete. I kept a copy of the old one in the scratchpad. Checking which Debug Options it captured:
+
+- tool `Bash`: Read captured Debug Options bits from recordings
+
+## Claude
+
+I've stopped the recording. The new `docks1` replaced the old one in `build/port/rec/docks1.dem`. It's 2,647 steps (44.1 s) and complete: map6_s01, then the Docks, ending as you entered map6_s02. I kept the old recording at `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/5ef18049-7950-455b-b3e8-d202abb92998/scratchpad/docks1_old.dem`.
+
+**Captured settings:** the new recording stores Debug Options bits **7** (x2, 32-bit, 480p), which you set from the title. The old recording stored **5** (x2, 16-bit, 480p). So when the original session started, 32-bit was off and 480p was on, and you changed the settings partway through. That explains the mismatch you wanted to fix. It also means the 480p difference I suspected between the original session and the console replay never existed, and it doesn't explain the texture-state difference either.
+
+**About my earlier comparison:** that comparison treated the original session as x2 + 32-bit + 480i for the whole run. That was wrong, so its "original session" column mixed settings and shouldn't be relied on. The console replay and PCSX2 replay columns are still valid, because both ran with fixed settings.
+
+**Next:** I can replay the new `docks1` on the console and in PCSX2 to get a clean comparison with the same settings throughout. On the console, open REPLAY from the title, set it to 7 (or whatever you want to measure), and press Start. In PCSX2 I'll use the same bits. Nothing is committed yet.
+
+## User
+
+Alright, go ahead
+
+- tool `Bash`: Upload new docks1 to the console
+
+- tool `Bash`: Replay new docks1 in PCSX2
+
+## Claude
+
+The new `docks1` is now on the console, received intact (44,400 bytes), and it will play as soon as the REPLAY page is waiting. Return to the title, open REPLAY, set the settings to **x2 / 32-bit / 480p** to match the recording, and press Start. The replay begins right away.
+
+The PCSX2 replay is running in the background with the same settings (bits 7). I'll compare the two once both have finished.
+
+- tool `Bash`: Check PCSX2 result and console status
+
+## Claude
+
+PCSX2 finished: all 2,647 steps at 31.04 fps. The console replay started at 997.6 s with bits 7, set on the REPLAY page. Waiting for it to finish:
+
+- tool `Bash`: Wait for console replay to finish
+
+## Claude
+
+The console finished in sync as well: 2,647 of 2,647 steps at 33.43 fps. Comparing the Docks stretch on all three: your new live recording session, the console replay, and the PCSX2 replay:
+
+- tool `Bash`: Compare live, console replay, PCSX2
+
+## Claude
+
+Live play and the console replay now agree almost exactly. That makes replays a solid basis for measurement, and it ruled out my 480p theory.
+
+The Docks stretch, per frame (kcycles; a 60 fps frame is 4,915):
+
+| | Live (console) | Console replay | PCSX2 replay |
+|---|---|---|---|
+| fps | 27.2 | 27.3 | 27.7 |
+| EE idle | 20% | 22% | 47% |
+| Primitives / texture switches | 1,068 / 741 | 1,062 / 737 | 1,153 / 807 |
+| Game logic | 3,197 | 3,284 | 3,096 |
+| Draw submission | 4,598 | 4,697 | 2,474 |
+| ↳ texture state | 2,725 | 2,709 | 801 |
+| **Cycles per texture switch** | **3,679** | **3,677** | 992 |
+
+**What's new:**
+- **The console replay matches live play** to within about 1% on every counter. You can now test a change on hardware and get comparable numbers each time.
+- **Same settings, different texture cost.** Both console replays used bits 7. The first one, right after a fresh boot, cost about 1,150 cycles per texture switch. This one, run after you'd already played through the Docks, cost about 3,680. So 480p isn't the cause, and nor is the console versus PCSX2 as such. The cost seems to grow with what has been drawn before.
+- **Likely cause:** the GS renderer's texture page and palette caches filling up and evicting. When the 64-entry lookup table in `tex_state` misses, the code searches the page and palette tables (the palette map alone is 64 KB). PCSX2 doesn't charge for the resulting cache misses on the EE, which is why it stays near 1,000 cycles. This fits the data, but I haven't measured it yet.
+- **Why the game runs at 27 fps:** in the slow state, texture switching costs about 9 ms a frame on the console. Game logic plus draw submission comes to about 27 ms, against the 16.7 ms budget.
+
+The PCSX2 replay drew about 8% more than the console in the Docks. That's probably because the stretch I compared on the PCSX2 side differs slightly, since its log has no map6_s02 load to cut at. It doesn't change the conclusions.
+
+**Next step I'd suggest:** add hit and miss counters to `tex_state` and the page and palette caches (memo hits, cache searches, evictions). Then replay `docks1` on the console twice: right after a cold boot, and again after the first run. That should confirm whether cache state is what makes it slow, before I change anything in the cache. Should I go ahead?
+
+## User
+
+Yes
+
+- tool `Bash`: Read texture cache and CLUT lookup code
+
+- tool `Bash`: Read existing stats counters and printing
+
+## Claude
+
+The cache counters already exist and are in the logs I collected. Comparing them across the four Docks runs before writing anything new:
+
+- tool `Bash`: Compare existing GS cache counters
+
+- tool `Bash`: Read cache size, sync and transfer code
+
+- tool `Bash`: Upload docks1 again for a 16-bit replay
+
+## Claude
+
+I didn't need new counters after all: the renderer already logs page and palette cache misses, and they explain the slowdown.
+
+**The cause:** at 2x resolution with 32-bit color, the texture cache has only **7 page slots**, against 27 at 2x/16-bit and 36 at x1 ([gpu_gs.c:2904](src/port/ps2/gpu_gs.c#L2904)). The 2x 32-bit shadow buffer takes up most of the GS's 4 MB of video memory. The Docks need more than 7 texture pages, so the cache keeps evicting and reloading:
+
+| Docks, per frame | Old recording, console | New recording, console | New recording, PCSX2 |
+|---|---|---|---|
+| Page misses | 0.9 | 5.1 | 7.0 |
+| Cycles per texture switch | ~1,150 | ~3,680 | ~990 |
+
+Each miss first calls `GpuGs_Sync()`, which waits for the GS to finish everything already queued, and then copies a 32–64 KB page. On the console that wait includes the GS drawing at 2x/32-bit, so a miss costs about 1.6 ms. PCSX2 has even more misses but no real wait, which is why it hid the problem. My earlier "the cost grows over time" theory was wrong: the two console replays followed different recordings, and the new route simply touches more pages.
+
+**Confirmation run:** `docks1` is on the console again. Go to the title, open REPLAY, set **Resolution x2, Color Depth 16-bit** (Video Mode as you like), and press Start. With 27 slots, page misses should drop close to zero and texture switching should fall to about 1,000 cycles each.
+
+If that confirms it, there are two kinds of fix:
+1. **More slots at 2x/32-bit:** find GS memory for them, for example by packing 4-bit pages more tightly.
+2. **No waiting on a miss:** stop the miss path from blocking on the GS, for example by double-buffering the page staging buffer so it doesn't have to wait.
+
+## User
+
+The replay doesn't seem to be starting correctly
+
+- tool `Bash`: Check console log for replay start
+
+- tool `Bash`: Find what triggers demo exit
+
+- tool `Bash`: Read demo step and exit conditions
+
+- tool `Bash`: Wait for button release before replay starts
+
+## Claude
+
+Building. Remote restarts have been hanging, so I'm only building; the console will pick up the new ISO when you power-cycle it.
+
+- tool `Bash`: Build profiling ISO without deploying
+
+## Claude
+
+The replay stopped at step 0 because the demo player ends playback as soon as any button is pressed, the same way the attract demos do. The recording had already arrived when you pressed Start, so the replay began in that same frame, with Start still held, and stopped straight away. The first replay worked because you pressed Start before I sent the file, so the button was already released when it began.
+
+I've changed the REPLAY page to wait until every button is released before it starts ([options.c](src/screens/options/options.c)). It's in a new build (built 19:17), still with profiling on. I haven't tested this yet.
+
+To run the 16-bit confirmation:
+1. Power-cycle the PS2 and start Neutrino. Remote restarts are still hanging, so I didn't try one.
+2. Open REPLAY, set **x2 / 16-bit**, and press Start.
+3. Tell me once it says "Waiting for replay". The recording isn't stored across a reboot, so I'll send `docks1` again then.
+
+One more thing to know: touching the controller during a replay will still end it, as it does for an attract demo. Leave the pad alone until it finishes.
+
+## User
+
+It's waiting for replay
+
+- tool `Bash`: Send docks1 and wait for replay to finish
+
+## Claude
+
+That one ran to the end: 2,647 of 2,647 steps, 33.60 fps overall. Comparing the Docks stretch with the 32-bit run:
+
+- tool `Bash`: Compare 32-bit and 16-bit console replays
+
+## Claude
+
+It's confirmed: the 7-slot page cache is what made texture switching expensive at 2x/32-bit. The Docks stretch on the console, same recording:
+
+| Per frame | x2 / 32-bit | x2 / 16-bit |
+|---|---|---|
+| Page cache slots | 7 | 27 |
+| Page misses | 5.1 | **1.0** |
+| Texture state (kcycles) | 2,709 | **945** |
+| Cycles per texture switch | 3,677 | **1,207** |
+| Draw submission (kcycles) | 4,697 | 3,297 |
+| Game logic (kcycles) | 3,284 | 3,533 |
+| EE idle | 22% | 35% |
+| fps | 27.3 | 26.8 |
+
+With 27 slots, page misses drop from about 5 to 1 per frame, and texture switching costs about a third as much. Draw submission gets 1.4 million cycles cheaper per frame, about 4.8 ms.
+
+**But the frame rate didn't move.** At 16-bit, game logic plus draw submission still adds up to about 23 ms a frame, well over the 16.7 ms that 60 fps needs. So the game still misses every other vblank and runs at about 27 fps. Fixing the page cache at 32-bit would bring that mode level with 16-bit, but it won't reach 60 fps on its own. Getting to 60 means cutting about another 6 ms a frame:
+- **Game logic, about 12 ms:** now the largest cost. This build overstates it, because it also times every GTE operation. A build with only the light counters would give the true figure.
+- **Draw submission, about 11 ms at 16-bit:** of which texture state is still about 3 ms, plus polygon parsing, packet building and the mesh lighting batch.
+
+**Options from here:**
+1. **Fix the 32-bit page cache:** find more GS memory for slots, or stop a miss from waiting on the GS. That brings 32-bit in line with 16-bit, but on its own still leaves about 27 fps.
+2. **Measure game logic properly:** build with only the light counters, without per-GTE timing, replay `docks1`, and see which game functions cost the most.
+3. **Both:** item 2 first, since it decides where the remaining 6 ms has to come from.
+
+I'd go with 3. Which do you want? None of today's changes are committed yet.
+
+## User
+
+Let's measure game logic properly. I'm still convinced that moving textures in and out of memory could be very performant on PS2, especially if I want to have a 720p mode in the future.
+
+## Claude
+
+Agreed on texture streaming. The PS2 can move 64 KB to the GS very quickly; what costs time is the miss path waiting for the GS to finish drawing first. That is a sync problem that can be designed around, not a bandwidth limit, and I'll keep it in mind for a 720p mode.
+
+To measure game logic without the per-GTE overhead, I'm checking what the profiling build times besides the GTE operations:
+
+- tool `Bash`: Read GTE profiling and function profiler
+
+- tool `Bash`: Read function profiler and how it's enabled
+
+- tool `Bash`: Locate the in-game update function
+
+- tool `Bash`: Read the in-game update function
+
+- tool `Bash`: Find GTE profiling guards and prof.h use
+
+- tool `Bash`: View GTE profiling block and report call
+
+- tool `Bash`: Put per-GTE profiling behind its own flag
+
+## Claude
+
+Now timers around each part of the in-game update. They're named `ig:` so they group together in the report:
+
+- tool `Bash`: Add in-game update stage timers
+
+- tool `Bash`: Build profiling ISO without GTE timing
+
+## Claude
+
+Built: the per-GTE timing is gone, and the new `ig:` timers are in. Running the replay in PCSX2 first to check the numbers add up and nothing breaks:
+
+- tool `Bash`: Replay docks1 in PCSX2 with new timers
+
+- tool `Bash`: Average PCSX2 profile with new timers
+
+## Claude
+
+PCSX2 shows the timers working. Without the per-GTE timing, game logic still costs about 2,900 kcycles a frame, so that timing was only inflating it slightly. Most of the cost is drawing, not logic:
+
+| Docks, PCSX2, per frame | kcycles |
+|---|---|
+| Game state update (total) | 2,909 |
+| ↳ `WorldGfx_Draw` (map geometry) | **1,542** |
+| ↳ NPCs (spawn, update) | 492 |
+| ↳ Map particle system | 428 |
+| ↳ Harry: draw, combat | 290 |
+| ↳ Player, camera, effects, events, everything else | ~150 |
+
+Over half the "game logic" is `WorldGfx_Draw` transforming the map's geometry. On PS1 that is GTE work, and here the GTE is emulated in C on the EE ([gte.c](src/port/gte.c)). PCSX2's cycle counts don't reflect cache misses, though, so the console figures matter.
+
+**For the console run:**
+1. Power-cycle and start Neutrino. It will load the new build.
+2. Open REPLAY, set **x2 / 32-bit** (as recorded), and press Start.
+3. Tell me once it's waiting, and I'll send `docks1`.
+
+## User
+
+Try doing a remote restart again
+
+- tool `Bash`: Remote-restart console into new build
+
+## Claude
+
+The restart froze again. The new build started, but its vblank count stopped at 462 (about 7.7 s) and hasn't moved since. Checking what the log shows just before it stopped:
+
+- tool `Bash`: Show log before the restart freeze
+
+## Claude
+
+The remote restart froze again, at the same point as before. The new build (19:24:45) booted, drew its startup screens normally, and then about 7.7 s in, vblank interrupts stopped completely. The count is stuck at 462 between pings, so the EE either stopped or has interrupts switched off.
+
+The last log line is from `gameState 1`, step 3, during the boot sequence, with no error or crash report. All three remote restarts have stopped like this, about 5–8 seconds after boot, while a cold boot from Neutrino gets through the same sequence fine. So it's the existing reboot bug. Rebuilding `sh1agent` didn't fix it, which also means your Oct 20 change, now actually on the console, doesn't fix it either. I can dig into it separately later if you like.
+
+For now, please power-cycle and start Neutrino. Then open REPLAY, set x2 / 32-bit, press Start, and tell me once it's waiting.
+
+## User
+
+Waiting for replay
+
+- tool `Bash`: Send docks1 and wait for replay to finish
+
+- tool `Bash`: Average console profile in the Docks
+
+- tool `Bash`: List map loads during console replay
+
+- tool `Bash`: Average console profile in the Docks
+
+## Claude
+
+The console replay finished in sync (28.44 fps). Game logic on hardware is about **3,112 kcycles a frame (~10.6 ms)**, close to PCSX2's 2,909. Unlike texture switching, game logic doesn't have a hidden hardware cost. The timers add up to almost all of it:
+
+| Docks, console, per frame | kcycles | ms |
+|---|---|---|
+| **Game state update** | **3,112** | **10.6** |
+| ↳ `WorldGfx_Draw` (map geometry) | 1,512 | 5.1 |
+| ↳ NPCs (spawn, update) | 663 | 2.2 |
+| ↳ Harry: draw, combat | 354 | 1.2 |
+| ↳ Map particle system | 341 | 1.2 |
+| ↳ Player, camera, events, effects, the rest | ~240 | 0.8 |
+| **Draw submission** | **5,920** | **20.1** |
+| ↳ texture state (7-slot cache at 32-bit) | 3,463 | 11.7 |
+
+Texture state reads higher here than the 2,709 measured with light counters only. This build also wraps each of the ~800 texture switches a frame in the heavier stage timer, so treat this table's draw-side figures as a little high. The game-logic rows are fine, since those timers run only a few times a frame.
+
+**What this means for 60 fps at x2 / 32-bit:**
+- **Texture switching is still the largest single cost.** At 32-bit it alone uses most of a 60 fps frame. That fits your view: fixing how pages move in and out, by not waiting on the GS for a miss and by having more slots, matters most. That holds even more for 720p, where the frame buffers will take even more GS memory.
+- **`WorldGfx_Draw` is the largest cost in game logic**, at about 5 ms. It transforms and lights the map's geometry, using the C emulation of the PS1's GTE geometry coprocessor. Moving that onto the PS2's vector hardware (VU0) is the obvious long-term fix, but it's a much bigger job.
+- **NPCs, Harry and particles together** cost about another 4.5 ms.
+
+**Next step I'd suggest:** the texture-streaming path, so a page miss no longer waits for the GS:
+1. Double-buffer the page staging buffer, so a miss never has to wait for the previous upload.
+2. Stop reading the page back through `GpuGs_Sync`, if its pixels can come from main RAM's copy of VRAM.
+
+Then measure that with `docks1` at 32-bit. Alternatively, I can break `WorldGfx_Draw` down first. Which do you want? Nothing is committed yet. That includes the REPLAY menu, the replay upload, the IOP build fix, the title Debug Options carrying over to loaded saves, and the profiling changes. Tell me if you'd like those committed first.
+
+## User
+
+I noticed that the replay went out of sync
+
+## Claude
+
+The log missed that, but you're right, and there's evidence of it: this replay never loaded map6_s02, while the live recording and the earlier console replays did. Comparing the recorder's trace lines, which log Harry's position and the RNG seed every 600 steps, between the live recording and the replays:
+
+- tool `Bash`: Compare rec trace lines across runs
+
+- tool `Bash`: Read GTE dispatch under both builds
+
+- tool `Bash`: Bisect: replay with GTE wrapper restored
+
+- tool `Bash`: Check traces of the earlier PCSX2 replay
+
+- tool `Bash`: Recheck console 2400-step traces
+
+- tool `Bash`: Find how playback sets frame timing
+
+## Claude
+
+The replay feeds each step's frame timing back exactly as recorded, so frame pacing isn't the cause. The divergence comes from game state that depends on real time, which the recorder doesn't capture. The code comments already note that waits for voice clips and some disc waits aren't held to their recorded timing.
+
+I can't pin it down from what we have, because the only reference trace is one line every 600 steps. Here's where things stand:
+
+- **Where:** between steps 1800 and 2400. In the good runs, map6_s02 loads around step 2300, so something around that point (a door, an event, an enemy) comes out differently. Harry ends up at `-440010 0 -231523` instead of in map6_s02. The RNG seed still matches at step 2400.
+- **Not a regression:** the PCSX2 replay of this recording had diverged at the same point with the 19:03 build. I missed it then and reported a clean sync, which was wrong. On the console, two replays stayed in sync and the latest one didn't. Whether it diverges depends on timing.
+- **Effect on the numbers:** the profiling figures up to step 1800 are still valid, since everything matched to that point. The Docks stretch I averaged ran past it, so the last ~600 steps of each comparison came from slightly different play.
+
+**How I'd find it:**
+1. **Denser traces:** make the recorder log a trace line every 30 steps during recording and replay (Harry's position, map, active event, nearby NPC positions), and catch any mismatch as soon as it happens, not only through STEP ERROR.
+2. **Get a reference:** run that build in PCSX2, where the replay is deterministic, and on the console where it sometimes stays in sync. Comparing the two traces gives the first step that differs and what changed there.
+3. **Fix the cause:** probably a real-time wait the recorder needs to capture, like it already does for chunk loads, for example voice clips or a door/event wait.
+
+Should I go ahead with that, or carry on with the texture-streaming work and come back to this?
+
+## User
+
+Yes, let's fix this first
+
+## Claude
+
+Adding denser traces to the recorder. They'll be printed every 30 steps during both recording and replay, plus a line whenever the system state changes, such as an event, a door or a pause:
+
+- tool `Bash`: Add dense trace and rebuild
+
+- tool `Bash`: Replay in PCSX2 with dense trace
+
+- tool `Bash`: Show dense trace around divergence
+
+- tool `Bash`: Find game reads of real time or sound status
+
+- tool `Bash`: Add file queue to trace and rebuild
+
+## Claude
+
+Start the PCSX2 run of this build in the background while the console is set up:
+
+- tool `Bash`: PCSX2 replay with file queue trace
+
+## Claude
+
+The divergence is now narrowed to a few hundred steps, but I don't have the cause yet.
+
+**What the PCSX2 replay shows:** Harry matches the recording up to step 1800. Then an enemy hits him around steps 2100 and 2280, and from step 2250 he stands still at the spot where he got stuck. In your live run, the recorded frame times say he was already going through the transition into map6_s02 at step 2250, a point he never reaches in the replay. The game reseeds its random numbers from the recording every step, so the enemy's behavior differs for some other reason.
+
+**My leading suspect** is asynchronous file loads. The recorder holds map chunk loads to their recorded timing, but not other loads, such as an enemy's model or animation files. If one of those finishes a few frames earlier or later than when you played, the enemy acts differently. That matches which runs drifted: the faster build without the GTE wrapper, and PCSX2. I haven't confirmed this yet.
+
+I've added a trace line every 30 steps to the recorder, plus one whenever the system state changes. Each line logs Harry's position and health, the frame time, the RNG seed, and the file queue's length and read position. It's in a new build. A PCSX2 replay of that build is running in the background, and I'll compare it against a console run.
+
+For the console run, please power-cycle and start Neutrino, which loads the new build. Then open REPLAY, set **x2 / 32-bit**, press Start, and tell me once it's waiting. I'll send `docks1`. Whether this run stays in sync or not, comparing its trace with PCSX2's should show the first step where the two differ and whether a file load sits there.
+
+- tool `Bash`: Show file queue changes in PCSX2 trace
+
+- tool `Bash`: Show steps where the file queue changed
+
+## Claude
+
+The PCSX2 run finished. Its trace shows file loads finishing at several points, and one batch lands right before the divergence window. Read index 61 → 64 between steps 1830 and 1860, and nothing else loads after that:
+
+| Steps | Queued | Read index |
+|---|---|---|
+| 0 → 30 | 2 → 0 | 30 → 32 |
+| 327 | 0 | 53 |
+| 450 → 480 | 1 → 0 | 53 → 56 |
+| 900 | 0 | 58 |
+| 960 | 0 | 61 |
+| **1860** | **0** | **64** |
+
+That fits the file-load theory: if those three files arrive at a different step on the console, whatever they contain, probably the enemy, starts at a different time. I'll know once I have the console's trace to compare. Tell me when the REPLAY page is waiting (x2 / 32-bit), and I'll send `docks1`.
+
+## User
+
+How would you explain this with relation to the gameplay demos that play on the title screen? Those don't seem to differ at all between runs, although more testing would be necessary to be sure.
+
+## Claude
+
+They don't contradict each other, for three reasons:
+
+**1. "Same every run" isn't the same as "matches the recording".** PCSX2 replays our recording identically every time: it diverges, but always at the same step, to the same position. An attract demo could also be off from Konami's original session and still look identical run after run. You'd only notice if the drift caused something visibly wrong, like Harry walking into a wall. Our case was only noticeable because we had your live session to compare against.
+
+**2. Attract demos probably avoid the risky moments.** A demo is short, starts from a prepared state, and most likely had its files already loaded or loading in the same order every time. Konami would have picked or recorded demos that play back reliably on PS1 hardware, where disc timing is very consistent. Your recording walks through the Docks, where files load mid-route around step 1860 and an enemy engages Harry just afterwards. That's the kind of situation where a few frames' difference in when a file arrives changes the outcome.
+
+**3. Our timing varies more than a PS1's.** On the console, the game runs at a different speed depending on the build (profiling, GTE wrapper) and the Debug Options, while disc reads over the network take roughly real time. So how many game steps pass before a load finishes changes from build to build. That's the kind of variation that made two console replays stay in sync and the next one drift. A PS1 running its own disc has a nearly fixed ratio, so its demos would be stable even if they were sensitive in the same way.
+
+I haven't checked any of this against an attract demo yet. The test is cheap: play the same title-screen demo twice in PCSX2 and twice on the console with the dense trace on, and compare. If all four traces match, the attract demos aren't sensitive in this way. If the console's traces differ from each other, they are, and nobody noticed because nothing looks wrong. It's also worth checking whether Konami's demo player waits for file loads in a way our recorder doesn't copy. Its frames have the field the port reuses to hold map chunk loads to their recorded length, and I don't know what Konami used it for.
+
+I'm still waiting on the console replay. That comparison is what will show whether the load at step ~1860 is really the cause.
+
+## User
+
+Console waiting for replay
+
+- tool `Bash`: Run console replay and diff traces
+
+- tool `Bash`: Check console replay outcome at step 2400
+
+- tool `Bash`: Build with the GTE wrapper turned back on
+
+- tool `Bash`: Check how port code gets extra flags
+
+- tool `Bash`: Add SH1_PROF_GTE switch and rebuild with wrapper
+
+## Claude
+
+The wrapper is in this time. Starting the PCSX2 replay of this build in the background as well:
+
+- tool `Bash`: PCSX2 replay with GTE wrapper
+
+## Claude
+
+The console replay diverged at the same point as PCSX2, and their 30-step traces match. Both loaded files at the same steps, including the batch at step ~1860, so file loads probably aren't the cause.
+
+Across the console runs so far, the per-GTE profiling wrapper is the one thing that separates good runs from bad ones. Every console replay stayed in sync while it was in the build (19:03, 19:17), and every one drifted after I took it out (19:24 onward). The wrapper slows the EE, so the likely cause is EE speed relative to real time.
+
+I also found that `SH1_EXTRA_CFLAGS` never reaches the port's own code, `gte.c` included. My earlier PCSX2 test "with the wrapper restored" never had it, so that result was meaningless. I've added an `SH1_PROF_GTE=1` switch to [port_link.py](tools/port/port_link.py) and built with it. This time the wrapper is definitely in (built 19:46). A PCSX2 replay of it is running in the background.
+
+Please power-cycle, open REPLAY, set **x2 / 32-bit**, press Start, and tell me when it's waiting. If this run stays in sync, it gives a good trace to compare against the bad one, which should show the step where they split.
+
+- tool `Bash`: Show PCSX2 wrapper replay result
+
+## Claude
+
+The PCSX2 replay of the build with the wrapper also diverged, to the same position at step 2400. That's what I expected, since PCSX2 has drifted with every build. The console run is still the real test. I'll send `docks1` once you tell me REPLAY is waiting (x2 / 32-bit).
+
+## User
+
+Waiting for replay
+
+- tool `Bash`: Run console replay with wrapper, diff traces
+
+- tool `Bash`: Show good-run trace around the split
+
+- tool `Bash`: Find floating-point use in port code
+
+- tool `Bash`: Check float use in libgs port
+
+- tool `Bash`: Check compile log for uninitialized warnings
+
+## Claude
+
+Those warnings are off in this build. Recompiling the game code with `-Wuninitialized -Wmaybe-uninitialized` to list candidates. It's the same code, just with the warnings on:
+
+- tool `Bash`: Compile game code with uninitialized warnings
+
+- tool `Bash`: Inspect warning output and compile command
+
+## Claude
+
+The summary counts 5 "maybe uninitialized" warnings. The details are in the per-file output:
+
+- tool `Bash`: Show uninitialized warning details
+
+- tool `Bash`: Show uninitialized warning details
+
+- tool `Bash`: Read Player_PositionUpdate around sp30
+
+- tool `Bash`: Find headingAngle1 uses
+
+- tool `Bash`: Read the headingAngle1 block
+
+- tool `Bash`: Add per-step state checksums and rebuild
+
+## Claude
+
+Built with the wrapper in (so the console should stay in sync) and the per-step checksums. Starting the PCSX2 run, which should diverge, in the background:
+
+- tool `Bash`: PCSX2 replay with per-step checksums
+
+## Claude
+
+With the profiling wrapper back in, the console replay stayed in sync: map6_s02 loaded at step 2236, as in your live run. That gave me a good and a bad trace from the same console to compare. They match through step 1980, then Harry's height differs by 16 units at step 2010 (1779 against 1763) while he's dropping down a level. Inputs, frame times, RNG and file loads all match. So it isn't a timing or loading problem; it looks like a numerical difference that then grows.
+
+**What I've ruled out:**
+- **Floating-point rounding:** the port's GTE and maths code uses no floats.
+- **The compiler's two uninitialized-variable warnings in Harry's code:** both are false alarms. One is only reached on the school boss map, the other only while an enemy grabs Harry.
+
+**What I suspect:** game code reading leftover memory, such as an uninitialized local or stale data, in a way the compiler can't see. Taking the wrapper out changes what's left on the stack, and so does running in PCSX2.
+
+**Next run:** I've built a version that logs a checksum of Harry's full state and of all NPCs' state on every step, with the wrapper still in so the console run should stay in sync. Comparing it against PCSX2, which diverges, gives the exact first step and whether Harry or an NPC split first. Then I can dump the individual fields at that step. The PCSX2 side is running now.
+
+Please power-cycle, open REPLAY, set **x2 / 32-bit**, press Start, and tell me when it's waiting.
+
+- tool `Bash`: Check PCSX2 checksum run result
+
+## Claude
+
+The PCSX2 side is done: it diverged as expected and logged a checksum for every one of the 2,647 steps. Now I need the console run. Tell me when REPLAY is waiting (x2 / 32-bit, after a power-cycle to load the new build), and I'll send `docks1` and compare the two step by step.
+
+## User
+
+Waiting for replay
+
+- tool `Bash`: Run console replay and find first differing step
+
+- tool `Bash`: Find first step where NPC checksums differ
+
+- tool `Bash`: Show where Harry's checksums match
+
+- tool `Bash`: Add NPC byte dump around step 1844
+
+- tool `Bash`: PCSX2 replay with NPC byte dump
+
+## Claude
+
+I've narrowed the cause down to an enemy. Comparing the console run (still in sync) against PCSX2 (diverged) step by step:
+
+- **Step 1844:** the NPCs' state first differs. Up to then it matches exactly, from the first NPC at step 327. Step 1844 falls inside the window where three files finish loading (steps 1830–1860).
+- **Step 1978:** Harry's state first differs, as the enemy reaches him. From there come the height difference at step 2010 and the missed transition into map6_s02.
+
+Harry's checksum also differs during the first 11 steps, but that's only while the save loads and it matches again by step 12, so I'm treating it as unrelated.
+
+So the enemy whose files load around step 1840 starts out differently on the two machines. Either it initializes from data that isn't fully loaded yet, or its files finish on different steps. The 30-step trace can't separate those, so I've made one more build. It logs the file queue every step and dumps the raw NPC bytes for steps 1836–1848, which shows which NPC and which fields differ, and whether the load finished on a different step. The PCSX2 side is running now.
+
+Please power-cycle again, open REPLAY at **x2 / 32-bit**, press Start, and tell me when it's waiting.
+
+- tool `Bash`: Show PCSX2 per-step file queue changes
+
+- tool `Bash`: Show steps of PCSX2 file queue changes
+
+## Claude
+
+The PCSX2 run already shows what happens per step around the split:
+
+| Step | PCSX2 file queue |
+|---|---|
+| 1837 | a file is queued |
+| 1843 | read index 61 → 62 |
+| **1844** | **a second file is queued** (the step where the NPCs first differ) |
+| 1850–1856 | the remaining reads finish, queue empty |
+
+So something in the game queued a file at exactly step 1844, the step where NPC state first differs. That fits an enemy being set up as its files arrive. Once the console run is in, I can compare its per-step file timing and the raw NPC bytes against this. Tell me when REPLAY is waiting.
+
+## User
+
+Replay is waiting
+
+- tool `Bash`: Run console replay and show file queue steps
+
+- tool `Bash`: Read demo frame layout and queue update
+
+- tool `Bash`: Check recorded chunk hold values
+
+- tool `Bash`: Read post-load step and demo hooks
+
+## Claude
+
+Implementing it in the recorder: file sync on each step, chunk holds limited to `field_A[0]`, plus the hook in the file queue.
+
+- tool `Bash`: Find field_A uses in recorder
+
+- tool `Bash`: Read Port_RecHold
+
+- tool `Bash`: Record and hold file loads per step
+
+## Claude
+
+One more safeguard: hold only between files, never part-way through processing one.
+
+- tool `Bash`: Guard hold to between files, build without wrapper
+
+## Claude
+
+That builds, with the wrapper deliberately out, so the next test uses the configuration that used to diverge. I'm also removing the temporary per-step checksum and NPC dump; the 30-step trace stays.
+
+- tool `Bash`: Remove temp dumps, rebuild, check old recording
+
+## Claude
+
+The old `docks1` behaves as before in PCSX2: it has no file marks, so nothing gets held, it diverges at the same place, and it plays to the end. That's the expected result for recordings made before this change.
+
+**What's built:** the recorder now records, for every step, how far the file queue had got. On playback a file can't finish before its recorded step, and a step waits if its files are late ([demo_rec.c](src/port/demo_rec.c), plus a hook in [fsqueue.c](src/main/fsqueue.c)). The chunk-hold value now uses only the first byte of its field, which is safe since no recording has ever set it. This build deliberately leaves the GTE wrapper out, the configuration that used to diverge.
+
+**To test it, we need a new recording**, since only new ones contain the file marks:
+1. Power-cycle and start Neutrino. It will load this build.
+2. Set Debug Options from the title as you want them (x2 / 32-bit / 480p, as before).
+3. Tell me before loading the save. I'll arm `docks1` and keep a copy of the current one.
+4. Play the same route through the Docks into map6_s02, then tell me to stop.
+
+Then I'll replay it in PCSX2 and on the console. Both used to drift with this build, so if they now match your live run at every trace point, the fix works.
+
+## User
+
+Create a writeup of our progress on replays in "replays.md". Stopping here for now
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/replays.md
+
+## Claude
+
+Per your standing instruction, I'm updating the conversation archive:
+
+- tool `Bash`: Update the conversation archive
+
+- tool `Bash`: Check archive script write mode and session file
+

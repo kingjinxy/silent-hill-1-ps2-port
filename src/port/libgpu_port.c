@@ -333,10 +333,12 @@ DISPENV* PutDispEnv(DISPENV* env)
         {
             PROF_BEGIN("prof: report (printing)")
             Prof_Report(frames);
+#ifdef SH_PORT_PROF_GTE
             {
                 extern void Gte_ProfSites(unsigned int frames);
                 Gte_ProfSites(frames);
             }
+#endif
             {
                 extern void ProfFn_Report(unsigned int frames);
                 ProfFn_Report(frames);

@@ -1062,7 +1062,9 @@ static __attribute__((noinline)) void normal_color_small(int v, int mode, int sf
  * Command dispatch
  * --------------------------------------------------------------------------------------------*/
 
-#ifdef SH_PORT_PROF
+/* Per-command counters (SH1_PROF=1 SH1_PROF_GTE=1, tools/port/port_link.py): their cost inflates the
+ * game's own counters, so they are off in a plain profiling build. */
+#if defined(SH_PORT_PROF) && defined(SH_PORT_PROF_GTE)
 #include "port/prof.h"
 static void gte_command(unsigned int cmd);
 static const char* const OP_NAMES[64] = {

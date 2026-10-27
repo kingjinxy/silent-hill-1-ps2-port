@@ -395,9 +395,15 @@ void Port_DemoRemote(int idx)
 /** From the remote control agent's thread (ps2_ctl.py options N): the Debug Options rendering settings,
  * config.unused_26 (bit 0 Resolution x2, bit 1 Color Depth 32-bit, bit 2 Video Mode 480p; options.c). Applied at the next
  * frame (libgpu_port.c). */
+int g_PortDebugPending = -1;
+
 void Port_OptionsRemote(int bits)
 {
     g_GameWork.config.unused_26 = (s8)(bits & 7);
+    if (g_GameWork.gameState != GameState_InGame)
+    {
+        g_PortDebugPending = bits & 7;
+    }
     printf("demo: options set remotely: %s, %s, %s\n", (bits & 1) ? "x2" : "x1", (bits & 2) ? "32-bit" : "16-bit",
            (bits & 4) ? "480p" : "480i");
 }

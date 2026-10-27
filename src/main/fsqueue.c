@@ -5,6 +5,9 @@
 #include "main/fsmem.h"
 
 #include <memory.h>
+#ifdef SH_PORT
+extern int Port_RecFileHold(void); // src/port/demo_rec.c
+#endif
 #include <psyq/libapi.h>
 #include <psyq/libcd.h>
 #include <psyq/libgte.h>
@@ -244,7 +247,12 @@ void Fs_QueueUpdate(void)
 
     // Preparations to post-load in queue; tick them.
     tick = g_FsQueue.postLoad.ptr;
+#ifdef SH_PORT
+    // Port: play recorder (src/port/demo_rec.c): on playback, a file finishes at its recorded step.
+    if (g_FsQueue.postLoad.idx < g_FsQueue.read.idx && !Port_RecFileHold())
+#else
     if (g_FsQueue.postLoad.idx < g_FsQueue.read.idx)
+#endif
     {
         status = Fs_QueueUpdatePostLoad(tick);
         if (status == true)

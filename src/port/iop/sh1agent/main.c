@@ -5,7 +5,10 @@
  * command: "RS" (restart the game), "PI" (ping). Each command is copied into a 16-byte mailbox in EE
  * memory by SIF DMA (address from the "mb=0x..." argument; src/port/ps2/agent_ps2.c polls it every
  * vertical blank), with two 32-bit arguments from the next 8 payload bytes ("MD": address,
- * length), and answered with a short text to the sender (tools/port/ps2_ctl.py).
+ * length), and answered with a short text to the sender (tools/port/ps2_ctl.py). "UP" (upload: offset,
+ * length) also carries up to UPLOAD_MAX bytes of data after the arguments, copied to the EE's upload
+ * buffer ("up=0x..." argument) ahead of the mailbox; the sender waits for the EE's acknowledgement before
+ * the next one (tools/port/ps2_ctl.py replay).
  *
  * The EE's state: the game sends s_EeStatus (its address goes to the EE in the mailbox's first spare
  * word) twice a second from its vertical blank interrupt, and the ping's answer shows it. That works
@@ -57,7 +60,9 @@ typedef struct
     u32 pad[3];
 } ee_status_t;
 
-#define LOG_MAX 2048
+#define LOG_MAX    2048
+#define UPLOAD_MAX 1024
+#define CMD_UP     ('U' | ('P' << 8))
 
 typedef struct
 {
@@ -73,6 +78,8 @@ static udp_packet_t  s_LogPkt;
 static ee_status_t   s_EeStatus __attribute__((aligned(16)));
 static u32           s_LastVBlanks;
 static u32           s_EeBox;
+static u32           s_EeUpload;     /* the EE's upload buffer (UPLOAD_MAX bytes) */
+static u8            s_Upload[UPLOAD_MAX] __attribute__((aligned(16)));
 static udp_socket_t* s_Socket;
 static udp_packet_t  s_Reply;
 static char          s_ReplyText[768];
@@ -86,19 +93,29 @@ static u32           s_ToEeStuck;    /* ... one is now */
  * thread (which also receives the UDPFS disc data: waiting there stopped all network input). */
 static void to_ee(void)
 {
-    SifDmaTransfer_t dt;
-    int              state, id, polls = 0;
+    SifDmaTransfer_t dt[2];
+    int              state, id, n = 0, polls = 0;
     if (s_EeStatus.magic == 0x51314853) /* 'SH1Q': the EE is about to restart, nothing more into its memory */
     {
         return;
     }
     WaitSema(s_BoxSema);
-    dt.src  = &s_Box;
-    dt.dest = (void*)s_EeBox;
-    dt.size = sizeof(s_Box);
-    dt.attr = 0;
+    if (s_Box.cmd == CMD_UP && s_EeUpload != 0 && s_Box.arg2 <= UPLOAD_MAX)
+    {
+        /* The data first: the same transfer list keeps it ahead of the mailbox. */
+        dt[n].src  = s_Upload;
+        dt[n].dest = (void*)s_EeUpload;
+        dt[n].size = (s_Box.arg2 + 15) & ~15;
+        dt[n].attr = 0;
+        n++;
+    }
+    dt[n].src  = &s_Box;
+    dt[n].dest = (void*)s_EeBox;
+    dt[n].size = sizeof(s_Box);
+    dt[n].attr = 0;
+    n++;
     CpuSuspendIntr(&state);
-    id = sceSifSetDma(&dt, 1);
+    id = sceSifSetDma(dt, n);
     CpuResumeIntr(state);
     while (id != 0 && sceSifDmaStat(id) >= 0)
     {
@@ -135,6 +152,10 @@ static int on_packet(udp_socket_t* socket, void* arg, const u8* hdr, u16 hdr_len
     (void)hdr_len;
 
     smap_fifo_read(0x2C, args, sizeof(args)); /* the payload after the command bytes */
+    if (cmd == CMD_UP && args[1] <= UPLOAD_MAX)
+    {
+        smap_fifo_read(0x34, s_Upload, (args[1] + 3) & ~3);
+    }
     if (cmd != ('P' | ('I' << 8))) /* a ping is answered here: the EE needn't hear of it */
     {
         /* No waiting here: s_Box is written as the command thread's transfer may be reading it (a
@@ -219,6 +240,10 @@ int _start(int argc, char* argv[])
         if (!strncmp(argv[i], "mb=", 3))
         {
             s_EeBox = strtoul(&argv[i][3], NULL, 16);
+        }
+        if (!strncmp(argv[i], "up=", 3))
+        {
+            s_EeUpload = strtoul(&argv[i][3], NULL, 16);
         }
     }
     if (s_EeBox == 0)

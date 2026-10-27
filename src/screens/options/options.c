@@ -4,6 +4,10 @@
 #include <psyq/libetc.h>
 
 #include "bodyprog/bodyprog.h"
+#ifdef SH_PORT
+#include "port/demo_menu.h"
+#include "port/demo_rec.h"
+#endif
 #include "bodyprog/events/radio.h"
 #include "bodyprog/gfx/map_effects.h"
 #include "bodyprog/item_screens.h"
@@ -63,8 +67,12 @@ static s32 g_ExtraOptionsMenu_BulletMultMax;
  *   Color Depth: 16-bit, or 32-bit drawing (true colour: no 5-bit quantization or dithering); bit 1.
  *   Video Mode: how 2x screens are shown, 480i or 480p (display_ps2.c); bit 2.
  * TEMPORARY: Triangle is also one of the default Cancel buttons; on the main options screen it now
- * only opens this page (Circle and Square still cancel). To be replaced by a better way in. */
+ * only opens this page (Circle and Square still cancel). To be replaced by a better way in.
+ * The title's REPLAY entry (g_PortReplayMenu) opens the same list as the REPLAY page (s_PortReplay): its
+ * values (g_PortReplayBits) replace a replayed recording's own; Start waits for a recording
+ * (src/port/demo_rec.c, tools/port/ps2_ctl.py replay), Cancel goes back to the title. */
 static s32 s_PortDebugPage; /* the extra options screen shows the debug list */
+static s32 s_PortReplay;    /* ... as the REPLAY page: 1 settings, 2 waiting for a recording, 3 starting it */
 
 static const struct
 {
@@ -80,9 +88,23 @@ static const struct
 #define PORT_DEBUG_COUNT ((s32)(sizeof(PORT_DEBUG_ENTRIES) / sizeof(PORT_DEBUG_ENTRIES[0])))
 #define PORT_ENTRY_WIDTH(widths, i) (s_PortDebugPage ? PORT_DEBUG_ENTRIES[i].width : (widths)[i])
 
+/** The rendering bits the debug list shows: the config's, or the REPLAY page's. */
+static u8* Port_DebugBits(void)
+{
+    static u8 replayBits;
+    if (s_PortReplay)
+    {
+        replayBits = g_PortReplayBits;
+        return &replayBits;
+    }
+    return &g_GameWork.config.unused_26;
+}
+
 /** Left/right on debug entry `i`. */
 static void Port_DebugEntryChange(s32 i)
 {
+    u8* bits = Port_DebugBits();
+
     if (!(g_Controller0->buttonFlags.clicked & (ControllerFlag_LStickHighRight | ControllerFlag_LStickHighLeft)))
     {
         return;
@@ -91,16 +113,24 @@ static void Port_DebugEntryChange(s32 i)
     switch (i)
     {
         case 0: /* Resolution */
-            g_GameWork.config.unused_26 ^= 1;
+            *bits ^= 1;
             break;
 
         case 1: /* Color Depth */
-            g_GameWork.config.unused_26 ^= 2;
+            *bits ^= 2;
             break;
 
         case 2: /* Video Mode */
-            g_GameWork.config.unused_26 ^= 4;
+            *bits ^= 4;
             break;
+    }
+    if (s_PortReplay)
+    {
+        g_PortReplayBits = *bits;
+    }
+    else if (g_GameWork.gameStatePrev != GameState_InGame)
+    {
+        g_PortDebugPending = *bits & 7; /* from the title: replaces the next loaded save's (memcard.c) */
     }
 }
 
@@ -110,13 +140,13 @@ static const char* Port_DebugEntryValue(s32 i)
     switch (i)
     {
         case 0:
-            return (g_GameWork.config.unused_26 & 1) ? "x2" : "x1";
+            return (*Port_DebugBits() & 1) ? "x2" : "x1";
 
         case 1:
-            return (g_GameWork.config.unused_26 & 2) ? "32-bit" : "16-bit";
+            return (*Port_DebugBits() & 2) ? "32-bit" : "16-bit";
 
         case 2:
-            return (g_GameWork.config.unused_26 & 4) ? "480p" : "480i";
+            return (*Port_DebugBits() & 4) ? "480p" : "480i";
     }
     return "";
 }
@@ -236,6 +266,20 @@ void GameState_Options_Update(void) // 0x801E2D44
             g_ExtraOptionsMenu_EntryCount = (g_GameWork.config.extraOptionsEnabled) ? 8 : 6;
 #ifdef SH_PORT
             s_PortDebugPage = 0;
+            s_PortReplay    = 0;
+            if (g_PortReplayMenu)
+            {
+                // REPLAY page: the debug list straight away (the fade-in above shows it).
+                if (g_PortReplayBits < 0)
+                {
+                    g_PortReplayBits = g_GameWork.config.unused_26 & 7;
+                }
+                s_PortDebugPage               = 1;
+                s_PortReplay                  = 1;
+                g_ExtraOptionsMenu_EntryCount = PORT_DEBUG_COUNT;
+                Game_StateStepSet(0, OptionsMenuState_ExtraOptions);
+                break;
+            }
 #endif
 
             Game_StateStepSet(0, OptionsMenuState_MainOptions);
@@ -326,6 +370,18 @@ void GameState_Options_Update(void) // 0x801E2D44
             break;
 
         case OptionsMenuState_LeaveExtraOptions:
+#ifdef SH_PORT
+            if (s_PortReplay && ScreenFade_IsFinished())
+            {
+                // REPLAY page: back to the title, as OptionsMenuState_LeaveMainOptions.
+                e_GameState prevGameState = g_GameWork.gameStatePrev;
+                s_PortReplay     = 0;
+                g_PortReplayMenu = false;
+                Game_StateSetNext(prevGameState);
+                g_GameWork.gameStateSteps[0] = OptionsMenuState_EnterMainOptions;
+                break;
+            }
+#endif
             if (ScreenFade_IsFinished())
             {
                 Game_StateStepSet(0, OptionsMenuState_EnterMainOptions);
@@ -371,6 +427,43 @@ void Options_ExtraOptionsMenu_Control(void) // 0x801E318C
     {
         return;
     }
+
+#ifdef SH_PORT
+    // REPLAY page: Start waits for a recording, which then starts from its save.
+    if (s_PortReplay == 3)
+    {
+        if (ScreenFade_IsFinished())
+        {
+            Fs_QueueWaitForEmpty();
+            Settings_ScreenAndVolUpdate();
+            s_PortReplay     = 0;
+            g_PortReplayMenu = false;
+            Game_StateSetNext(GameState_MainLoadScreen);
+        }
+        return;
+    }
+    if (s_PortReplay == 2)
+    {
+        if (g_Controller0->buttonFlags.clicked & g_GameWorkPtr->config.controllerConfig.cancel)
+        {
+            Sd_SfxPlay(Sfx_MenuCancel, Q8(0.0f), Q8(0.25f));
+            s_PortReplay = 1;
+        }
+        // Not while a button is held (Start just pressed): during playback a button press ends the replay.
+        else if (!g_Controller0->buttonFlags.held && Port_RecReplayReady() && Port_RecReplayBegin(g_PortReplayBits))
+        {
+            ScreenFade_Start(true, false, false);
+            s_PortReplay = 3;
+        }
+        return;
+    }
+    if (s_PortReplay == 1 && (g_Controller0->buttonFlags.clicked & ControllerFlag_Start))
+    {
+        Sd_SfxPlay(Sfx_MenuConfirm, Q8(0.0f), Q8(0.25f));
+        s_PortReplay = 2;
+        return;
+    }
+#endif
 
     // Increment line move timer.
     if ((LINE_CURSOR_TIMER_MAX - 1) < g_Options_SelectionHighlightTimer)
@@ -964,7 +1057,7 @@ void Options_ExtraOptionsMenu_EntryStringsDraw(void) // 0x801E416C
     Gfx_StringPositionSet(STR_POS.vx, STR_POS.vy);
     Gfx_StringLayerIdxSet(OPTIONS_ENTRY_STRING_LAYER_IDX);
 #ifdef SH_PORT
-    Gfx_StringDraw(s_PortDebugPage ? "DEBUG_OPTIONS" : EXTRA_OPTIONS_STR, DEFAULT_MAP_MESSAGE_LENGTH);
+    Gfx_StringDraw(s_PortReplay ? "REPLAY" : s_PortDebugPage ? "DEBUG_OPTIONS" : EXTRA_OPTIONS_STR, DEFAULT_MAP_MESSAGE_LENGTH);
 #else
     Gfx_StringDraw(EXTRA_OPTIONS_STR, DEFAULT_MAP_MESSAGE_LENGTH);
 #endif
@@ -983,6 +1076,14 @@ void Options_ExtraOptionsMenu_EntryStringsDraw(void) // 0x801E416C
 #endif
         Gfx_StringDraw(ENTRY_STRS[i], DEFAULT_MAP_MESSAGE_LENGTH);
     }
+#ifdef SH_PORT
+    if (s_PortReplay)
+    {
+        Gfx_StringPositionSet(LINE_BASE_X, LINE_BASE_Y + ((i + 1) * LINE_OFFSET_Y));
+        Gfx_StringLayerIdxSet(OPTIONS_ENTRY_STRING_LAYER_IDX);
+        Gfx_StringDraw(s_PortReplay == 1 ? "Press_START_to_wait" : "Waiting_for_replay", DEFAULT_MAP_MESSAGE_LENGTH);
+    }
+#endif
 
     #undef LINE_BASE_X
     #undef LINE_BASE_Y

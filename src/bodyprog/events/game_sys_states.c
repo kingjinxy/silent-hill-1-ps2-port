@@ -1,5 +1,7 @@
 #include "game.h"
 
+#include "port/prof.h"
+
 #include <psyq/libetc.h>
 #include <psyq/libpad.h>
 #include <psyq/strings.h>
@@ -122,6 +124,7 @@ void GameState_InGame_Update(void) // 0x80038BD4
     }
 
     // Run system state.
+    PROF_BEGIN("ig: system state (events, input)")
     if (g_SysWork.sysState == SysState_Gameplay)
     {
         g_SysWork.isMgsStringSet = false;
@@ -142,48 +145,68 @@ void GameState_InGame_Update(void) // 0x80038BD4
             }
         }
     }
+    PROF_END("ig: system state (events, input)")
     Demo_DemoRandSeedRestore();
 
+    PROF_BEGIN("ig: Fs_QueueChunksLoad")
     g_IsLoadingFinished = ScreenFade_IsFinished() && Fs_QueueChunksLoad();
+    PROF_END("ig: Fs_QueueChunksLoad")
 
     // Update world objects if not paused.
     if (!(g_SysWork.bgmStatusFlags & BgmStatusFlag_Pause) &&
         g_MapOverlayHdr.updateWorldObjects != NULL)
     {
+        PROF_BEGIN("ig: map updateWorldObjects")
         g_MapOverlayHdr.updateWorldObjects();
+        PROF_END("ig: map updateWorldObjects")
     }
 
+    PROF_BEGIN("ig: cutscene camera, Bgm_Update")
     Screen_CutsceneCameraStateUpdate();
     Bgm_Update(false);
+    PROF_END("ig: cutscene camera, Bgm_Update")
     Demo_DemoRandSeedRestore();
     Demo_DemoRandSeedRestore();
 
     // Update world scene if not paused.
     if (!(g_SysWork.bgmStatusFlags & BgmStatusFlag_Pause))
     {
+        PROF_BEGIN("ig: collision triggers")
         World_NearbyPlayerCollisionTriggersGet();
+        PROF_END("ig: collision triggers")
+        PROF_BEGIN("ig: vcMoveAndSetCamera")
         vcMoveAndSetCamera(false, false, false, false, false, false, false, false);
+        PROF_END("ig: vcMoveAndSetCamera")
 
         if (g_MapOverlayHdr.func_44 != NULL)
         {
+            PROF_BEGIN("ig: map func_44")
             g_MapOverlayHdr.func_44();
+            PROF_END("ig: map func_44")
         }
 
         Demo_DemoRandSeedRestore();
 
         player = &g_SysWork.playerWork.player;
+        PROF_BEGIN("ig: Player_Update")
         Player_Update(player, FS_BUFFER_0, g_SysWork.playerBoneCoords);
+        PROF_END("ig: Player_Update")
 
         Demo_DemoRandSeedRestore();
+        PROF_BEGIN("ig: Gfx_EffectsUpdate")
         Gfx_EffectsUpdate();
+        PROF_END("ig: Gfx_EffectsUpdate")
 
         if (g_SavegamePtr->mapIdx != MapIdx_MAP7_S03)
         {
+            PROF_BEGIN("ig: map particleSystemUpdate")
             g_MapOverlayHdr.particleSystemUpdate(0, g_SavegamePtr->mapIdx, 1);
+            PROF_END("ig: map particleSystemUpdate")
         }
 
         Demo_DemoRandSeedRestore();
 
+        PROF_BEGIN("ig: Harry draw, combat")
         if (player->model.anim.flags & AnimFlag_Visible)
         {
             WorldGfx_CharaDraw(Chara_Harry, g_SysWork.playerBoneCoords, 1, g_SysWork.playerWork.player.timer_C6, 0);
@@ -191,13 +214,22 @@ void GameState_InGame_Update(void) // 0x80038BD4
             Player_CombatUpdate(&g_SysWork.playerWork, g_SysWork.playerBoneCoords);
             func_8008A3AC(&g_SysWork.playerWork.player);
         }
+        PROF_END("ig: Harry draw, combat")
 
         Demo_DemoRandSeedRestore();
+        PROF_BEGIN("ig: NPCs (spawn, update)")
         Game_NpcRoomInitSpawn(true);
         Game_NpcUpdate();
+        PROF_END("ig: NPCs (spawn, update)")
+        PROF_BEGIN("ig: func_8005E89C")
         func_8005E89C();
+        PROF_END("ig: func_8005E89C")
+        PROF_BEGIN("ig: WorldGfx_CloseRangeChunksInit")
         WorldGfx_CloseRangeChunksInit();
+        PROF_END("ig: WorldGfx_CloseRangeChunksInit")
+        PROF_BEGIN("ig: WorldGfx_Draw")
         WorldGfx_Draw(1);
+        PROF_END("ig: WorldGfx_Draw")
         Demo_DemoRandSeedAdvance();
     }
 }

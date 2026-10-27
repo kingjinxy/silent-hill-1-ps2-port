@@ -17,6 +17,7 @@
 #include "screens/stream/stream.h"
 #ifdef SH_PORT
 #include "port/demo_menu.h"
+#include "port/demo_rec.h"
 #endif
 
 #define MAIN_MENU_FOG_COUNT 21
@@ -47,7 +48,11 @@ s8* D_800BCDE0;
 
 void GameState_MainMenu_Update(void) // 0x8003AB28
 {
+#ifdef SH_PORT
+    #define MAIN_MENU_GAME_STATE_COUNT 6
+#else
     #define MAIN_MENU_GAME_STATE_COUNT 5
+#endif
 
     s32 NEXT_GAME_STATES[MAIN_MENU_GAME_STATE_COUNT] =
     {
@@ -56,7 +61,8 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
         GameState_MovieOpening,
 #ifdef SH_PORT
         GameState_MainLoadScreen, // Demo: straight into the cutscene's map.
-        GameState_OptionScreen
+        GameState_OptionScreen,
+        GameState_OptionScreen    // Replay: the options screen's REPLAY page (options.c).
 #else
         GameState_OptionScreen,
         GameState_MovieIntro
@@ -179,7 +185,7 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
             }
 
 #ifdef SH_PORT
-            g_MainMenu_VisibleEntryFlags |= 1 << MainMenuEntry_Demo;
+            g_MainMenu_VisibleEntryFlags |= (1 << MainMenuEntry_Demo) | (1 << MainMenuEntry_Replay);
 #endif
 
             // Memory card present and savegames exist.
@@ -294,10 +300,18 @@ void GameState_MainMenu_Update(void) // 0x8003AB28
                         break;
 
                     case MainMenuEntry_Option:
+#ifdef SH_PORT
+                        g_PortReplayMenu = false;
+#endif
                         GameFs_OptionBinLoad();
                         break;
 
 #ifdef SH_PORT
+                    case MainMenuEntry_Replay:
+                        g_PortReplayMenu = true;
+                        GameFs_OptionBinLoad();
+                        break;
+
                     case MainMenuEntry_Demo:
                         ScreenFade_Reset();
                         g_MainMenuState = MainMenuState_DemoList;
@@ -544,7 +558,11 @@ void func_8003B560(void) {} // 0x8003B560
 MATCH_STATIC void MainMenu_MainTextDraw(void) // 0x8003B568
 {
     #define COLUMN_POS_X 158
+#ifdef SH_PORT
+    #define COLUMN_POS_Y 164 // Port: one entry more (Replay), the last one where Option was.
+#else
     #define COLUMN_POS_Y 184
+#endif
     #define STR_OFFSET_Y 20
 
 #ifdef SH_PORT
@@ -553,9 +571,10 @@ MATCH_STATIC void MainMenu_MainTextDraw(void) // 0x8003B568
         "CONTINUE",
         "START",
         "DEMO",
-        "OPTION"
+        "OPTION",
+        "REPLAY"
     };
-    static const u8 STR_OFFSETS_X[] = { 29, 50, 32, 29, 39 };
+    static const u8 STR_OFFSETS_X[] = { 29, 50, 32, 29, 39, 39 };
 #else
     static const char* MAIN_MENU_ENTRY_STRINGS[] = {
         "LOAD",

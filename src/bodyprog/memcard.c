@@ -7,6 +7,9 @@
 
 #include "main/fsqueue.h"
 #include "bodyprog/memcard.h"
+#ifdef SH_PORT
+#include "port/demo_menu.h"
+#endif
 
 #ifdef SH_PORT
 // Port: the PS1 BIOS file functions on "buXY:" paths (src/port/psx_card.c). The plain names belong to
@@ -845,6 +848,15 @@ MATCH_STATIC void MemCard_Process_Load(s_MemCard_GameProcess* statusPtr)
             if (statusPtr->processId == MemCardGameProcessId_Load_Game)
             {
                 memcpy(&g_GameWorkConst->config, &g_MemCardSaveWork.optionsConfig.config, sizeof(s_OptionsConfig));
+#ifdef SH_PORT
+                // Port: Debug Options set on the title before loading replace the save's (saved with it next time).
+                if (g_PortDebugPending >= 0)
+                {
+                    g_GameWorkConst->config.unused_26 = (g_GameWorkConst->config.unused_26 & ~7) | g_PortDebugPending;
+                    printf("port: Debug Options from the title replace the save's: rendering bits %d\n", g_PortDebugPending);
+                    g_PortDebugPending = -1;
+                }
+#endif
             }
             else
             {
