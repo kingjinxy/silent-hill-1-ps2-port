@@ -1531,3 +1531,12 @@ which the pre-move build also logs). `gte_test`: 0 of 2720 differ (seeds 0 and 3
 
 Deferred: renaming `SH_PORT_*`/`SH1_*` switches and `sh1agent`/`sh1spu` to HAL names; moving the generic tools;
 a general disc map in libcd_ps2.c (now two named files, as SH1's disc), decided once the MGS disc layout is known.
+
+## HAL: PS1 threads and real critical sections (2026-10-27)
+
+For the MGS port the HAL gained PS1 BIOS threads (`../psx-to-ps2-HAL/src/ps2/thread_ps2.c`; details in the HAL's
+`docs/Walkthrough.md`). For SH1 this means `EnterCriticalSection`/`ExitCriticalSection` are no longer link stubs:
+they disable/enable EE interrupts (used around the sound timer setup in `smf_main.c` and the card events in
+`memcard.c`). Checked: 150 s in PCSX2 from boot, the same status lines and TLB-miss lines as the build before.
+The link has 13 HAL stubs now (was 15). SH1 opens no threads, so the thread switch hook in the vertical blank
+handler returns at once.
