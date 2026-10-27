@@ -1549,3 +1549,12 @@ libgte/libgpu functions. SH1's link has 9 HAL stubs (was 13: its libpress ones a
 through `Port_Movie*`, so its own libpress calls (`stream.c`) aren't reached. 150 s in PCSX2 as before.
 All 12860 frames of SH1's movies decode identically through the new MDEC-input path (`tools/mdec_test` in the
 HAL).
+
+## HAL: pad changes for MGS (2026-10-27)
+
+The HAL's pad layer gained MGS's `PadInitDirect`/`PadStartCom`/`PadStopCom` and a polling thread
+(`HAL_GAME_PAD_THREAD`, unset for SH1: VSync still polls; details in the HAL's `docs/Walkthrough.md`). One change
+reaches SH1: `PadGetState` (`src/ps2/libpad_psx.c`, called by libkpad) now returns the PS1's values. A pad
+without DualShock functions (PS2 FINDCTP1) gives 2 (`PadStateFindCTP1`, was 6) and a command in progress
+(EXECCMD) gives 5 (was 2). libkpad's handlers were written for these values. Checked: links (9 stubs); 150 s in
+PCSX2 through the attract demos, pad stable, no TLB misses. Not yet checked on hardware or with a digital pad.
