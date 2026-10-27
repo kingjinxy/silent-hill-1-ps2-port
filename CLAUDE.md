@@ -13,11 +13,15 @@ the PlayStation 2. The upstream decompilation is human-written; port work happen
 | Console play recording and replay | `replays.md` |
 | Performance ideas, 720p | `PS2 Optimizations.md`, `docs/720p.md` |
 | Past agent sessions | `Claude Conversation.md` (archive, see below) |
-| Port code (HAL, GTE, GPU→GS, recorder, profiler) | `src/port/`, `src/port/ps2/`, `include/port/` |
-| IOP agent module (network control, log) | `src/port/iop/sh1agent/` |
+| PSY-Q compatibility layer (HAL: libgpu/GS, GTE, libcd, libspu, card, profiler, IOP modules) | `../psx-to-ps2-HAL` (sibling repo, shared with the MGS port; `$SH1_HAL` overrides) |
+| SH1's side of the HAL (hooks, settings, recorder, demo menu, overlays) | `src/port/hal_game.c`, `include/hal_game_config.h`, `src/port/`, `include/port/` |
 | Port tools | `tools/port/` |
 
 Port-specific changes to game code sit under `#ifdef SH_PORT` so the matching PS1 build stays unchanged.
+
+**The HAL is in its own repository** (`../psx-to-ps2-HAL`, since 2026-10-27): the build needs it checked out next
+to this one. It is shared with the MGS port, so keep SH1 specifics out of it: use a `HalGame_*` hook
+(`hal_game.c`) or a setting in `include/hal_game_config.h`. HAL changes are committed in that repository.
 
 **Before planning any console debugging technique, search `Running Walkthrough.md` and `Planning Doc.md` for what
 has already been tried on hardware.**
@@ -53,7 +57,7 @@ python3 tools/port/ps2_ctl.py deploy
 - If Neutrino shows a black screen and drops to OSDSYS, the UDPFS server is stale:
   `./build-and-deploy --restart --no-build`.
 - EE hardware data breakpoints never fire under Neutrino. Use software checks from port code (e.g.
-  `SH1_SENTINEL` in `gte.c`).
+  `SH1_SENTINEL`, `src/port/sentinel_gte.c`).
 - `ps2_ctl.py where` is useless: it always reports the kernel EPC `0x81fe0`.
 
 ## Emulators

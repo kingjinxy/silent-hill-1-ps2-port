@@ -28,6 +28,12 @@ Ground rules:
 - PSY-Q libraries are linked as prebuilt `.o` files from `lib/`.
 - `gte_*` macros (COP2 inline asm / DMPSX opcodes) are used in 32 source files.
 
+## The HAL is shared (2026-10-27)
+
+The PSY-Q compatibility layer moved to `../psx-to-ps2-HAL` for the MGS port; see `Running Walkthrough.md`
+("The HAL moves to its own repository") and `../psx-to-ps2-HAL/docs/Split Plan.md`. Paths below that name
+`src/port/...` for HAL files refer to their old location.
+
 ## Steps
 
 ### Step 1 — Fixed addresses / shiftability  *(done)*

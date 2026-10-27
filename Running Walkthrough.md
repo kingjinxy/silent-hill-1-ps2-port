@@ -1488,3 +1488,46 @@ Results (demo 1 step 100, the Infirmary flare, the walk test):
 - **2x 16-bit**: against the PS1 reference (software, 1x) brightness 0.995-0.997, 80-92% of channels exact. Its dithering is DuckStation's "Scaled" (the GS applies the 4x4 matrix per 2x pixel): against DuckStation Scaled the bias is flat over the dither cells (-0.27 levels, the gouraud rounding on the fog), against Unscaled it follows the matrix. "Unscaled" (2x2-pixel cells) isn't possible with the GS dither unit (its matrix repeats every 4 pixels).
 - **2x 32-bit**: brighter than the PS1 reference (blacks lifted, +0.6 to +1 level) because faint additive layers keep their fractions in true colour; against DuckStation's TrueColor 2x it matches (brightness 0.98-1.0, 85-90% exact).
 - DuckStation's OpenGL and software runs can draw slightly different frames at the same point after a save load (timing); demo frames are identical.
+
+## The HAL moves to its own repository (2026-10-27)
+
+The PSY-Q compatibility layer now lives in `../psx-to-ps2-HAL` (a sibling repository, to become a GitHub
+repository later), so the Metal Gear Solid port (`../mgs1_ps2`) can share it. Work was planned and done from the
+MGS port's sessions; the file-by-file sort and the hook list are in `../psx-to-ps2-HAL/docs/Split Plan.md`.
+Branch: `hal-split` (from `upstream-sync` at 4179e9d1c).
+
+What moved (copied unchanged into the HAL's first commit, then edited there):
+- `src/port/*.c` → HAL `src/`: libapi, libgpu (+ packets), libgs, libgte (+ tables), libspu, gte.c, psx_card.c,
+  psx_mem.c, port_main.c, prof.c, prof_fn.c, recomp_rt.c.
+- `src/port/ps2/*.c` → HAL `src/ps2/`: all but capture, rec, demo_sweep, warp and sentinel (SH1's tools).
+- `include/port/` → HAL `include/port/`: gte*.h, pad.h, prof.h, recomp.h, spr.h. The `port/` prefix is kept,
+  so no game `#include` changed.
+- `src/port/iop/sh1agent`, `sh1spu` → HAL `iop/` (names kept for now).
+
+What stayed in SH1: demo menu/recorder, overlay.c, port_data.c, libkmath (SH1's own library), the five
+SH1 tool files in `src/port/ps2/`, and all of `tools/port/` (most tools name SH1's ELF, disc files or game
+state; moving them needs its own pass).
+
+The SH1 parts of the moved files are now hooks or settings:
+- `src/port/hal_game.c` (new): `HalGame_OnPacket`/`OnDrawOTag`/`Status`/`OnPutDispEnv`/`DisplayMode`/`Init`,
+  the frame capture, state line, load watchdog, screen-read context and Debug Options code that was in
+  libgpu_port.c, plus the overlay snapshot that port_main.c called. The HAL has weak no-op defaults
+  (`src/hal_weak.c`), also for the agent's demo/replay commands and `Port_WarpButtons`.
+- `include/hal_game_config.h` (new): banner name, RAM size (crash_ps2.c), disc files and SILENT.'s PS1 sector
+  (libcd_ps2.c), memory card names and the save icon (memcard_ps2.c, psx_card.c).
+- `include/port/prof_game.h` (new): SH1's `LP_*` light-profiling probes; prof.h/gpu_gs.c take both lists as
+  X-macros (the liteprof report now prints the HAL probes first).
+- `src/port/sentinel_gte.c` (new): the Floatstinger check that gte.c ran (`SH1_SENTINEL=1`).
+
+Build changes: `port_link.py` and `ee_compile_check.sh` find the HAL at `$SH1_HAL` (default
+`../psx-to-ps2-HAL`): its include directory, `src/*.c`, `src/ps2/*.c`, and the IRX Makefiles, which now take
+`IOP_OBJS_DIR` from port_link.py. `gte_test`, `lib_test` and `xa_test` point at the HAL's files.
+
+Checks: compiles (274/274), links with the same 15 HAL stubs; same text size, every symbol the same size except
+the edited functions and the new hooks (data/bss shrank by alignment padding from the new object order).
+PCSX2, 90 s from boot, before and after: identical console logs apart from code addresses and timing counters
+(same game states, packet and word counts, the same TLB-miss lines on scratchpad addresses during start-up,
+which the pre-move build also logs). `gte_test`: 0 of 2720 differ (seeds 0 and 3).
+
+Deferred: renaming `SH_PORT_*`/`SH1_*` switches and `sh1agent`/`sh1spu` to HAL names; moving the generic tools;
+a general disc map in libcd_ps2.c (now two named files, as SH1's disc), decided once the MGS disc layout is known.

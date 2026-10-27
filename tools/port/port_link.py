@@ -30,6 +30,8 @@ GSKIT = os.environ.get("GSKIT", os.path.join(PS2DEV, "gsKit"))
 EE = os.path.join(PS2DEV, "ee", "bin", "mips64r5900el-ps2-elf-")
 CC, LD, OBJCOPY, NM = EE + "gcc", EE + "ld", EE + "objcopy", EE + "nm"
 OUT = "build/port"
+# The PSY-Q compatibility layer, shared with other ports (a sibling repository).
+HAL = os.path.normpath(os.environ.get("SH1_HAL", "../psx-to-ps2-HAL"))
 EE_C_OBJS = "build/ee_check"
 # -mno-check-zero-division: as on the PS1, an integer division by zero must not trap (the game
 # relies on it, e.g. sound falloff 0 in map4_s02's demo); MIPS divides return a fixed quotient.
@@ -37,7 +39,7 @@ EE_C_OBJS = "build/ee_check"
 # words); the PS1's GCC 2.8 never assumed otherwise.
 # -O3 (SH1_PORT_OPT overrides): the port's own code (GTE, GS translation) measured 5-7% of a frame
 # faster than -O2 in the opening cutscene; the game's code gains nothing from it and stays at -O2.
-PORT_CFLAGS = [os.environ.get("SH1_PORT_OPT", "-O3"), "-G0", "-fno-toplevel-reorder", "-mno-check-zero-division", "-fno-strict-aliasing", "-std=gnu89", "-nostdinc", "-Wa,-Iinclude", "-Iinclude", "-Iinclude/psyq", "-Iinclude/decomp",
+PORT_CFLAGS = [os.environ.get("SH1_PORT_OPT", "-O3"), "-G0", "-fno-toplevel-reorder", "-mno-check-zero-division", "-fno-strict-aliasing", "-std=gnu89", "-nostdinc", "-Wa,-Iinclude", "-Iinclude", "-I" + HAL + "/include", "-Iinclude/psyq", "-Iinclude/decomp",
                "-D_LANGUAGE_C", "-DVER_USA", "-DSH_PORT", "-DNON_MATCHING"]
 # Hot data in the EE's scratchpad (include/port/spr.h); SH1_NO_SPR=1 keeps it in RAM (for comparisons).
 SPR_CFLAGS = [] if os.environ.get("SH1_NO_SPR") else ["-DSH_PORT_SPR"]
@@ -256,7 +258,7 @@ def main():
     dump += ["-DSH_PORT_SENTINEL"] if os.environ.get("SH1_SENTINEL") else []
     # The Demo menu's cutscene list (src/port/demo_menu.c), found in the decomp's map code.
     run([sys.executable, "tools/port/cutscene_list.py", "--c", os.path.join(OUT, "demo_cutscenes.c")])
-    for src in sorted(glob.glob("src/port/*.c")) + [os.path.join(OUT, "demo_cutscenes.c")]:
+    for src in sorted(glob.glob("src/port/*.c") + glob.glob(HAL + "/src/*.c")) + [os.path.join(OUT, "demo_cutscenes.c")]:
         obj = os.path.join(OUT, "port", os.path.basename(src) + ".o")
         os.makedirs(os.path.dirname(obj), exist_ok=True)
         # XA test (src/port/libspu_port.c): only the XA input is heard, the game's voices are muted: SH1_XA_SOLO=1.
@@ -271,11 +273,11 @@ def main():
         run([CC, "-c", *PORT_CFLAGS, *prof, *solo, *bench, src, "-o", obj])
         port_objs.append(obj)
     # PS2-side HAL code (src/port/ps2/): compiled against ps2sdk's headers, not the game's.
-    for src in sorted(glob.glob("src/port/ps2/*.c")):
+    for src in sorted(glob.glob("src/port/ps2/*.c") + glob.glob(HAL + "/src/ps2/*.c")):
         obj = os.path.join(OUT, "port", "ps2_" + os.path.basename(src) + ".o")
         run([CC, "-c", os.environ.get("SH1_PORT_OPT", "-O3"), "-G0", "-D_EE", "-Wall", *prof, *dump, *SPR_CFLAGS, "-I" + os.path.join(PS2SDK, "ee", "include"),
              "-I" + os.path.join(PS2SDK, "common", "include"), "-I" + os.path.join(GSKIT, "include"),
-             "-iquote", "include", src, "-o", obj])
+             "-iquote", "include", "-iquote", HAL + "/include", src, "-o", obj])
         port_objs.append(obj)
     # IOP module embedded in the ELF: sh1agent.irx (remote control on hardware, src/port/ps2/agent_ps2.c).
     # ps2dev's IOP compiler first: another mipsel-none-elf-gcc on PATH (PSn00bSDK's) assembles with relocations
@@ -284,7 +286,8 @@ def main():
                + os.path.join(PS2SDK, "bin") + os.pathsep + os.environ["PATH"])
     # sh1spu.irx (sound on SPU2 core 0, src/port/ps2/spu_ps2.c) with ps2sdk's freesd.irx (libsd).
     for name in ("sh1agent", "sh1spu"):
-        subprocess.run(["make", "-s", "-C", "src/port/iop/" + name], env=env, check=True)
+        subprocess.run(["make", "-s", "-C", os.path.join(HAL, "iop", name),
+                        "IOP_OBJS_DIR=" + os.path.abspath(os.path.join(OUT, "iop", name)) + "/"], env=env, check=True)
     irxs = [os.path.join(OUT, "iop", n, n + ".irx") for n in ("sh1agent", "sh1spu")]
     os.makedirs(os.path.join(OUT, "iop", "freesd"), exist_ok=True)
     shutil.copy(os.path.join(PS2SDK, "iop", "irx", "freesd.irx"), os.path.join(OUT, "iop", "freesd", "freesd.irx"))
@@ -298,7 +301,7 @@ def main():
         run(["tools/port/recomp_all.sh"])
     recomp_objs = []
     for src in sorted(glob.glob(OUT + "/recomp/*.c")):
-        run([CC, "-c", "-O2", "-G0", "-std=gnu89", "-fno-builtin", "-fno-strict-aliasing", "-nostdinc", "-Iinclude", *prof, *dump, src,
+        run([CC, "-c", "-O2", "-G0", "-std=gnu89", "-fno-builtin", "-fno-strict-aliasing", "-nostdinc", "-Iinclude", "-I" + HAL + "/include", *prof, *dump, src,
              "-o", src[:-2] + ".o"])
         run([CC, "-c", "-G0", src[:-2] + ".data.s", "-o", src[:-2] + ".data.o"])
         recomp_objs += [src[:-2] + ".o", src[:-2] + ".data.o"]
