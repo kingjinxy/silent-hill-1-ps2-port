@@ -1540,3 +1540,12 @@ they disable/enable EE interrupts (used around the sound timer setup in `smf_mai
 `memcard.c`). Checked: 150 s in PCSX2 from boot, the same status lines and TLB-miss lines as the build before.
 The link has 13 HAL stubs now (was 15). SH1 opens no threads, so the thread switch hook in the vertical blank
 handler returns at once.
+
+## HAL: libpress and more PSY-Q functions for MGS (2026-10-27)
+
+The HAL (`../psx-to-ps2-HAL`, its `docs/Walkthrough.md`) now has libpress (psyz's VLC and this port's
+`strdec.c` reconstruction, extended with `StrDec_Macroblock` for the MDEC's run-level input) and a few more
+libgte/libgpu functions. SH1's link has 9 HAL stubs (was 13: its libpress ones are now real). SH1 plays movies
+through `Port_Movie*`, so its own libpress calls (`stream.c`) aren't reached. 150 s in PCSX2 as before.
+All 12860 frames of SH1's movies decode identically through the new MDEC-input path (`tools/mdec_test` in the
+HAL).
