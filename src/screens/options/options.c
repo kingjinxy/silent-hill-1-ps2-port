@@ -290,7 +290,7 @@ void GameState_Options_Update(void) // 0x801E2D44
                 // REPLAY page: the debug list straight away (the fade-in above shows it).
                 if (g_PortReplayBits < 0)
                 {
-                    g_PortReplayBits = g_GameWork.config.unused_26 & 7;
+                    g_PortReplayBits = g_GameWork.config.unused_26 & 0x1F;
                 }
                 s_PortDebugPage               = 1;
                 s_PortReplay                  = 1;

@@ -240,7 +240,7 @@ void Port_RecContinue(void)
         g_GameWork.savegame  = s_Rec.state.savegame;
         if (s_Override >= 0)
         {
-            g_GameWork.config.unused_26 = (g_GameWork.config.unused_26 & ~7) | s_Override;
+            g_GameWork.config.unused_26 = (g_GameWork.config.unused_26 & ~0x1F) | s_Override;
         }
     }
     g_Demo_RandSeed             = s_Rec.state.randSeed;
@@ -260,8 +260,9 @@ void Port_RecContinue(void)
     }
     else
     {
-        printf("rec: replaying %s (%d steps; Debug Options rendering bits %d%s)\n", s_Name, s_Steps,
-               g_GameWork.config.unused_26 & 7, s_Override >= 0 ? ", from the REPLAY screen" : "");
+        printf("rec: replaying %s (%d steps; Debug Options rendering bits %d, widescreen %s, 2D filter %s%s)\n",
+               s_Name, s_Steps, g_GameWork.config.unused_26 & 7, (g_GameWork.config.unused_26 & 8) ? "on" : "off",
+               (g_GameWork.config.unused_26 & 0x10) ? "bilinear" : "point", s_Override >= 0 ? ", from the REPLAY screen" : "");
     }
 }
 

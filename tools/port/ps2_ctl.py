@@ -172,7 +172,7 @@ def main():
             print("%08x  %s+0x%x" % (pc, syms[i][1], pc - syms[i][0]) if i >= 0 else "%08x" % pc)
         return 0
     if args.command == "options":
-        answer = send(args.ip, "options", payload=struct.pack("<II", int(args.addr or "0", 0) & 7, 0), tries=1,
+        answer = send(args.ip, "options", payload=struct.pack("<II", int(args.addr or "0", 0) & 0x1F, 0), tries=1,
                       timeout=2.0)
         print(answer if answer is not None else "ps2_ctl: no answer from %s" % args.ip)
         sys.exit(0 if answer is not None else 1)
