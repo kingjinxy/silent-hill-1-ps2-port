@@ -146,6 +146,11 @@ EE performance counters (cache misses, stalls) on the console; the scratchpad ch
 - [x] Draw-target tracking: done with the EE copy above (16x16 tiles; `SH1_LITEPROF` readbacks count what's left).
 - [ ] Feedback effects (motion blur, the load screen) keep sampling the GS buffer they read; 15-bit pages outside it are uploaded into the page cache like 4/8-bit pages.
 - [ ] New GS layout: display buffers, page cache, CLUT cache; the freed 1 MB to page cache slots. Target: 2x 32-bit with ≥ 20 slots.
+- [ ] Tabled 2026-10-28, before the new layout: where GS memory goes at 2x/32-bit, which is why only 7 page slots fit (shadow buffer 640x1024x4 = 2.5 MB, 7 slots x 64 KB, CLUT cache 64 KB, PS1 VRAM image 1 MB). The slots are a converted copy, not a duplicate: the GS lays out each pixel format differently, so 4/8-bit indices packed in the 16-bit VRAM image can't be sampled as PSMT4/PSMT8. Three places to win back space:
+  - Shadow buffer rows 0-31 and 480-511 (PS1 rows): never drawn, they hold textures the VRAM image already has. Drop them with a base offset for 2x drawing: ~320 KB, 5 slots.
+  - The VRAM image's frame-buffer area (x 0-319): at 2x a 1x copy of the shadow buffer. Audit first (a few hours, PCSX2 only): list every path in `gpu_gs.c` that touches it at 2x (read-backs and StoreImage scaled down through it, uploads and fills scaled up from it, VRAM copies out of it, 1x drawing whenever the 2x renderer is off: menus, 640-wide screens, some FMV states), count each with temporary `SH1_LITEPROF` counters over Docks, Kaufmann, a menu, inventory, map, a load screen and an FMV, then decide which move to a small scratch area and which share memory with the shadow buffer (idle while drawing is 1x). Up to ~320 KB, 5 slots.
+  - 4-bit pages (32 KB as PSMT4) take a whole 64 KB slot: two per slot. Count misses by depth first (Docks, `SH1_LITEPROF`) to size the gain.
+  - Together: roughly 7 → 17 slots, about 30 if most pages are 4-bit. A GS-to-GS copy that converts a page from the VRAM image (instead of the EE upload) is worth a test too, if the GS converts between those formats.
 - Checks: as step 5, plus `gpu_test.py`'s StoreImage and VRAM copy tests, and the 2x and 32-bit modes' dumps against the build before.
 - Measure: readbacks a frame (target 0 in gameplay), Docks at 2x + 32-bit on the console.
 
@@ -208,3 +213,4 @@ Boots, a cold restart and a warm restart (deploy) into a debug build were tried;
 - 2026-10-28: Kaufmann at 2x/32-bit in PCSX2: ~7 page misses a frame (est. ~2.1 ms on the console). The run hit a TLB Miss in ps2sdk's `_request_end` during a bench frame dump (docs/ToFix.md).
 - 2026-10-28: step 7, EE copy of VRAM feeding the caches: 2x/32-bit read-backs Kaufmann 7.2 → 0.14, Docks 2.2 → 0.27 a frame (PCSX2); output identical.
 - 2026-10-28: step 7's tile marking made cheaper (+205k → +49k k-cycles in Kaufmann's `prim_state`); EE cost now +1-5% in PCSX2, read-back savings console-only.
+- 2026-10-28: console Docks replay and Kaufmann, 4:3 and widescreen (docs/profiles/2026-10-28.md). GS memory use at 2x/32-bit reviewed; the space-saving audit tabled under step 7.
