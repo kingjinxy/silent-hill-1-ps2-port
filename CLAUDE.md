@@ -12,6 +12,7 @@ the PlayStation 2. The upstream decompilation is human-written; port work happen
 | Known open bugs | `docs/ToFix.md` |
 | Console play recording and replay | `replays.md` |
 | Performance ideas, 720p | `PS2 Optimizations.md`, `docs/720p.md` |
+| Profiler reports, one log per day | `docs/profiles/YYYY-MM-DD.md` |
 | Past agent sessions | `Claude Conversation.md` (archive, see below) |
 | PSY-Q compatibility layer (HAL: libgpu/GS, GTE, libcd, libspu, card, profiler, IOP modules) | `../psx-to-ps2-HAL` (sibling repo, shared with the MGS port; `$SH1_HAL` overrides) |
 | SH1's side of the HAL (hooks, settings, recorder, demo menu, overlays) | `src/port/hal_game.c`, `include/hal_game_config.h`, `src/port/`, `include/port/` |
@@ -42,6 +43,9 @@ python3 tools/port/ps2_ctl.py deploy
 - Always run all three build steps. A link-only build silently leaves out game C changes.
 - Profiling switches: `SH1_PROF=1` (stage timers, incl. `ig:` in-game timers), `SH1_LITEPROF=1` (light counters,
   GS cache stats), `SH1_PROF_GTE=1` (per-GTE-command counters; changes timing enough to affect replay sync).
+- **Every performance profile run (console or emulator) goes into `docs/profiles/YYYY-MM-DD.md`**, one file per
+  day, appended to with each run. Separate runs with `---` and a `## Run N: ...` heading, and list where it ran,
+  the build, settings, scene and window, the log lines it came from, then the figures.
 - `SH1_EXTRA_CFLAGS` doesn't reach `src/port/*`; add a dedicated switch in `port_link.py` instead.
 - `port_link.py` puts ps2dev's IOP toolchain first on PATH because PSn00bSDK ships a compiler of the same name.
   If `sh1agent.irx` fails with "R_MIPS_LO16 without R_MIPS_HI16", the wrong compiler is being used.

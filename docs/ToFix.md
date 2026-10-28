@@ -35,6 +35,10 @@ Known issues, tabled for now (collected 2026-10-19, mostly from the console cuts
   - Fix: the table is typed `(s_SubCharacter*)` and called with the Floatstinger (floatstinger.h/.c).
   - Not hardware only after all: PCSX2 logs the same bad load as `TLB Miss, pc=0x169eb8` and carries on (a black screen). The earlier "no fault in PCSX2" runs were checked for `CRASH` lines only. Found by replaying a console recording (src/port/demo_rec.c, `fstinger`: Reception save, map4_s04 door, into the fight); the fixed build replays it with no TLB miss.
   - Same bug elsewhere: none left (2026-10-26). A scan of the ELF for indirect calls whose a0 wasn't set since an earlier call flags this call before the fix and 22 sites after it, all checked: map header fields and state tables whose targets take no arguments, the animation duration call (already fixed, anim.c Anim_DurationGet), and false positives from the scan following address order rather than branches. It checks a0 only; typing the 194 untyped function pointer declarations would let the compiler check every call.
+- **TLB Miss in sifrpc `_request_end` during a bench frame dump (found 2026-10-28, PCSX2, not yet investigated).**
+  - Kaufmann (demo cutscene 4) at 2x/32-bit, `SH1_BENCH=1 SH1_LITEPROF=1`, while `display_ps2.c` wrote `host:vram_3899.ppm`: `pc=0x447850 addr=0x10 [load]`, then stores at 0x18 and 0x10. The game carried on.
+  - `_request_end` (ps2sdk `sifrpc.c:309`) reads `client->hdr.pkt_addr`, which was NULL: a reply for a request already ended, as if two callers used one RPC client at once (the frame dump's host file I/O against another fileio user; HAL threads are real since dfb22660e). On a console this faults in the SIF interrupt handler.
+  - Not seen at 1x in the same cutscene. Seen again 2026-10-28 in the `docks1` replay at 2x/32-bit (`SH1_BENCH=1 SH1_PROF=1`, step ~990, opening `host:frame_5012.ppm`), same PC: it comes with the bench frame dumps, not one scene.
 
 ## Renderer (gpu_gs.c)
 

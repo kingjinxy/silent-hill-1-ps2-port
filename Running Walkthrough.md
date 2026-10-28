@@ -1599,3 +1599,21 @@ stays 320 wide and a TV in 16:9 mode stretches it. Overview in `include/port/wid
   Polygons, including 3D, stay point-sampled. Glyph edges get a faint dark fringe from the transparent
   black texels around them. Tried first offline: nearest 2x, then bilinear was a little sharper but would
   need an offscreen pass.
+
+## Graphics pipeline step 7: an EE copy of VRAM feeds the texture caches (2026-10-28)
+
+- The HAL's GS renderer (`gpu_gs.c`) keeps the PS1 VRAM in EE RAM again (`s_Vram`, 1 MB; removed 2026-10-17
+  when it was only a mirror). This time it is the source of the texture page, CLUT and filtered CLUT caches and
+  of StoreImage, instead of reading the GS back.
+- Where the GS draws, the copy goes stale: each primitive's clip area marks 16x16 tiles (`vram_mark` in
+  `state_other`). CLUT reads and StoreImage bring stale tiles up to date with one read-back
+  (`vram_refresh`); texture pages are built from the copy without it.
+- First try refreshed for pages too: Kaufmann only went 7.2 → 3.4 read-backs a frame. A log of the refreshes
+  showed pages 0-2 (x 0-191, both halves) spanning the frame buffers (0,32)-(319,479); the game's 4/8-bit
+  texels there are in rows 0-31 and 480-511.
+- PCSX2, 2x/32-bit, read-backs a frame: Kaufmann 7.2 → 0.14, Docks (`docks1` to step 1830) 2.2 → 0.27.
+  Output: `gpu_test.py` unchanged (1,461 pixels, as before), attract demo dumps identical at 1x and 2x/32-bit,
+  `docks1` state identical at step 1830.
+- Baseline counts and the plan: Graphics Pipeline Rework.md, steps 6 and 7. A TLB Miss in ps2sdk's sifrpc
+  during a bench frame dump turned up on the way (docs/ToFix.md).
+

@@ -91,11 +91,77 @@ CybilFightStart, k-cycles a frame: point light 1,440 = collect 191 + batch 1,042
 - Tried, not kept: the batch's arithmetic in 32 bits (twice; slower in PCSX2 both times: 1,042 → 1,144-1,225). Each vertex needs ~15 multiplies either way, and PCSX2 seems to charge them heavily; the console may differ.
 - Exactness: check build (`Port_PointLightCheck`: light values, scratch fields and all 64 GTE registers against the original loop) 54,272 meshes in CybilFightStart, 0 mismatches; attract demo dumps identical.
 
+### Order from here (2026-10-28)
+Steps 5-9 follow how Dark Cloud and ICO use the PS2 ([PS2 Decomps Analysis.md](PS2%20Decomps%20Analysis.md)), within one limit: vertex transforms stay on the EE. The game reads the GTE's results back (screen coordinates, OT depth, flags), and VU1's floats wouldn't give the same bits. What moves is the work after the transform: building GS packets and managing GS memory.
+
+1. Step 6 (console baseline) first: every console figure above is an estimate. It decides the order of the next two: if readbacks and GS waits dominate, step 7; if DrawOTag dominates, step 5.
+2. Step 7 (VRAM master in EE RAM).
+3. Step 5 (VU1 packet expansion), starting with `blend_exact` and fog pairs.
+4. Step 8 (mesh bypass), then step 9 (frame-level double buffering).
+
+Not planned, as they change pixels or don't fit a PS1 game: a per-scene GS allocator or textures converted at load (the PS1 game writes VRAM at any time, so the LRU cache stays), Z buffers, mipmaps, float transforms, threads for speed (one EE core; steps 1-2 already hide the waits).
+
 ### 5. VU1 packet expansion
-Compact primitive records expanded into GS packets by a VU1 microprogram (integer moves only, so exact): fog pairs, filtered two-pass polygons, sprites.
+The EE writes a compact record per primitive; a VU1 microprogram expands it into GS packets and sends them over PATH1. Integer moves only, so exact. The "emit" stage (~850 cycles a polygon in Kaufmann, the largest of parse/state/emit) mostly leaves the EE; VU1 is idle today.
+- [ ] Record format: vertices (screen XY, Z for the OT order only), colours, UVs, page cache slot / CLUT row, blend mode, kind. Measure its size against today's GS packets.
+- [ ] VU1 setup: microprogram upload at boot, double-buffered VU1 data memory (XTOP), records sent by VIF1 DMA, PATH1 output; PATH3 (uploads) ordering against PATH1 kept with the current GS commands' order.
+- [ ] First kind: `blend_exact` (three draws a polygon; 313k cycles a frame in Kaufmann).
+- [ ] Then fog pairs, filtered two-pass polygons, sprites and particles (most of map4_s02's primitives).
+- [ ] Fallback: any kind not handled stays on the EE path, in order with the VU1 ones.
+- Checks: `gpu_test.py` identical, the 7 DuckStation captures replayed (`compare_frames.py --replay`) byte-identical, attract demo 0 dumps identical; a check build that builds each packet both ways and compares them.
+- Measure: light counters for DrawOTag and emit (PCSX2), then the console.
 
 ### 6. Hardware profile of the game logic
 EE performance counters (cache misses, stalls) on the console; the scratchpad change from 2026-10-22; compiler flags (`-G0`).
+- [ ] Console baseline before steps 5 and 7-9 (the Floatstinger crash is fixed, 2026-10-26): map4_s02, map4_s03, Docks at 2x + 32-bit, Kaufmann; `SH1_PROF=1` stage timers and `SH1_LITEPROF=1` (readbacks a frame, GS waits). Replace the console estimates above with the figures. Docks figures come from the `docks1` replay, counted only up to its divergence (NPC state first differs at step 1844, replays.md); the steps after that are ignored until the file-timing fix is confirmed.
+  - PCSX2 counts, 2026-10-28 (`SH1_LITEPROF=1 SH1_BENCH=1`, means of 30-frame reports; counts match the console, timings don't). Console times estimated at ~0.3 ms a page miss (Docks: ~1.6 ms for ~5, console, replays.md):
+
+    | Scene | Mode | Prims | Uploads | Readbacks | Page misses | StoreImage | Est. console wait |
+    |---|---|---|---|---|---|---|---|
+    | map4_s02 (warp, 34 s) | 1x | 432 | 8.6 | <1 | <1 | 0 | ~0 |
+    | map4_s03 (warp, only 4 s before the demo left the map) | 1x | 172 | 1.3 | <1 | <1 | 0 | ~0 |
+    | Kaufmann (demo cutscene 4) | 1x | 2,114 | 31.7 | 0.01 (max 2) | 0 | 0 | ~0 |
+    | Docks, `docks1` steps to 1830 | 2x/32 | 389 (max 1,481) | 10.2 | 2.2 (max 12) | 1.7 (max 10) | 0.33 | ~0.5 ms mean, ~3 ms worst |
+    | Kaufmann (demo cutscene 4, `capture.txt` `999999 mode=3`) | 2x/32 | 1,966 | 38.6 | 7.2 (max 13) | 7.0 (max 12) | 0 | ~2.1 ms mean, ~3.6 ms worst |
+    | Docks, after 1830 (ignored: diverged) | 2x/32 | 1,155 | 35.5 | 8.4 | 7.4 | 1.0 | — |
+
+    Counts are integer means a frame per report, so "<1" means under 30 in 30 frames. At 1x the read-backs are already near 0: step 7's gain is at 2x/32-bit, where only 7 page slots fit. Kaufmann at 2x/32-bit misses ~7 pages a frame: the scene step 7 helps most. To do: the console run to confirm the per-miss cost (Docks and Kaufmann only for now).
+
+### 7. PS1 VRAM master in EE RAM (uploads only)
+`g_PortVram` becomes the only full copy of the PS1's VRAM; GS memory holds only what the GS draws into or samples (as Dark Cloud's texture manager: EE copy is the master, the GS a cache). Plan details: [docs/720p.md](docs/720p.md).
+- [x] Inventory every GS→EE read (2026-10-28). All go through `download_from` in `gpu_gs.c` (one DMA from the GS, waiting for it to finish; `s_StReadbacks` counts each):
+  - Page cache miss, `page_get`: a 4/8-bit page's 256 rows read back to re-upload them as T4/T8 (`s_StPageMiss`). The biggest one: ~5 a frame in the Docks at 2x/32-bit, ~1.6 ms. Gone with the EE master copy.
+  - CLUT cache miss, `clut_get`: one row of 16 or 256 entries, read in 64-pixel units (`s_StClutMiss`). Gone with the EE copy.
+  - Filtered CLUT source, `filt_raw`: same as above, kept in `s_FiltRaw` (`s_StRbFilt`). Gone with the EE copy.
+  - Game StoreImage (`s_StRbStore`). Per frame: lens flare visibility, `func_8008D850` (water.c), 2 pixels of the frame buffer behind the sun — a true read of drawn pixels, stays. Occasional: `WorldGfx_CharaModelTransparentSet` (a character CLUT), Twinfeeler `func_800D0840` (one CLUT row), paper map, background texture events, FMV, map screen, credits, map6_s02 — texture/CLUT areas are served from the EE copy; any that cover a drawn area keep the GS read.
+  - MoveImage (libgpu_port.c): StoreImage + LoadImage, only on the save/load screen. GS-side `move` (DrawOTag copies) uses BITBLT inside GS memory, no read.
+  - Port only: frame dumps (`display_ps2.c`, `GpuGs_StoreHires`, `GpuGs_MovieReadRow`); debug, not counted.
+  - Per-frame counts: `SH1_LITEPROF=1` already prints readbacks, page/CLUT misses, filtered sources and StoreImage calls a frame (`GpuGs_Stats`). They come from the step 6 baseline; no new counter needed.
+- [x] EE copy of VRAM as the caches' source (2026-10-28, HAL `gpu_gs.c`: `s_Vram`, 1 MB). LoadImage, fills and VRAM copies update it too; each primitive's clip area marks 16x16 tiles stale (`s_VramStale`, at `state_other`). CLUT reads, filtered CLUT sources and StoreImage bring stale tiles up to date with one read-back from the GS first (`vram_refresh`); texture pages are built from the copy as it is (pages 0-2 span the frame buffers, whose texels no 4/8-bit texture samples). The GS VRAM image stays for now.
+  - Read-backs a frame (PCSX2, 2x/32-bit): Kaufmann 7.2 → **0.14**, Docks to step 1830 2.2 → **0.27** (what's left: the lens flare's StoreImage). Page misses unchanged (7.0, 1.7): each still waits for the GS before reusing the staging buffer (`GpuGs_Sync` in `cache_get`), but no longer for a read-back.
+  - Exactness: `gpu_test.py` 1,461 differing pixels before and after (same cases); attract demo dumps 10 of 10 identical at 1x and at 2x/32-bit (640x448); the `docks1` replay's state at step 1830 identical.
+  - EE cost (PCSX2 `SH1_PROF=1`, k-cycles a frame, 2x/32-bit, old → new): Kaufmann DrawOTag 3,721 → 3,750 (+0.8%), `prim_state (other)` 503 → 552; Docks DrawOTag 788 → 830, game state update 956 → 997. The tile marking first cost +205k in Kaufmann; skipping a clip area already marked (`VRAM_MARK`, inline) took most of that back. PCSX2 charges almost nothing for a read-back, so the saving (up to ~7 a frame in Kaufmann, ~0.3 ms each by the earlier console figure) can only show on the console.
+  - Next for page misses: upload from the copy without waiting (a staging buffer per slot, or DMA straight from `s_Vram` rows), then more slots (the GS layout below).
+- [ ] Display buffers only: the two PS1 display areas as GS buffers (PSMCT16 at 1x; the shadow buffer at 2x/32-bit), scanned out with DISPFB as now.
+- [x] Draw-target tracking: done with the EE copy above (16x16 tiles; `SH1_LITEPROF` readbacks count what's left).
+- [ ] Feedback effects (motion blur, the load screen) keep sampling the GS buffer they read; 15-bit pages outside it are uploaded into the page cache like 4/8-bit pages.
+- [ ] New GS layout: display buffers, page cache, CLUT cache; the freed 1 MB to page cache slots. Target: 2x 32-bit with ≥ 20 slots.
+- Checks: as step 5, plus `gpu_test.py`'s StoreImage and VRAM copy tests, and the 2x and 32-bit modes' dumps against the build before.
+- Measure: readbacks a frame (target 0 in gameplay), Docks at 2x + 32-bit on the console.
+
+### 8. Mesh bypass
+World and character meshes write step 5's records directly and leave a marker in the OT (draw order kept), skipping PS1 GP0 packet building and DrawOTag's decode (as Dark Cloud's per-object header and prebuilt block). Kaufmann: parse ~600k + PS1 packet building ~340k cycles a frame; map4_s02 barely uses meshes.
+- [ ] OT marker format, and DrawOTag handling it in order with ordinary packets.
+- [ ] World mesh path, then character meshes.
+- [ ] Anything else the game does with the PS1 packets (reads, patches after building) found first; such meshes keep the old path.
+- Checks: as step 5; the check build also builds the PS1 packets and compares the decoded result.
+
+### 9. Frame-level double buffering
+A frame's records and packets go out as one DMA chain at the end of the frame, so VU1 and the GS draw frame N while the EE runs frame N+1 (Dark Cloud's `MGEndFrame`). Worth little before step 5 (step 1 found DrawOTag leaves only the last packet to the GS); after it, the EE's share of drawing is writing records.
+- [ ] Two frame buffers of records; wait for the previous frame's chain only when reusing its buffer.
+- [ ] DrawSync, StoreImage and the display switch wait for the chain they depend on, as `GpuGs_Sync` does now.
+- [ ] One frame of added latency at most: check against the PS1's (pad to screen) and the replay recorder's sync.
+- Checks: as step 5; replays (replays.md) stay in sync.
 
 ### Found on the way: the filtered CLUTs cost Kaufmann more than map4_s02
 The Kaufmann cutscene (map3_s00) does ~1,400 filtered CLUT lookups a frame. Light counters, k-cycles a frame (PCSX2):
@@ -127,6 +193,7 @@ Idea (2026-10-23): record a real play session on the console and replay it in PC
 Boots, a cold restart and a warm restart (deploy) into a debug build were tried; the session went to the Floatstinger crash (docs/ToFix.md), so no frame-rate measurements yet. The warm restart from a kept crash state hung (the known stall), a cold boot ran normally. Still to do: map4_s02/s03, map6_s00 door 7, and the cutscenes.
 
 ## Log
+
 - 2026-10-23: plan written. Step 1 done (asynchronous GIF sends), console test pending.
 - 2026-10-23: step 2 done (small uploads inline in the packet stream), console test pending.
 - 2026-10-23: filtered CLUT caches enlarged (Kaufmann readbacks 16 → 0 a frame). Kaufmann dumps shown to depend on build speed.
@@ -135,3 +202,9 @@ Boots, a cold restart and a warm restart (deploy) into a debug build were tried;
 - 2026-10-23: step 4: MMI doesn't fit; 32-bit transform batch instead (−9% of the batch).
 - 2026-10-23: point light in one pass (−20% in CybilFightStart).
 - 2026-10-23: map6_s00's grid effect batched (−55% of the effect).
+- 2026-10-28: steps 5-9 as tasks, after comparing GS memory and pipelines with Dark Cloud and ICO: VU1 packet expansion, console baseline, VRAM master in EE RAM, mesh bypass, frame-level double buffering.
+- 2026-10-28: step 7's read inventory done (above). Floatstinger blocker removed from step 6; Docks measurements count `docks1` only up to step ~1840.
+- 2026-10-28: PCSX2 baseline counts for step 6 (table there): read-backs near 0 at 1x; Docks at 2x/32 ~1.7 page misses a frame up to the replay's divergence (est. ~0.5 ms, ~3 ms worst).
+- 2026-10-28: Kaufmann at 2x/32-bit in PCSX2: ~7 page misses a frame (est. ~2.1 ms on the console). The run hit a TLB Miss in ps2sdk's `_request_end` during a bench frame dump (docs/ToFix.md).
+- 2026-10-28: step 7, EE copy of VRAM feeding the caches: 2x/32-bit read-backs Kaufmann 7.2 → 0.14, Docks 2.2 → 0.27 a frame (PCSX2); output identical.
+- 2026-10-28: step 7's tile marking made cheaper (+205k → +49k k-cycles in Kaufmann's `prim_state`); EE cost now +1-5% in PCSX2, read-back savings console-only.
