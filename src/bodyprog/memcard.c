@@ -852,8 +852,8 @@ MATCH_STATIC void MemCard_Process_Load(s_MemCard_GameProcess* statusPtr)
                 // Port: Debug Options set on the title before loading replace the save's (saved with it next time).
                 if (g_PortDebugPending >= 0)
                 {
-                    g_GameWorkConst->config.unused_26 = (g_GameWorkConst->config.unused_26 & ~7) | g_PortDebugPending;
-                    printf("port: Debug Options from the title replace the save's: rendering bits %d\n", g_PortDebugPending);
+                    g_GameWorkConst->config.unused_26 = (g_GameWorkConst->config.unused_26 & ~0x1F) | g_PortDebugPending;
+                    printf("port: Debug Options from the title replace the save's: bits %d\n", g_PortDebugPending);
                     g_PortDebugPending = -1;
                 }
 #endif

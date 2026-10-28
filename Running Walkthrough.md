@@ -1558,3 +1558,44 @@ reaches SH1: `PadGetState` (`src/ps2/libpad_psx.c`, called by libkpad) now retur
 without DualShock functions (PS2 FINDCTP1) gives 2 (`PadStateFindCTP1`, was 6) and a command in progress
 (EXECCMD) gives 5 (was 2). libkpad's handlers were written for these values. Checked: links (9 stubs); 150 s in
 PCSX2 through the attract demos, pad stable, no TLB misses. Not yet checked on hardware or with a digital pad.
+
+## Widescreen, anamorphic 16:9 (2026-10-28)
+
+Debug Options "Widescreen" (`config.unused_26` bit 3; `SH1_WIDESCREEN=1` forces it for test builds). The picture
+stays 320 wide and a TV in 16:9 mode stretches it. Overview in `include/port/widescreen.h`.
+- **3D, hor+:** `vbSetWorldScreenMatrix` (vw_calc.c) scales the view matrix's X row by 3/4. All culling found
+  (`Vw_AabbVisibleInScreenCheck`, `Vw_AabbVisibleInFrustumCheck`, `WorldMap_SubcellVisibleCheck`, the mesh
+  renderer's screen clamps) tests projected screen X through this matrix, so it widens with no change.
+  `vcWork.scr_half_ang_wx` (camera framing only) is left at 4:3, so the camera behaves as before.
+- **2D:** HAL hooks. `HalGame_OnOtTag` (called for each empty OT entry) and `GpuGs_SetXScale` squeeze vertex X
+  around the drawing offset; the clip area is squeezed too. Per game state (hal_game.c):
+  - gameplay: the 2D layers (`g_OtTags0`) are squeezed, except slot 4 (cutscene borders) and slot 5 (fades);
+  - black side bars are cleared at each DrawOTag in the whole-frame states, and the clip area is squeezed
+    too, so what was drawn just off the 4:3 screen stays hidden (the title showed a white column);
+  - title, logos, load screens, the inventory and the paper map: the whole frame is squeezed (the
+    projection squeeze is off there, or the inventory's 3D items were squeezed twice);
+  - other menus (options, save/load): unchanged, stretched by the TV;
+  - FMVs: pillarboxed. `GpuGs_MovieShow` resamples each row linearly to 3/4 width on the EE, in 64 KB
+    bands, and centres it (`GpuGs_SetMovieXScale`). Movie frame dumps are now read back from the GS
+    buffer being shown, not taken from the decoded frame;
+  - full-screen pictures (`background_draw.c`, e.g. item inspection images) in gameplay: they share the
+    fog backdrop's OT entry, so they are bracketed by two empty marker packets (`PORT_PICTURE_START`/
+    `_END`) that `HalGame_OnOtTag` recognises. Markers are only linked in widescreen gameplay: at boot
+    the function runs with no packet memory (and draws nothing).
+- **Cutscenes, 14:9:** while the borders show, the projection distance is multiplied by up to 7/6
+  (vc_main.c, as the border shade goes from 0 to 1). The full 224 lines then show what the 192 lines between
+  the original bars showed, and the bars become 20-pixel side bars (cutscene_border.c). This applies to fade
+  types 2 and 3.
+- The title's Debug Options carry into the next loaded save with all five bits now (memcard.c, was 3).
+- Checked in PCSX2: the attract demo, the Infirmary save (pause text, map, inventory), the map2_s01 church
+  cutscene, map6_s02 "That light!?", the title and the intro FMV. Not checked on hardware yet.
+- Frame dumps (`input.txt dump`) during cutscene sweeps sometimes cause TLB misses: in sifrpc `_request_end`
+  (widescreen build, map6_s02), and once at pc 0x82000/0x8001044 (widescreen off, map2_s01, 1 of 4 runs). No
+  run without dumps had them. This matches the dump RPC problem noted under the 2x work.
+- Squeezed text at 1x loses columns: a 12-texel glyph gets 9 pixels with point sampling. At 2x resolution
+  it gets 18 and keeps them all (compared on "PAUSED").
+- Debug Options "2D Filter" (bit 4, Nearest/Bilinear): squeezed textured sprites (text, the inventory's
+  portrait, the title's tiles) can be drawn with bilinear filtering (`rectangle` in gpu_gs.c: TEX1 linear around the sprite), so 1x keeps every glyph stroke.
+  Polygons, including 3D, stay point-sampled. Glyph edges get a faint dark fringe from the transparent
+  black texels around them. Tried first offline: nearest 2x, then bilinear was a little sharper but would
+  need an offscreen pass.

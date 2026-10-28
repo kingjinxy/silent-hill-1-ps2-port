@@ -9,6 +9,9 @@
 #include "bodyprog/player.h"
 #include "bodyprog/view/vc_main.h"
 #include "bodyprog/view/vw_system.h"
+#ifdef SH_PORT
+#include "port/widescreen.h"
+#endif
 
 #define MIN_IN_ROAD_DIST Q12(1.0f) // `vcGetMinInRoadDist` in SH2, hardcoded to `Q12(1.0f)` in SH1.
 
@@ -305,6 +308,15 @@ s32 vcExecCamera(void) // 0x80080FBC
     }
 
     vcSetAllNpcDeadTimer();
+#ifdef SH_PORT
+    // Port: widescreen shows the cutscene view on the full height instead of between the borders
+    // (192 of 224 lines): zoomed by up to 7/6 as the borders come in.
+    if (g_PortWidescreen)
+    {
+        SetGeomScreen(vcWork.geom_screen_dist + (vcWork.geom_screen_dist * Port_CutsceneBorderShade()) / Q12(6.0f));
+    }
+    else
+#endif
     SetGeomScreen(vcWork.geom_screen_dist);
     vcPreSetDataInVC_WORK(&vcWork, vcWork.vc_road_ary_list);
 

@@ -12,6 +12,7 @@
 
 #ifdef SH_PORT
 #include "port/gte.h"
+#include "port/widescreen.h"
 #endif
 
 // Reference view transform?
@@ -467,6 +468,17 @@ void vbSetWorldScreenMatrix(GsCOORDINATE2* coord) // 0x800497E4
     Vw_CoordHierarchyMatrixCompute(coord, &D_800C3868);
     TransposeMatrix(&D_800C3868, &work);
     MulMatrix0(&work, &GsIDMATRIX2, &VbWvsMatrix);
+
+#ifdef SH_PORT
+    // Port: widescreen (hor+), screen X squeezed by 3/4 for an anamorphic 16:9 picture. The culling
+    // checks project through this matrix too, so they widen with it.
+    if (g_PortWidescreen)
+    {
+        VbWvsMatrix.m[0][0] = (VbWvsMatrix.m[0][0] * 3) >> 2;
+        VbWvsMatrix.m[0][1] = (VbWvsMatrix.m[0][1] * 3) >> 2;
+        VbWvsMatrix.m[0][2] = (VbWvsMatrix.m[0][2] * 3) >> 2;
+    }
+#endif
 
     VbWvsMatrix.t[2] = Q8(0.0f);
     VbWvsMatrix.t[1] = Q8(0.0f);

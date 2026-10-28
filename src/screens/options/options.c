@@ -66,6 +66,8 @@ static s32 g_ExtraOptionsMenu_BulletMultMax;
  *   Resolution: x1, or the GS renderer's 2x mode (libgpu_port.c, gpu_gs.c HIRES_ADDR); unused_26 bit 0.
  *   Color Depth: 16-bit, or 32-bit drawing (true colour: no 5-bit quantization or dithering); bit 1.
  *   Video Mode: how 2x screens are shown, 480i or 480p (display_ps2.c); bit 2.
+ *   Widescreen: anamorphic 16:9 (include/port/widescreen.h); bit 3.
+ *   2D Filter: widescreen's squeezed 2D sprites (text) point-sampled or bilinear (gpu_gs.c); bit 4.
  * TEMPORARY: Triangle is also one of the default Cancel buttons; on the main options screen it now
  * only opens this page (Circle and Square still cancel). To be replaced by a better way in.
  * The title's REPLAY entry (g_PortReplayMenu) opens the same list as the REPLAY page (s_PortReplay): its
@@ -84,6 +86,8 @@ static const struct
     { "Resolution",  118, ExtraOptionsMenuEntry_BulletMult, 230 }, /* "x1"/"x2", as Bullet_Adjust's */
     { "Color_Depth", 124, ExtraOptionsMenuEntry_ViewCtrl,   210 }, /* "16-bit"/"32-bit", as View_Control's "Normal" */
     { "Video_Mode",  118, ExtraOptionsMenuEntry_ViewCtrl,   214 }, /* "480i"/"480p" */
+    { "Widescreen",  118, ExtraOptionsMenuEntry_ViewCtrl,   214 }, /* "Off"/"16:9" */
+    { "2D_Filter",   118, ExtraOptionsMenuEntry_ViewCtrl,   214 }, /* "Nearest"/"Bilinear" */
 };
 #define PORT_DEBUG_COUNT ((s32)(sizeof(PORT_DEBUG_ENTRIES) / sizeof(PORT_DEBUG_ENTRIES[0])))
 #define PORT_ENTRY_WIDTH(widths, i) (s_PortDebugPage ? PORT_DEBUG_ENTRIES[i].width : (widths)[i])
@@ -123,6 +127,14 @@ static void Port_DebugEntryChange(s32 i)
         case 2: /* Video Mode */
             *bits ^= 4;
             break;
+
+        case 3: /* Widescreen */
+            *bits ^= 8;
+            break;
+
+        case 4: /* 2D Filter */
+            *bits ^= 16;
+            break;
     }
     if (s_PortReplay)
     {
@@ -130,7 +142,7 @@ static void Port_DebugEntryChange(s32 i)
     }
     else if (g_GameWork.gameStatePrev != GameState_InGame)
     {
-        g_PortDebugPending = *bits & 7; /* from the title: replaces the next loaded save's (memcard.c) */
+        g_PortDebugPending = *bits & 0x1F; /* from the title: replaces the next loaded save's (memcard.c) */
     }
 }
 
@@ -147,6 +159,12 @@ static const char* Port_DebugEntryValue(s32 i)
 
         case 2:
             return (*Port_DebugBits() & 4) ? "480p" : "480i";
+
+        case 3:
+            return (*Port_DebugBits() & 8) ? "16:9" : "Off";
+
+        case 4:
+            return (*Port_DebugBits() & 16) ? "Bilinear" : "Nearest";
     }
     return "";
 }

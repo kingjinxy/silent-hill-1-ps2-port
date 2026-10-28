@@ -270,6 +270,8 @@ def main():
         solo += ["-DSH_PORT_SCREENREAD"] if os.environ.get("SH1_SCREENREAD") else []
         # Floatstinger crash: check of its saved pointer from GTE commands and Math_Sin/Cos (gte.c): SH1_SENTINEL=1.
         solo += ["-DSH_PORT_SENTINEL"] if os.environ.get("SH1_SENTINEL") else []
+        # Widescreen always on (src/port/hal_game.c), whatever Debug Options says: SH1_WIDESCREEN=1.
+        solo += ["-DSH_PORT_WIDESCREEN"] if os.environ.get("SH1_WIDESCREEN") else []
         run([CC, "-c", *PORT_CFLAGS, *prof, *solo, *bench, src, "-o", obj])
         port_objs.append(obj)
     # PS2-side HAL code (src/port/ps2/): compiled against ps2sdk's headers, not the game's.

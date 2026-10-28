@@ -4,10 +4,15 @@
 
 #include "common.h"
 #include "game.h"
+
+#include <libgpu.h>
+#include <libgs.h>
+
 #include "port/hal_game.h"
 #include "bodyprog/demo.h"
 #include "main/fsqueue.h"
 #include "bodyprog/screen/screen_data.h"
+#include "port/widescreen.h"
 
 extern int printf(const char* fmt, ...);
 
@@ -67,8 +72,99 @@ void HalGame_OnPacket(const u32* words, s32 count)
     }
 }
 
+/* Widescreen (include/port/widescreen.h): Debug Options bit 3, or SH1_WIDESCREEN=1 builds. */
+int         g_PortWidescreen;
+extern void GpuGs_SetMovieXScale(s32 q12); /* ps2/gpu_gs.c */
+extern void GpuGs_SetXScaleFilter(s32 on);
+static s32  s_WsFull; /* the whole picture is 4:3, squeezed into the middle (black side bars) */
+extern void GpuGs_SetXScale(s32 q12); /* ps2/gpu_gs.c */
+
+#define WS_SQUEEZE Q12(0.75f)
+
+/** Widescreen per game state: 0 off (menus: drawn 4:3 and stretched by the TV), 1 gameplay (3D hor+,
+ * 2D squeezed), 2 a 4:3 picture in the middle (title, load screens, inventory, map). Movies are
+ * pillarboxed whenever widescreen is on. */
+static s32 widescreen_mode(void)
+{
+    s32 on;
+    s32 mode;
+
+#ifdef SH_PORT_WIDESCREEN
+    on = 1;
+#else
+    on = (g_GameWork.config.unused_26 >> 3) & 1;
+#endif
+    GpuGs_SetMovieXScale(on ? WS_SQUEEZE : Q12(1.0f));
+    GpuGs_SetXScaleFilter((g_GameWork.config.unused_26 >> 4) & 1); /* Debug Options: 2D Filter */
+    if (!on)
+    {
+        mode = 0;
+    }
+    else switch (g_GameWork.gameState)
+    {
+        case GameState_InGame:
+        case GameState_MapEvent:
+            mode = 1;
+            break;
+
+        case GameState_AutoLoadSavegame:
+        case GameState_LoadSavegameScreen:
+        case GameState_SaveScreen:
+        case GameState_OptionScreen:
+            mode = 0;
+            break;
+
+        default:
+            mode = 2;
+            break;
+    }
+    g_PortWidescreen = mode == 1;
+    return mode;
+}
+
+/** Widescreen: the X squeeze of each ordering-table layer. In gameplay, the 2D layers
+ * (g_OrderingTable2: g_OtTags0) are squeezed, except the full-screen ones (slot 4: cutscene borders,
+ * 5: screen fades); the 3D table is squeezed by its projection, except full-screen pictures, which
+ * background_draw.c marks (they share the fog backdrop's entry). */
+void HalGame_OnOtTag(const void* tag)
+{
+    u32 a  = (u32)tag;
+    u32 t0 = (u32)&g_OtTags0[0][0];
+    s32 slot;
+
+    if (s_WsFull != 1)
+    {
+        return;
+    }
+    if (a >= t0 && a < t0 + sizeof(g_OtTags0))
+    {
+        slot = ((a - t0) / sizeof(GsOT_TAG)) % 16;
+        GpuGs_SetXScale(slot == 4 || slot == 5 ? Q12(1.0f) : WS_SQUEEZE);
+    }
+    else if (((const u32*)tag)[1] == PORT_PICTURE_START)
+    {
+        GpuGs_SetXScale(WS_SQUEEZE);
+    }
+    else if (((const u32*)tag)[1] == PORT_PICTURE_END)
+    {
+        GpuGs_SetXScale(Q12(1.0f));
+    }
+}
+
 void HalGame_OnDrawOTag(void)
 {
+    s_WsFull = widescreen_mode();
+    GpuGs_SetXScale(s_WsFull == 2 ? WS_SQUEEZE : Q12(1.0f));
+    if (s_WsFull == 2)
+    {
+        /* The 4:3 picture's side bars: the game only draws the middle now, and the sides would keep
+         * whatever VRAM held before. */
+        RECT bar = GsDRAWENV.clip;
+        bar.w    = GsDRAWENV.clip.w / 8;
+        ClearImage(&bar, 0, 0, 0);
+        bar.x = GsDRAWENV.clip.x + GsDRAWENV.clip.w - bar.w;
+        ClearImage(&bar, 0, 0, 0);
+    }
 #ifdef SH_PORT_SCREENREAD
     extern unsigned int g_PortSrContext; /* ps2/gpu_gs.c: the screen-read inventory's context */
     g_PortSrContext = ((u32)g_GameWork.gameState << 16) | (u32)(g_GameWork.gameStateSteps[0] & 0xFFFF);

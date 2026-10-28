@@ -5,6 +5,30 @@
 #include "bodyprog/screen/screen_draw.h"
 #include "bodyprog/screen/background_draw.h"
 #include "bodyprog/math/math.h"
+#ifdef SH_PORT
+#include "port/widescreen.h"
+
+/** Port: an empty packet marking a full-screen picture's start or end in ordering-table entry `ot`
+ * (include/port/widescreen.h). Linked before the picture's primitives for the end (drawn after them),
+ * after them for the start. */
+static void Port_PictureMark(void* ot, u32 magic)
+{
+    u32* mark = (u32*)GsOUT_PACKET_P;
+
+    // Only for widescreen; and at boot this is called before there is packet memory (nothing drawn).
+    if (!g_PortWidescreen || mark == NULL)
+    {
+        return;
+    }
+    mark[0] = 0;
+    mark[1] = magic;
+    addPrim(ot, mark);
+    GsOUT_PACKET_P = (PACKET*)(mark + 2);
+}
+#define PORT_PICTURE_MARK(ot, magic) Port_PictureMark(ot, magic)
+#else
+#define PORT_PICTURE_MARK(ot, magic)
+#endif
 
 // ========================================
 // GLOBAL VARIABLES
@@ -33,6 +57,7 @@ void Screen_BackgroundImgDraw(s_FsImageDesc* image)
     PACKET*   packet;
 
     ot          = (GsOT*)&g_OtTags1[g_ActiveBufferIdx + 1][0];
+    PORT_PICTURE_MARK(ot, PORT_PICTURE_END);
     packet      = GsOUT_PACKET_P;
     baseYOffset = -120 << (g_GameWork.gsScreenHeight >> 8);
     texShift    = image->tPage[0];
@@ -79,6 +104,7 @@ void Screen_BackgroundImgDraw(s_FsImageDesc* image)
     }
 
     GsOUT_PACKET_P              = packet;
+    PORT_PICTURE_MARK(ot, PORT_PICTURE_START);
     g_SysWork.bgmStatusFlags   |= BgmStatusFlag_Pause;
     g_Screen_BackgroundImgGamma = Q8(0.5f);
 }
@@ -94,6 +120,7 @@ void Screen_BackgroundImgTransition(s_FsImageDesc* imageIn, s_FsImageDesc* image
     s_FsImageDesc* image;
     POLY_FT4*      poly;
 
+    PORT_PICTURE_MARK(g_OrderingTable0[g_ActiveBufferIdx].org, PORT_PICTURE_END);
     poly = (POLY_FT4*)GsOUT_PACKET_P;
 
     for (i = 0; i < 3; i++)
@@ -133,6 +160,7 @@ void Screen_BackgroundImgTransition(s_FsImageDesc* imageIn, s_FsImageDesc* image
 
     g_SysWork.bgmStatusFlags |= BgmStatusFlag_Pause;
     GsOUT_PACKET_P            = (PACKET*)poly;
+    PORT_PICTURE_MARK(g_OrderingTable0[g_ActiveBufferIdx].org, PORT_PICTURE_START);
 }
 
 void Screen_BackgroundImgDrawBlackFadeIn(s_FsImageDesc* image)
@@ -143,6 +171,7 @@ void Screen_BackgroundImgDrawBlackFadeIn(s_FsImageDesc* image)
     u8           tPageY;
     POLY_FT4*    poly;
 
+    PORT_PICTURE_MARK(&g_OrderingTable0[g_ActiveBufferIdx].org[2], PORT_PICTURE_END);
     poly = (POLY_FT4*)GsOUT_PACKET_P;
 
     for (i = 0; i < 3; i++)
@@ -174,6 +203,7 @@ void Screen_BackgroundImgDrawBlackFadeIn(s_FsImageDesc* image)
     }
 
     GsOUT_PACKET_P              = (PACKET*)poly;
+    PORT_PICTURE_MARK(&g_OrderingTable0[g_ActiveBufferIdx].org[2], PORT_PICTURE_START);
     g_SysWork.bgmStatusFlags   |= BgmStatusFlag_Pause;
     g_Screen_BackgroundImgGamma = Q8(0.5f);
 }

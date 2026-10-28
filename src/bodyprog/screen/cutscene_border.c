@@ -10,6 +10,9 @@
 #include "bodyprog/view/vc_main.h"
 #include "bodyprog/view/vc_util.h"
 #include "bodyprog/math/math.h"
+#ifdef SH_PORT
+#include "port/widescreen.h"
+#endif
 
 // ========================================
 // STATIC VARIABLES
@@ -69,6 +72,34 @@ static POLY_G4 D_800A8EB0[] = {
 };
 
 static q19_12 g_Screen_BlackBorderShade = Q12(0.0f);
+
+#ifdef SH_PORT
+int Port_CutsceneBorderShade(void)
+{
+    return g_Screen_BlackBorderShade;
+}
+
+/** Port: the borders' corners, as the top/bottom bars (4:3) or, in widescreen, as side bars 20 pixels
+ * wide that frame a 14:9 picture on a 16:9 screen. Corners 0-1 are the outer edge (full shade). */
+static void Port_CutsceneBorderShape(POLY_G4* poly)
+{
+    s32 i;
+    s32 side;
+
+    for (i = 0; i < 2; i++)
+    {
+        side = i == 0 ? -1 : 1;
+        if (g_PortWidescreen)
+        {
+            setXY4(&poly[i * 2], side * 160, -112, side * 160, 112, side * 140, -112, side * 140, 112);
+        }
+        else
+        {
+            setXY4(&poly[i * 2], -160, side * 112, 160, side * 112, -160, side * 96, 160, side * 96);
+        }
+    }
+}
+#endif
 
 // ========================================
 // CUTSCENE BORDERS
@@ -168,6 +199,9 @@ void Screen_CutsceneCameraStateUpdate(void)
             return;
     }
 
+#ifdef SH_PORT
+    Port_CutsceneBorderShape(poly);
+#endif
     ot = &g_OtTags0[g_ActiveBufferIdx][4];
     AddPrim(ot, poly);
     AddPrim(ot, &poly[2]);
