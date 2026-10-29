@@ -31,8 +31,8 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-FLAG = os.path.join(HERE, "..", "..", "build", "port", ".udpfs_refresh")  # udpfs_serve.py
-LOG = os.path.join(HERE, "..", "..", "build", "port", "ps2.log")             # ps2_log.py
+FLAG = os.path.expanduser("~/ps2serve/.udpfs_refresh")                    # the HAL's tools/udpfs_serve.py
+LOG = os.path.join(HERE, "..", "..", "build", "port", "ps2.log")             # the HAL's tools/ps2_log.py (a link)
 ELF = os.path.join(HERE, "..", "..", "build", "port", "sh1.elf")
 NM = os.path.join(os.environ.get("PS2DEV", os.path.expanduser("~/ps2dev")), "ee", "bin", "mips64r5900el-ps2-elf-nm")
 
@@ -222,7 +222,7 @@ def main():
             time.sleep(0.05)
         if os.path.exists(FLAG):
             os.remove(FLAG)
-            print("ps2_ctl: the UDPFS server didn't switch the image (is tools/port/udpfs_serve.py running?)")
+            print("ps2_ctl: the UDPFS server didn't switch the image (is the HAL's tools/udpfs_serve.py running?)")
             return 1
     answer = send(args.ip, args.command, timeout=2.0 if args.command != "ping" else 1.0,
                   tries=3 if args.command == "ping" else 1)  # a repeated restart would restart twice

@@ -53,7 +53,11 @@ python3 tools/port/ps2_ctl.py deploy
 ## The console
 
 - Neutrino boots the ISO over UDPFS. `ps2_ctl.py` controls the game through the IOP agent; the console log
-  arrives in `build/port/ps2.log` (`ps2_log.py`). When filtering the log, filter by line number, not timestamp:
+  arrives in `build/port/ps2.log`. The UDPFS server and log receiver are the HAL's (`../psx-to-ps2-HAL/tools/
+  udpfs_serve.py`, `tools/ps2_log.py`; this repo's `tools/port/` copies are no longer used), shared with the MGS
+  port: one server serves `~/ps2serve/` (links to both images), and `build/port/ps2.log` links to
+  `~/ps2serve/ps2.log`. The PS2 picks the game by the Neutrino folder started (`neutrino` boots `sh1_ps2.iso`,
+  `neutrino_mgs` boots `mgs_ps2.iso`); a deploy restarts whichever game is running. When filtering the log, filter by line number, not timestamp:
   the file contains old runs.
 - Remote restarts (`ps2_ctl.py deploy`/restart) often freeze 5–8 s after boot. A cold boot works.
 - **When the PS2 hangs, ask the user to power-cycle** (hold power, restart Neutrino from uLaunchELF). RESET
