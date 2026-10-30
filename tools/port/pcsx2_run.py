@@ -85,7 +85,8 @@ def main():
     elf = os.path.abspath(args.elf)
     log = tempfile.NamedTemporaryFile(suffix=".log", delete=False).name
 
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
+    stop = []  # SIGTERM: end the run as at its time limit, still printing the log (callers stopping it early)
+    signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
     if args.cdvd_verbose:
         OVERRIDES["CdvdVerboseReads"] = "true"
     if args.bios:
@@ -120,7 +121,7 @@ def main():
         # (the EE is stuck, or emulation runs below full speed).
         beats, frame, frame_beat, last_beat = 0, None, 0, time.time()
         gameplay_done = False
-        while time.time() < end and proc.poll() is None:
+        while time.time() < end and proc.poll() is None and not stop:
             text = open(log, errors="replace").read() if os.path.exists(log) else ""
             if args.until and args.until in text:
                 break
