@@ -40,6 +40,15 @@ Known issues, tabled for now (collected 2026-10-19, mostly from the console cuts
   - `_request_end` (ps2sdk `sifrpc.c:309`) reads `client->hdr.pkt_addr`, which was NULL: a reply for a request already ended, as if two callers used one RPC client at once (the frame dump's host file I/O against another fileio user; HAL threads are real since dfb22660e). On a console this faults in the SIF interrupt handler.
   - Not seen at 1x in the same cutscene. Seen again 2026-10-28 in the `docks1` replay at 2x/32-bit (`SH1_BENCH=1 SH1_PROF=1`, step ~990, opening `host:frame_5012.ppm`), same PC: it comes with the bench frame dumps, not one scene.
 
+- **Cutscene voices run ahead of animation and subtitles (console, 2026-11-01, not yet investigated).**
+  - Seen in a map6_s04 scene (just before map7_s00 loaded) and in the first map7_s00 cutscene; voices get ahead of the picture and subtitles.
+  - Log: XA streams had 0 gaps, started within 42 ms, slowest read 79 ms, so disc streaming looks fine. In the first scene nearly every line from 3887 s logged "XA stream cut off" after 1-3.6 s; in the map7_s00 scene almost all lines played to end of file.
+  - The first scene never ended on its own (last voice line 3960 s, nothing by 4040 s, still drawing); Start skipped it. The map was map6_s04 (loaded 3340 s, next load map7_s00 at 4077 s), so it isn't the map6_s02 soft-lock above, though it looks alike.
+  - Next: compare one of these scenes against DuckStation and a 30 fps build.
+- **Music too fast in Video Mode 480p (console, 2026-11-01, cause found by test, not fixed).**
+  - All music runs fast at 480p and is correct at 240p; switching the setting changes it. The setting outlives a return to the title and a power cycle.
+  - Likely cause: the sound tick's kernel alarm counts horizontal blanks, and the HAL's `spu_ps2.c` assumes NTSC's 15,734 a second; 480p has about 31,469. Fix: take the rate from the current video mode, including when the mode changes while the tick runs.
+
 ## Renderer (gpu_gs.c)
 
 - **2x 32-bit: texture cache thrash.**
@@ -82,3 +91,15 @@ Known issues, tabled for now (collected 2026-10-19, mostly from the console cuts
 - **Debug Options is opened with Triangle (temporary).**
   - Triangle is also one of the default Cancel buttons. On the main options screen it now only opens Debug Options, and Cancel there is Circle/Square.
   - Replace it with a better way in.
+
+- **Texture seam on a keypad picture screen (console, 2026-11-01).** Second keypad screen, seen around map7_s01. Shows in 4:3 too, so it isn't a widescreen bug. Compare with DuckStation to check it isn't in the original.
+
+- **FMVs: top of the screen briefly goes black (console, 2026-11-01, minor).** Occasional, looks like tearing. Not investigated; check whether it depends on the video mode (seen with 480p in use earlier this session; mode at the time unconfirmed).
+
+## Widescreen
+
+- **Result screen "GOOD+" reads as "GOOD-" (console, 2026-11-01).** The game draws the right string (ranking.c). Likely squeezed text dropping the `+` glyph's vertical stroke at 1x; not tested. Check 4:3, 2x and the 2D Filter option.
+- **Cutscene full-screen effects not adapted (seen on console, 2026-11-01):** e.g. full-screen blur.
+- **Flashlight lens flare looks stretched (seen on console, 2026-11-01).**
+- **Overlays on a full-screen picture not corrected (seen on console, 2026-11-01):** on a keypad-style picture screen (seen around map7_s00, exact screen unconfirmed), the pressed buttons drawn over the picture and the cursor. They likely need to line up with the picture's own widescreen handling (`PORT_PICTURE_START`/`_END`). The buttons' hitboxes are wrong in widescreen too, which affects gameplay: they should match the picture's squeezed positions (check that fixing the cursor's drawing doesn't change the cursor's logical position). Workaround: switching to 4:3 got past the screen.
+  - A second, similar keypad screen also has its buttons misplaced in widescreen. Check every keypad-style screen when fixing this.

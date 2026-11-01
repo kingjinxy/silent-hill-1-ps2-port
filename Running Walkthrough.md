@@ -1617,3 +1617,9 @@ stays 320 wide and a TV in 16:9 mode stretches it. Overview in `include/port/wid
 - Baseline counts and the plan: Graphics Pipeline Rework.md, steps 6 and 7. A TLB Miss in ps2sdk's sifrpc
   during a bench frame dump turned up on the way (docs/ToFix.md).
 
+
+## Console playthrough to the ending (2026-11-01)
+
+- Full run on hardware, build of Nov 1 07:56:30 (one power cycle partway), from map4_s05 through Nowhere to the Good+ ending and a new game plus save. No crash, exception or hang logged.
+- Newspaper fix confirmed: the clipping could be read in Nowhere.
+- Music runs too fast in Video Mode 480p, correct in 240p. Found by test; other bugs seen are in docs/ToFix.md.
