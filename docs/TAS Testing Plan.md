@@ -38,10 +38,10 @@ SH1 differs from MGS here:
 
 ## Phase 2: per-loop trace
 
-- [ ] `tools/port/tas/trace.lua`: one line per game loop: movie frame, pad as the game read it, delta time, RNG
-      state, game state, map, Harry's position, angle, health, and event flags. Addresses from the PS1 build's map.
-- [ ] Run twice and compare, to prove it's deterministic.
-- [ ] Full reference trace, compressed, in `tas/reference/`, with the movie in `tas/movie/`.
+- [x] `tools/port/tas/trace.lua` (2026-11-02): line format at the top of the script. Nymashock has no memory hooks in BizHawk (callbacks register but never fire), so it samples once per video frame.
+- [x] Deterministic: two runs gave identical files (184,222 lines).
+- [x] Reference in `tas/reference/trace.log.xz`, movie in `tas/movie/`.
+- [ ] Loop boundaries: `gameStateCounter` turned out to advance every vertical blank, not every loop, so the trace is per video frame, not per game loop. Derive loops from changes in the in-game timer and RNG, or add a real loop signal. Pad and delta time must be matched to loops before Phase 3.
 
 ## Phase 3: replay in the port
 
