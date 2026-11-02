@@ -58,6 +58,8 @@ First replay in PCSX2 (2026-11-02, `tools/port/tas/trace_to_dem.py`, `compare_tr
 
 Second round (2026-11-02): the trace now records `g_FsQueue.postLoad.idx` (held to on replay, with a limit of 8 holds a step so a blocking load can't deadlock), and steps cover all of `Demo_StateGet`'s step states (69,185 steps). Result: worse. Harry was within 57 units at step 600, about 47,000 off at step 900 (the first round matched there exactly), and from step ~2,200 the replay crawled on "file loads still behind" waits until the run's time limit. Sampled file marks shouldn't be held to until steps line up exactly. Next: an exact loop signal (candidate: the pad data's `pulseTicks`, or re-tracing with a per-loop counter), then compare step by step from step 0.
 
+Loop signal (2026-11-02): `g_ActiveBufferIdx` is now in the trace (last field) and holds up. 103,171 flips, 58,393 of them in game state 11. Of 44,900 timer changes, 92.3% fall on a flip and 99.93% within one frame, against 66% and 99.2% for the `g_VBlanks` walk. Flip spacing matches a nearby `g_VBlanks` in 96.5% of state 11 loops; most mismatches are in the load state (10), where that isn't expected to match. Timer changes one frame off a flip show the timer and the flip aren't sampled at the same point of the loop.
+
 ## Phase 4: console
 
 - [ ] Full replay on the console in 4:3, watching for crashes. The same replay in other modes (2x, 32-bit,
