@@ -62,6 +62,10 @@ Loop signal (2026-11-02): `g_ActiveBufferIdx` is now in the trace (last field) a
 
 Pad offset test (2026-11-02, 60,519 steps from flips, file holds off, a line per step for the first 4,000): the row at the flip is best. Offset 0 stays within 2,000 units until step 737, +1 until step 48, -1 until step 50 and fails sooner. At offset 0 Harry follows the opening cutscene's path (within ~200-500 units) but its jump comes about 50 steps early (step 737, trace ~790), and the run ends on STEP ERROR at step 2,893 (expected inventory, still in game). The cutscene appears to advance on something other than steps, probably voice or real time. Seeds never match within 20 rows, so the RNG comparison is still not usable: to work out where in the loop each side samples it.
 
+Voice clock test (2026-11-02): `SD_XA_VSYNC_COUNT` driven by the recorded steps' time made no difference: the first difference stayed at step 737 and the STEP ERROR at step 2,893. Reverted. So the voice clock isn't what moves the opening cutscene's jump. Still to check: XA load and seek time, and the cutscene's own script around that step.
+
+Final focused round (2026-11-02): reseeding from sampled seeds was wrong in principle, as the trace samples them mid-loop, so the test used only the first seed and let the game's draws carry on. No change: the first difference stayed at step 737 and no logged port seed matched the trace within 40 rows, even at step 1, so the RNG comparison remains unusable and its cause unknown. In the trace, the cutscene's move at frame 4,359 follows the file queue's change, so the opening's jump looks tied to file load timing, which the port finishes sooner. Experiment reverted.
+
 ## Phase 4: console
 
 - [ ] Full replay on the console in 4:3, watching for crashes. The same replay in other modes (2x, 32-bit,
