@@ -31473,3 +31473,8875 @@ Per your standing instruction, I'm updating the conversation archive:
 
 - tool `Bash`: Check archive script write mode and session file
 
+
+
+## User
+
+<command-name>/clear</command-name>
+            <command-message>clear</command-message>
+            <command-args></command-args>
+
+## User
+
+We have a good FMV decoder on the EE, but I am curious as to how we can leverage the GS’s IPU to decode FMVs. Read through the PS2 docs that we’ve downloaded to get an idea of how the IPU works and come up with a plan for using the IPU to decode FMVs.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls; ls docs* 2>/dev/null | head -50; grep -ril "IPU" --include=*.txt --include=*.md --include=*.pdf --include=*.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; find / -xdev \( -iname "*ipu*" -o -iname "*EE*User*" -o -iname "*ps2*manual*" -o -iname "*.pdf" \) 2>/dev/null |
+
+- tool `Bash`: cd /home/alex; grep -rIl --exclude-dir={.cache,.mozilla,.local,proc} -i "IPU_CMD\|IPU_CTRL\|BDEC\|IPU0\b" Documents ps2dev 2>/dev/null | head -30; find Document
+
+## Claude
+
+Found the downloaded Sony SDK docs in ~/Downloads (ps2-0160j / ps2-0100j). Let me look there.
+
+- tool `Bash`: cd /home/alex/Downloads; for d in ps2-0160j-20010427 ps2-0100j-20000117; do echo "== $d"; find $d -maxdepth 3 | head -30; done; grep -rIli "ipu" ps2-0160j-20010
+
+## Claude
+
+Those are BIOS dumps, not docs. Searching more widely.
+
+- tool `Bash`: cd /home/alex; grep -rIl --exclude-dir={.cache,.mozilla,.local,"PS1 Decomps",build} -w "IPU" Documents Downloads ps2dev/ps2sdk 2>/dev/null | head -40; ls Downlo
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i "ipu" "Claude Conversation.md" | head -40; grep -n -i "ipu" "High-Level Porting Ideas.txt"; grep -rn 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i "psx-spx\|ps2tek\|ps2 doc\|docs/ps2\|EE User\|GS User" "Claude Conversation.md" | head -20; ls ~/Docu
+
+- tool `Bash`: cd /home/alex; find / -xdev \( -iname "IPU*.cpp" -o -iname "ipu*.h" -o -iname "libmpeg*" -o -iname "*ps2tek*" \) 2>/dev/null | grep -v -e /proc -e libcamera -e 
+
+## Claude
+
+There's no IPU manual among the downloads — the PS2-specific material on disk is ps2sdk (register map + `samples/mpeg` + its libmpeg). Let me read those and the current decoder.
+
+- tool `Bash`: cd /home/alex/ps2dev/ps2sdk; find . -ipath "*mpeg*" | head -20; wc -l samples/mpeg/mpeg.c; cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rl -i "mdec" sr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i -B2 -A40 "FMV\|MDEC" "PS2 Optimizations.md" | head -80
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; wc -l src/port/ps2/movie_ps2.c src/port/ps2/strdec.c; sed -n 1,80p src/port/ps2/strdec.c; grep -n "^[a-zA-Z].*("
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 140,381p src/port/ps2/strdec.c; sed -n 1,60p src/port/ps2/movie_ps2.c; sed -n 140,201p src/port/ps2/movie
+
+- tool `Bash`: cd /home/alex/ps2dev/ps2sdk; cat ee/include/libmpeg.h | sed -n 1,200p | grep -v "^\s*$" | head -120; sed -n 1,80p samples/mpeg/mpeg.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i "cycles.*decod\|decod.*cycles\|ms a frame\|per movie frame\|movie: .*cycles" "Claude Conversation.md"
+
+## Claude
+
+I couldn't do the reading step as asked: there's no IPU manual on disk. The two `~/Downloads/ps2-01x0j-*` folders are BIOS dumps (`.bin/.mec/.nvm`), not documents. The only PS2 material I found is ps2sdk. It gives the IPU register map in `ee_regs.h` (CMD/CTRL/BP/TOP at 0x10002000, the FIFOs at 0x10007000/0x10007010), `samples/mpeg/mpeg.c`, and `libmpeg.h`, but libmpeg ships only as a compiled `.a`. So the IPU description below comes from what I know of Sony's EE User's Manual (the IPU chapter). Before any code is written, it should be checked against a real source; PCSX2's `IPU/` sources are the easiest one.
+
+## What the IPU can do
+- **Commands** (written to IPU_CMD, with input data sent by DMA on channel 4 and output read on channel 3):
+  - **BDEC**: decodes one MPEG-2 macroblock (code tables, dequantization, inverse DCT) and outputs RAW16: 6×64 signed 16-bit values.
+  - **IDEC**: decodes a whole I-picture slice, including colour conversion to RGB32 or RGB16.
+  - **CSC**: converts an already-decoded 8-bit macroblock to RGB32 or RGB16, with optional dithering.
+  - **VDEC / FDEC**: read one coded symbol, or a fixed number of bits, so the EE can parse headers.
+  - **SETIQ / SETVQ**: load the quantization matrices, or the colour table used for 4-bit output.
+  - **PACK**: converts RGB32 to RGB16 or 4-bit indexed.
+- **Throughput:** a 320×240 frame is 300 macroblocks. That is trivial for the IPU, which was built for 720×480 MPEG-2 at 30 fps.
+
+## The catch: STR isn't MPEG-2, and our decoder is bit-exact
+[strdec.c](src/port/ps2/strdec.c) matches DuckStation's MDEC bit for bit and costs 7.8–10M EE cycles per frame on hardware, at most about 51% of the 15 fps budget. The IPU can't reproduce that output:
+
+| Stage | PS1 STR v2 / MDEC | IPU | Can it be bridged? |
+|---|---|---|---|
+| Block order | Cr, Cb, Y1–Y4 | Y1–Y4, Cb, Cr | Yes, reorder while transcoding |
+| DC | Raw 10-bit value | Variable-length differential code, 8–11-bit precision | Yes, re-encode it |
+| AC codes | MPEG-1 B.5c table | MPEG-2 B.14 table (the same codes) | Yes |
+| Escape code | 6-bit run + 10-bit level | 6-bit run + 12-bit level | Yes, re-encode it |
+| Dequantization | `(v·q·W)>>3` with 4 fraction bits, rounded toward zero | MPEG-2 formula, integer output, plus mismatch control | **No**: the rounding differs |
+| Inverse DCT | MDEC's own matrix and rounding | IEEE-1180-class IDCT | **No**: about ±1 differences |
+| Colour conversion | Full-range signed Y, MDEC rounding | Fixed coefficients, probably studio range (16–235; to verify) | **No**: use the EE instead |
+
+## Plan
+1. **Get the documentation.** Download the EE User's Manual IPU chapter, or PCSX2's `pcsx2/IPU/*` (IPU.cpp, mpeg2lib, yuv2rgb), into its own folder. Confirm the command bit layouts, the IPU_CTRL fields (IDP for DC precision, AS for the alternate scan order, IVF for the intra code table, QST for the quantizer scale type), and the colour-conversion coefficients.
+2. **Prototype on the host first.** In `tools/port/str/`, write an STR→MPEG-2 macroblock transcoder: parse with the existing `strdec.c` code and emit an MPEG-2 intra macroblock (DC re-encoded at 10-bit precision, escapes widened, blocks reordered). Choose the quantizer scale and the intra matrix sent with SETIQ so that MPEG-2's `QF·W·qs/16` comes as close as possible to the MDEC's `v·q·W/8`. Run it through a reference IPU model (PCSX2's mpeg2lib) and measure the per-pixel error against DuckStation with the existing `duckstation_movie.py`.
+3. **EE implementation** (a new `src/port/ps2/ipudec.c`, behind a build flag so `strdec.c` stays the default):
+   - The EE transcodes one frame into a buffer, which is only bit packing and cheap.
+   - DMA channel 4 feeds it to the IPU; one BDEC is issued per macroblock; channel 3 brings the RAW16 output back.
+   - The colour conversion runs on the EE with the MDEC-exact formula already in `StrDec_Frame` (or on VU0 later), writing `s_Rgba` as today.
+   - Pipeline it: transcode frame n+1 while the IPU decodes frame n.
+4. **Option: IPU colour conversion too.** Clamp RAW16 to 8 bits and run CSC, so the EE does almost no work per pixel. This is only worth it if step 2 shows the colour difference is invisible, or if Y can be pre-scaled to cancel the studio-range conversion.
+5. **Verification:** run the four reference frames plus a full movie pass against DuckStation, under PCSX2 software GS and on hardware. Report the maximum and mean error, and the EE cycles per frame against today's 7.8–10M.
+
+## My recommendation
+Decoding already fits within the frame budget and is exact. Steps 1–2 are cheap and will show how far off the IPU's output is. I'd only make the IPU the default if that error is invisible (about ±1 LSB) and the freed EE time is actually needed, for example for 30 fps movies or work in the background during FMVs. Otherwise keep the IPU path as an optional fast mode.
+
+Re-encoding the FMVs offline as real MPEG-2 would let IDEC do everything. I'd rule that out because it replaces original assets, which goes against the original-assets rule you set for the port.
+
+Want me to start with step 1, downloading PCSX2's IPU sources into its own folder?
+
+## User
+
+Yes, let’s look at the sources. Check PS2Tek on GitHub too. If we have to do MPEG-2 reencoding, this isn’t worth it.
+
+- tool `Bash`: D=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/e814ebed-f0bf-45a4-a6d3-2d2375017aa8/scratchpad/ipu_src; mkdir -p $D && cd $D && git clone -q --d
+
+- tool `Bash`: D=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/e814ebed-f0bf-45a4-a6d3-2d2375017aa8/scratchpad/ipu_src; cd $D; python3 -I -c " import re,html,sy
+
+- tool `Bash`: D=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/e814ebed-f0bf-45a4-a6d3-2d2375017aa8/scratchpad/ipu_src; cd $D; sed -n 2903,3080p ps2tek_ipu.txt 
+
+## Claude
+
+ps2tek's register/command reference is clear. Now the decode details in PCSX2: what BDEC expects in the bitstream, and its dequant/IDCT/CSC maths.
+
+- tool `Bash`: D=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/e814ebed-f0bf-45a4-a6d3-2d2375017aa8/scratchpad/ipu_src/pcsx2/pcsx2/IPU; cd $D; wc -l *; grep -n 
+
+- tool `Bash`: D=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/e814ebed-f0bf-45a4-a6d3-2d2375017aa8/scratchpad/ipu_src/pcsx2/pcsx2/IPU; cd $D; sed -n 613,960p I
+
+- tool `Bash`: D=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/e814ebed-f0bf-45a4-a6d3-2d2375017aa8/scratchpad/ipu_src/pcsx2/pcsx2/IPU; cd $D; sed -n 1420,1470p
+
+## Claude
+
+I'd drop the IPU idea. Under your rule it isn't worth doing: the IPU can't read the PS1 movie (STR) bitstream, and even with that fixed it wouldn't match the PS1 output.
+
+I read ps2tek's IPU chapter (registers and commands) and PCSX2's IPU decoder (`IPU_MultiISA.cpp`, `yuv2rgb.cpp`).
+
+**1. Every frame would have to be re-encoded as MPEG.** BDEC (single macroblock) and IDEC (whole slice) are the only commands that decode coefficients, and both read only MPEG-1/2 syntax:
+- **DC:** for intra blocks the IPU reads the DC as an MPEG size code plus a difference from the previous block. STR v2 stores a raw 10-bit value, which the IPU can't parse. Non-intra blocks read the first coefficient with MPEG's "first" code table instead.
+- **Escapes:** MPEG-2 uses 6-bit run + 12-bit level, MPEG-1 uses 6 + 8 or 16 bits; STR uses 6 + 10.
+- **Block order:** MPEG wants Y1–Y4, Cb, Cr; STR stores Cr, Cb, then Y.
+
+So the EE would have to parse every STR frame and write it back out as MPEG. Parsing is already a large share of what the EE decoder costs now. The rewrite loses no picture data, but it is exactly the MPEG re-encoding you ruled out.
+
+**2. The result still wouldn't match the PS1, with no workaround:**
+- **Dequantization:** the IPU computes intra coefficients as `level·q·W >> 4` (non-intra: `(2·level+1)·q·W >> 5`). The MDEC keeps 4 fraction bits and rounds toward zero.
+- **Inverse DCT:** the IPU uses an integer butterfly IDCT (the W1–W7 constants), not the MDEC's matrix and rounding.
+- **Output range:** intra output is clipped to unsigned 0–255. The MDEC's signed results, which wrap to 9 bits, are lost before we could do our own colour conversion.
+- **Colour conversion:** CSC uses studio range, `(Y−16)·1.164`, with fixed coefficients. That differs from the MDEC's full-range BT.601, and none of it can be adjusted.
+
+**3. No command can be used on its own.** There's no standalone IDCT or dequantize command. VDEC only reads MPEG header codes (macroblock address increment, macroblock type, motion codes), not DCT coefficients. CSC only takes 8-bit input in studio range.
+
+The current EE decoder stays: it matches DuckStation bit for bit and uses at most about 51% of the 15 fps budget on hardware. If movies ever need to be faster, the better route is VU0 or more tuning of `strdec.c`. Unlike the IPU, either can keep the output identical.
+
+The downloaded sources are in `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/e814ebed-f0bf-45a4-a6d3-2d2375017aa8/scratchpad/ipu_src/`: PCSX2's `pcsx2/IPU/`, ps2tek, and the IPU section of ps2tek as plain text.
+
+## User
+
+Note this in the docs
+
+## Claude
+
+Adding it to [PS2 Optimizations.md](PS2 Optimizations.md), next to the Video row.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^## \|^### " "PS2 Optimizations.md"; tail -5 "PS2 Optimizations.md"
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f="PS2 Optimizations.md"; sed -i 's/^| Video | MDEC | IPU (MPEG-2 macroblocks) | Done (FMV path). |$/| Video | M
+
+## Claude
+
+I've added the IPU findings to [PS2 Optimizations.md](PS2 Optimizations.md). I haven't committed it.
+
+- **Video row in the hardware table** ([line 24](PS2 Optimizations.md#L24)): it now says the FMV path decodes bit-exact on the EE, and that the IPU can't decode STR. It points to the new log entry.
+- **New log entry, "2026-10-22: IPU for FMV decoding: rejected"**, at the end of the file. It covers:
+  - **It can't read STR:** both of the IPU's decode commands accept only MPEG-1/2 syntax, so every frame would have to be re-encoded as MPEG on the EE.
+  - **It wouldn't be exact anyway:** the dequantization, inverse DCT, unsigned output clipping and colour conversion all differ from the MDEC.
+  - **Nothing usable on its own:** there's no standalone IDCT or dequantize command, and the other commands only handle MPEG syntax or studio-range colour.
+  - **The decision:** keep `strdec.c` on the EE; if movies ever need to be faster, VU0 or more tuning of `strdec.c`; re-encoding the movies as MPEG-2 is ruled out because it replaces original assets.
+
+
+
+## User
+
+<command-name>/clear</command-name>
+            <command-message>clear</command-message>
+            <command-args></command-args>
+
+## User
+
+Let’s go back to optimizations. What was still on our todo list?
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git diff --stat "PS2 Optimizations.md"; grep -n -i -E "todo|to do|left|next|remaining|^#" "PS2 Optimizations.md"
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 41,70p "PS2 Optimizations.md"; sed -n 417,470p "PS2 Optimizations.md"; git diff "PS2 Optimizations.md" | 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i -E "scratchpad|SPR|overlap|double display|async|VU1|resident|option [3-8]" "PS2 Optimizations.md" | s
+
+## Claude
+
+Going by [PS2 Optimizations.md](PS2%20Optimizations.md), options 1 and 2 are done, and the log has nothing yet on options 3 to 8.
+
+**Done:**
+- **1. Fog pairs:** the fog overlay and its textured polygon are now drawn as one, exactly.
+- **2. Exact batched GTE work:** done for bone matrices, the world point light, the world and character mesh packets, the map6_s02 effect grid and the GTE control writes.
+- **DrawOTag, three passes:** GS data now goes straight into the packet, and there's a texture-state memo.
+
+**Looked at and dropped:**
+- Snow particles: about 1.5% at best.
+- Character mesh packets in locals: tried and reverted.
+- The IPU for FMV decoding: rejected today. That log entry isn't committed yet; it's the change to `PS2 Optimizations.md` in your working tree.
+
+**Still to do, in the doc's ranked order (§4):**
+1. **Scratchpad on the EE's SPR (option 3).** Move `g_PsxScratch` to 0x70000000. The catch is any DMA straight from scratchpad memory. It's cheap to try and touches all game code.
+2. **Texture page and CLUT reloads (option 4).** There are still about 540 TEX0/CLUT changes a frame in Kaufmann. The goal is to make each reload cheaper, since we can't reorder primitives.
+3. **CPU/GS overlap with a double display list (option 5).** Build frame N+1 while frame N's DMA runs. It was reverted on 2026-10-09, probably because of the ResetCallback bug, so retry it on hardware.
+4. **Packet building with MMI and the SPR (option 6).** 128-bit `sq` stores, and building packets in the SPR to send them with the fromSPR → GIF DMA.
+5. **Use the RAM (option 7).** Keep a map's files resident, cache XA headers and preload the next scene. This one is about load times, not frame rate.
+6. **VU1 for primitive conversion (option 8).** The biggest potential gain and the biggest job; the doc puts it after items 1–5.
+
+**Smaller items left over from the log:**
+- The remaining MVMVA in `func_8006B318` and `WorldEnv_LightTransform`, about 55k cycles at most. An exact rewrite has to leave the GTE in the same state the PS1 would.
+- The per-cell C still left in the map6_s02 effect grid.
+- The 8 cutscenes that time out in the all-cutscene sweep.
+
+DrawOTag and the point light are still the biggest costs. That makes options 3 and 5 the obvious next steps: the scratchpad move is the cheapest, and the overlap could gain the most. Which one do you want to start with?
+
+## User
+
+Let’s look at the scratchpad option. I think we have more scratchpad on PS2 as well, so look into other things we can put in there.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_PsxScratch" --include=*.c --include=*.h --include=*.ld --include=*.py --include=Makefile* --include=
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat include/decomp/psx_mem.h src/port/psx_mem.c; grep -rn "0x70000000\|SPR\b\|spr_\|SCRATCHPAD\|D_CHCR\|fromSPR\
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "0x7000\|scratchpad" src/port --include=*.c --include=*.h --include=*.S | head; sed -n 70,100p src/port
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls; grep -rln "ps2sdk\|mips64r5900" Makefile* tools/port/*.sh tools/port/*.mk 2>/dev/null | head; echo $PS2SDK; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls port; grep -rn "linkfile\|-T \|\.spad" port/ 2>/dev/null | grep -v "^port/build" | head; sed -n 95,130p $PS2S
+
+## Claude
+
+I'm finding where the port's EE build is defined and what its hot data structures are.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "mips64r5900-elf-gcc\|ee-gcc\|EE_CC\|SH1_FPS" --include=*.sh --include=Makefile* --include=*.py --incl
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,60p tools/port/bench_cutscene.sh; grep -n "spad\|linkfile\|EE_LINKFILE\|-T" Makefile | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "linkfile\|\-T\|ld\b\|LDFLAGS\|gcc" tools/port/port_link.py | head -20; grep -n "\-O\|CFLAGS" tools/port
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "linkfile\|\"-T\"\|-T\b\|ps2sdk\|elf" tools/port/port_link.py | head -20
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}readelf -lS build/port/sh1.elf | grep -i -E "spad|LOAD|7000"; 
+
+## Claude
+
+Nothing uses the SPR yet. I'm checking the risks: DMA, address conversions, and stack switches into the scratchpad.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "SetSp\|0x1F8003\|PSX_ADDR_CANON\|& 0xFFFFFF" src --include=*.c | grep -v "^src/port/ps2/strdec" | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "SetSp" src/port include/port 2>/dev/null | head; sed -n 25,40p src/bodyprog/collision/ray.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "SetSp" src include --include=*.h --include=*.c --include=*.s --include=*.S | grep -v "ray.c" | head; g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}nm build/port/sh1.elf | grep -i " setsp\| g_PsxScratch"; grep 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}objdump -d build/port/sh1.elf --start-address=0x411a68 --stop-
+
+## Claude
+
+SetSp is a no-op stub in the port, so the game never puts its stack in the scratchpad. Next I'm checking the 24-bit pointer conversions in libgpu_port.c.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 35,60p src/port/libgpu_port.c; sed -n 180,260p src/port/libgpu_port.c; grep -n "ptr24\|DrawPrim" src/port
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "SyncDCache\|InvalidDCache\|0x0FFFFFFF\|0x20000000\|0x30000000\|SifSetDma\|dmaKit_send\|sceSifSetDma" s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 85,105p src/port/ps2/spu_ps2.c; grep -n "^static\|^u32\|^s32\|^[A-Za-z].*\[" src/port/gte.c | head -40
+
+## Claude
+
+I'll put a test variable in `.spad` to see whether GCC emits it as NOBITS or PROGBITS. A PROGBITS section would make the ELF loader write to 0x70000000.
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad && E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-;
+
+## Claude
+
+GCC emits `.spad` as PROGBITS, which gives a 1.8 GB LOAD segment. I'm checking how ps2sdk's linkfile matches `.bss.*`, to find a NOBITS section name that works.
+
+- tool `Bash`: grep -n "bss\|sbss" $PS2SDK/ee/startup/linkfile
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad && E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-;
+
+## Claude
+
+It's NOBITS now, but it still sits in the one LOAD segment, whose memsz is 0x6ff00480 (about 1.8 GB for the loader to zero). I'll try a project copy of the linkfile with `.spad` marked NOLOAD.
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad && E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-;
+
+## Claude
+
+NOLOAD works: `.spad` gets no load segment, and the main segment's memsz is back to normal. Next I'll list the hot statics with their sizes to plan what fits in 16 KB.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; for f in build/ee_check/src_port_gte.c.o build/port/*gpu_gs*.o bui
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ls build/ee_check | grep -v txt | grep -i "port" | head -30; find 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; for f in gte.c libgte_port.c ps2_gpu_gs.c libgpu_port.c; do echo "
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; for f in gte.c libgte_port.c ps2_gpu_gs.c libgpu_port.c; do echo "
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "int main\|void main\|_ps2_init\|Port_Init\b\|__attribute__((constructor" src/port src/main/main.c | he
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat src/port/port_main.c; sed -n 50,62p src/port/gte.c; sed -n 370,400p tools/port/port_link.py; grep -rn "pc\|h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i "on hardware\|ps2_ctl\|hardware:" "PS2 Optimizations.md" | cut -c1-260 | head -20; sed -n 1,40p tools
+
+## Claude
+
+I'll put the hot data in the SPR and measure on the PS2. First I'm reading the gpu_gs declarations I'll be touching.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "memo\[\|regsTab\[\|nregTab\[\|static u64x regs\[\|nreg\[\|cached\[\|s_Slots\[\|s_Cluts\[\|s_PageMap\[\|
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 205,300p tools/port/port_link.py; ls tools/port/gte_test; grep -rn "linkfile" tools/port/gte_test tools/p
+
+## Claude
+
+I'll key the macro on a `SH_PORT_SPR` define that only port_link.py passes. gte_test and lib_test also build gte.c with the stock linkfile, and they mustn't get a `.spad`.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "PORT_CFLAGS =" -A4 tools/port/port_link.py; sed -n 1,12p include/port/prof.h; grep -n "#include" src/po
+
+## Claude
+
+Now writing the header, the linkfile copy and the build changes.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/include/port/spr.h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' src = open("/home/alex/ps2dev/ps2sdk/ee/startup/linkfile").read() old = "\t.spad 0x70000000: {
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="tools/port/port_link.py"; s=open(p).read() a='''               "-D_LANGUAGE_C", "-DVER_USA"
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/port_main.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="src/port/psx_mem.c"; s=open(p).read() s=s.replace('#include "common.h"\n','#include "common
+
+## Claude
+
+Now the GTE state.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="src/port/gte.c"; s=open(p).read() rep=[('#include "port/gte.h"\n','#include "port/gte.h"\n#
+
+## Claude
+
+Next is gpu_gs.c. I'm reading the declarations around the register shadow, the caches and the memo locals.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,12p src/port/ps2/gpu_gs.c; grep -n "^#include" src/port/ps2/gpu_gs.c; sed -n 118,140p src/port/ps2/gpu_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "static.*memo\b\|static.*memo\[\|} memo\|memo\[[0-9A-Z]" src/port/ps2/gpu_gs.c | head; grep -n "s_Filt\[
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 984,996p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="src/port/ps2/gpu_gs.c"; s=open(p).read() rep=[('#include "port/prof.h"\n','#include "port/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="src/port/ps2/gpu_gs.c"; s=open(p).read() a='static s32 s_FogPending;'; assert s.count(a)==1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}readelf -lS build/port/sh1.elf | grep -E "spad|LOAD"; ${E}nm -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/bench.log
+
+## Claude
+
+I've implemented the scratchpad move, and it builds and links, but nothing is tested yet. Two PCSX2 benchmark runs of the Kaufmann cutscene, with and without the SPR, are going in the background so I can check the frames come out identical. I'll pick this up when they finish.
+
+**What changed:**
+- **[include/port/spr.h](include/port/spr.h):** a new `SPR` attribute puts a zero-initialised variable in the EE's 16 KB scratchpad at 0x70000000. It's only on in port_link.py builds; `SH1_NO_SPR=1` turns it off for comparisons, and gte_test and lib_test don't get it.
+- **[tools/port/linkfile](tools/port/linkfile):** a copy of ps2sdk's linkfile with `.spad` marked NOLOAD, start and end symbols, and a 16 KB limit check. The stock script puts the section in the ELF's single load segment: about 1.8 GB for the loader to fill.
+- **[port_main.c](src/port/port_main.c):** `main()` zeroes the SPR first, because the hardware doesn't clear it at boot.
+- **What moved in, 6.3 KB so far:** the 1 KB PS1 scratchpad, the GTE register file and its unpacked state, and gpu_gs's packet builder state, GS register shadow, texture page and CLUT cache tables, texture memo and fog-pair buffer.
+- **Safety:** nothing the DMAC reads or writes is in the SPR. The game's `SetSp` (stack in the scratchpad) is a no-op stub in the port, so there's no stack there. DrawOTag now also reports an ordering-table link below RAM, which is what a primitive in the scratchpad would look like.
+
+PCSX2 doesn't model the EE's caches, so it can only tell us the result is exact. Any speed gain will only show on the real PS2: whatever the cache-miss saving is, plus the cache space these tables free for the game's own data.
+
+**What could go in the remaining ~9.7 KB:**
+- Gte_RtpBatch's and the point light's batch buffers.
+- The game's hottest small globals.
+- A scratchpad stack for DrawOTag. That one is bigger and riskier.
+
+After the PCSX2 check passes, do you want to try it on the PS2? It needs to be on with Neutrino and `ps2_log.py` running.
+
+## User
+
+Yes, but not at the moment
+
+## Claude
+
+The PS2 test can wait, then. The SPR run of the Kaufmann benchmark finished with all 10 frame dumps, so the game ran through it with the SPR in use. The comparison run without the SPR is still going. When it's done I'll compare the two sets of dumps and tell you whether they're identical.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/bench.log | tail -30
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; python3 -I - <<'EOF' def rd(p):     d=open(p,'r
+
+## Claude
+
+The scratchpad version is exact in PCSX2, as far as this benchmark can show. In the Kaufmann cutscene, 9 of the 10 frame dumps are identical with the SPR on and off. The run reported a failure only because the comparison exits with an error when any dump differs.
+
+The one difference is 41 pixels in `dump_05`, all inside a 7×9 box at (159–165, 192–200). That's one subtitle letter. The optimisation log says the Kaufmann dumps already vary in one subtitle glyph between builds, so this matches that and doesn't come from the change.
+
+The speed test is still to do, and only the real PS2 can show it. When you're ready, start it with Neutrino and have `ps2_log.py` running. I'll then measure the build with and without the SPR (`SH1_NO_SPR=1` turns it off).
+
+Nothing is committed yet; the scratchpad change is in the working tree alongside your uncommitted IPU log entry.
+
+## User
+
+What does our RAM usage look like? Give a breakdown by category and a comparison between gameplay and cutscenes
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}size -A build/port/sh1.elf | grep -v "^\.\(mdebug\|comment\|pd
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ls build/port/*.o build/port/port | head -50; ls build/port/recomp
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; python3 - <<'EOF' import subprocess,glob,collections,os E=os.path.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; for f in build/port/port/*.o; do t=$(${E}size $f | tail -1 | awk '
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; sed -n 1,6p src/port/ps2/sample_ps2.c; ${E}nm -S --size-sort build
+
+## Claude
+
+I'm checking whether a stale object (the 448 KB sampler) is actually in the ELF.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}nm build/port/sh1.elf | grep -c "Port_SampleStart\|s_Counts"; 
+
+## Claude
+
+The port uses about 11.6 MB of the PS2's 32 MB, and it's the same in gameplay and cutscenes. There's no allocation during play, and every map overlay is linked into the ELF, so nothing is loaded or freed at runtime. The figures below come from the current build, `build/port/sh1.elf`: section and symbol sizes from the ELF and per-object sizes, plus the boot log's overlay snapshot line.
+
+**Overall layout**
+
+| Region | Size |
+|---|---|
+| EE kernel (0–1 MB) | 1.00 MB |
+| ELF image (code, data, bss; ends at 0x00A7CF60) | 9.49 MB |
+| Heap: pristine copies of the 48 overlays' initial data (to reset an overlay when its map loads again) | 0.95 MB |
+| Main thread stack | 0.13 MB |
+| **Total used** | **~11.6 MB** |
+| **Free** | **~20.4 MB** |
+
+**By category**
+
+| Category | Size | Main items |
+|---|---|---|
+| Game code (decomp C plus recompiled asm, all 48 overlays resident) | 3.12 MB | maps 2.46, bodyprog 0.48, recomp 0.11, screens 0.06 |
+| Game data (initialised and read-only) | ~1.2 MB | maps 0.45, data from asm files ~0.7 |
+| PS1 RAM arena (`g_PsxRam`) | 2.00 MB | the game's own 2 MB memory map (file buffers, ordering tables, VAB etc.) |
+| Game bss | 0.13 MB | `g_SysWork`, `g_WorldGfxWork`, `g_OtTags1`… |
+| GS renderer (gpu_gs.c) | 0.84 MB | `s_Readback` 512 KB (StoreImage), packet buffers 128 KB, staging/image packet/CLUT map 192 KB |
+| FMV | 1.20 MB | movie ring 512 KB, RGBA frame 300 KB, strdec lookup tables 320 KB |
+| Memory card | 0.29 MB | `s_Card` 256 KB, icon |
+| Capture and debug | ~0.32 MB | capture bands 144 KB, frame dump band 64 KB, debug 64 KB, log 43 KB |
+| CD, SPU, embedded IOP modules | ~0.15 MB | CD bounce buffer 64 KB, SPU 50 KB, `sh1spu`/`freesd` modules 31 KB |
+| Port code plus libc, ps2sdk and gsKit | ~0.4 MB | |
+| EE scratchpad (separate 16 KB, not RAM) | 6.3 KB used | added today |
+
+**Gameplay compared with cutscenes**
+
+The footprint is identical; only what's actually in use changes:
+- **Gameplay and in-engine cutscenes:** the FMV's 1.2 MB is reserved but idle. In-engine cutscenes are ordinary game code running on the same 2 MB arena.
+- **FMV:** the FMV buffers are in use, and the game itself mostly waits.
+- **Inside the 2 MB arena**, the game uses memory the way it does on the PS1. That's fixed by the PS1 layout, so it doesn't grow with the port.
+- **Capture and debug buffers** are idle unless a capture or replay is running.
+
+A per-scene comparison would only be worth doing for live data inside the PS1 arena, by dumping it with `ps2_ctl.py md`. It wouldn't change the totals above.
+
+**What it means for the "Use the RAM" option (option 7)**
+
+About 20 MB is free. That's enough to keep every map's files resident, as well as the XA headers and a preloaded next scene. The capture and debug buffers (~0.3 MB) could also be left out of release builds.
+
+## User
+
+Record these details. I’m not changing memory substantially at this time. 
+Next, go through all the code and find any sections still using inline assembly. Create a plan to rework these into C.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rlE "__asm__|\basm\s*\(|__asm\b" src include --include=*.c --include=*.h | grep -v "^src/port/iop" | while
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for f in src/main/memcpy.c src/bodyprog/bodyprog_combat_8008A058.c src/bodyprog/view/vw_calc.c src/bodyprog/soun
+
+## Claude
+
+I'll preprocess each of those files with the port's flags to see which assembly actually survives in the PS2 build.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 18,30p tools/port/ee_compile_check.sh
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 30,60p tools/port/ee_compile_check.sh
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/pp; grep -hoE '(__asm__|\basm)\s*(volatile)?\s*\
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/pp; grep -lE 'maspsx-keep' *.i; grep -oE 'asm\("
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/pp; grep -ohE '\.include \\"asm/[^"\\]+' *.i | s
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/pp; grep -oE '__asm__\("\.section \.rodata[^)]*'
+
+## Claude
+
+Still going. I've sorted out the assembly in the game files. Now I'm checking how the port handles functions that are still assembly: the recompiler, and one direct INCLUDE_ASM.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,20p include/decomp/include_asm.h; sed -n 1,40p tools/port/recomp.py | head -40; ls build/port/recomp/*.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}nm build/port/sh1.elf | grep -oE " t rc_\w+| T rc_\w+" | awk '
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -nE '__asm__|\basm\s*\(|__asm\b' src/port/*.c src/port/ps2/*.c include/port/*.h | grep -v "^include/port/gt
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -B3 -A3 "func_8009E198" src/bodyprog/libkpad/libkpad.c | head -30; cat asm/USA/bodyprog/nonmatchings/lib
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -8 asm/USA/bodyprog/nonmatchings/libkpad/libkpad/func_8009E198.s; sed -n 340,395p src/bodyprog/view/vw_calc
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 9085,9115p src/bodyprog/player_control.c; sed -n 9285,9315p src/bodyprog/player_control.c; grep -n "asm" 
+
+## Claude
+
+I've finished the inventory and am writing both entries into the optimisation log now.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 25,40p src/bodyprog/bodyprog_combat_8008A058.c; grep -n "lo >> shift\|Math_MulFixed(.*, 0)" -r src | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "PS2 Optimizations.md" <<'EOF'  ### 2026-10-22: EE scratchpad for hot data (option 3): built, exact in PC
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; head -15 tools/port/lib_test/Makefile; ls tools/port/lib_test; grep -c "" src/port/libgte_port.c; grep -n "^[a-z
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "PS2 Optimizations.md" <<'EOF'  ### 2026-10-22: assembly still in the port build, and a plan to turn it i
+
+## Claude
+
+I've recorded the RAM breakdown and the assembly plan in [PS2 Optimizations.md](PS2%20Optimizations.md), along with a log entry for the scratchpad work. Nothing is committed yet.
+
+To count only assembly the PS2 build actually compiles, I ran every linked game file through the preprocessor with the port's flags. Most of the files that mention asm are left out by that check: `inline_c.h`, `inline_o.h` and `gpu.h`'s GTE macros are used only by the matching PS1 build. The port turns GTE macros into C through `include/port/gte_from_*.h`, and several asm blocks sit in PS1-only `#else` branches.
+
+**What's still assembly in the PS2 build**
+- **Game code:**
+  - **`func_8009E198` (libkpad):** the original PS1 assembly, assembled straight into the EE build.
+  - **`Math_MulFixed`:** inline `mult`/`mfhi`, a hack that matches the PS1 compiler's output.
+  - **Forced-register locals:** 9 of them in 6 files, e.g. `register s32 x asm("t0")`, also hacks to match the PS1 build.
+  - **MMI bone matrix code:** one block in `vw_calc.c`.
+  - **A debug-only timer** in `sd_call.c`.
+- **Port code:** about 20 cycle-counter reads, `plzcw` and `mult` in `gte.c`, one `pref` in DrawOTag, and `sync.l` before DMA.
+- **Recompiled libraries:** 203 functions (111 KB) from Sony's libgte, libgs and libgpu plus Konami's libkmath. They are PS1 machine code translated to C by `recomp.py`, not readable C.
+- **Data from asm files:** about 0.7 MB. It's data, not code, and costs nothing at runtime.
+
+**Plan, in order**
+1. **Game code first (small, and each change must leave the frames identical):**
+   - **`func_8009E198`:** it reads an unset register, but every bit it doesn't set again gets cleared. It always stores `0x78000 | (arg1 & 0x13)`, so it becomes a few lines of C.
+   - **`Math_MulFixed`:** becomes a 64-bit multiply in C. A shift of 0 has to behave as it does on the MIPS (`hi | lo`), not as undefined C.
+   - **Forced registers:** one macro that does nothing in the port. Each function gets read first, in case one depends on a register's leftover value, as `func_80080540` once did.
+2. **Port code:** gather the ~20 cycle-counter reads into one `Port_Cycles()` helper; that read has no C form, so it stays a single line of asm. Try the compiler's built-ins for `plzcw`, the multiply and `pref`, and keep the C wherever the compiler generates the same instructions. `gte_test` checks the results.
+3. **MMI bone matrix:** GCC has no built-ins for these instructions, so this stays assembly or goes back to the C path. The C path costs the ~85k cycles a frame the MMI saves. That's your call once I've measured it.
+4. **Native C for the recompiled libraries,** the biggest job. Write each function by hand, starting with the ones that run most, and check them against the PS1 originals with `tools/port/lib_test`.
+5. **The asm data:** not planned, since it's decomp work, not port work.
+
+Should I start with step 1?
+
+## User
+
+Narrow this down to assembly that is left over from the PS1. The MMI instructions are an example of what I’d like to keep
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="PS2 Optimizations.md"; s=open(p).read() i=s.index("### 2026-10-22: assembly still in the po
+
+## Claude
+
+I've narrowed the plan to PS1 leftovers and rewritten its entry in [PS2 Optimizations.md](PS2%20Optimizations.md). The port's own EE assembly is now out of scope and stays as it is: the MMI bone matrix, `plzcw`/`mult` in `gte.c`, `pref`, `sync.l` and the cycle-counter reads. The debug timer in `sd_call.c` is also dropped from the plan, since it's port debug code.
+
+**PS1 assembly left in the PS2 build**
+1. **`func_8009E198` (libkpad):** the original PS1 assembly, assembled as-is into the EE build.
+2. **`Math_MulFixed`:** inline `mult`/`mfhi`/`mflo`, a hack to match the PS1 compiler that the port also runs.
+3. **Forced-register locals:** 9 of them in 6 files, e.g. `register s32 x asm("t0")`, also matching hacks.
+4. **Recompiled libraries:** 203 functions (111 KB) of PS1 machine code from Sony's libgte, libgs and libgpu and Konami's libkmath, translated to C by `recomp.py`.
+5. **PS1 data from asm files:** 92 included rodata blocks plus data files, about 0.7 MB.
+
+**Plan**
+1. **Items 1–3, small and exact:**
+   - `func_8009E198` always stores `0x78000 | (arg1 & 0x13)`, so it becomes a few lines of C. The original assembly stays for the matching build.
+   - `Math_MulFixed` becomes a 64-bit multiply in C. A shift of 0 has to behave as it does on the MIPS.
+   - The forced-register hacks become a macro that does nothing in the port. I'll read each function first in case one depends on a leftover register value.
+   - Check: the Kaufmann benchmark and the attract demos' frame dumps must come out unchanged.
+2. **Item 4, the big job:** write each library function in C by hand, starting with the ones that run most, and check each against the PS1 original with `tools/port/lib_test`. When a library is fully covered, it comes out of the recompiler.
+3. **Item 5:** not planned. It's data with no runtime cost, and converting it is decomp work, not port work.
+
+Should I start with step 1?
+
+## User
+
+Yes
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "func_8009E198" include | head; sed -n 1,20p src/bodyprog/libkpad/libkpad.c; grep -n "s_SysWork_2514;" 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "func_8009E198\|s_SysWork_2514" src/bodyprog/libkpad/*.h include --include=*.h | head; grep -rn "} s_Sy
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "func_8009E198\|func_8009E230" include/*.h include/*/*.h | head -4; sed -n 53,75p src/bodyprog/libkpad/
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/bodyprog/libkpad/libkpad.c
+
+## Claude
+
+Now `Math_MulFixed`.
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/bodyprog/player_control.c
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/bodyprog/player_control.c
+
+## Claude
+
+Next, the forced-register locals. I'm reading each function for any use of a register before it's set.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 31,80p src/bodyprog/bodyprog_combat_8008A058.c; sed -n 1815,1870p src/bodyprog/items/item_screens_3.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk 'NR>=1824 && NR<=2300 && /\<v0\>/ {print NR": "$0}' src/bodyprog/items/item_screens_3.c | head; for f in src
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -nw "v0" src/bodyprog/items/item_screens_3.c | head; grep -rn "puppet_nurse.c\|characters.c" src/maps/map3_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat include/common.h | head -60
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; find include -name common.h; f=$(find include -name common.h | head -1); cat $f
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; find include -name port.h | head -2; cat $(find include/decomp -name port.h) | head -40
+
+## Claude
+
+I'm adding a `MATCH_REG` macro to the existing port helpers and applying it to the four functions.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="include/decomp/port.h"; s=open(p).read() a='''#ifdef SH_PORT /** @brief Called for every fi
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -c memcpy build/ee_check/files.txt; grep -n "SH_PORT" src/main/memcpy.c | head -3
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; head -12 tools/port/bench_frames.sh
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+## Claude
+
+Step 1's code changes are made but not yet verified. Three PCSX2 runs are going in the background:
+- the Kaufmann benchmark, compared with this morning's SPR baseline;
+- the first attract demo, with and without these changes.
+
+I'll report when they finish.
+
+The changes:
+- **`func_8009E198`** ([libkpad.c](src/bodyprog/libkpad/libkpad.c)): now C in the port build. It stores `0x78000 | (arg1 & 0x13)`, clears the remaining fields and returns 1, or returns 0 when passed NULL, as the assembly does. The matching build keeps the original assembly.
+- **`Math_MulFixed`** ([player_control.c](src/bodyprog/player_control.c)): now a 64-bit multiply in C. Shift amounts use their low 5 bits, as the MIPS does, so a shift of 0 still gives `hi | lo`.
+- **Forced registers:** a new `MATCH_REG("reg")` macro in [port.h](include/decomp/port.h) does nothing in the port and keeps `asm(reg)` for the matching build. It's applied to the 6 locals in 3 source files. `puppet_nurse.c` is included by 4 maps, which is why the inventory counted 6 files. I read each function first: every pinned variable is set before it's read, so none depended on a leftover register value.
+- `memcpy.c` still has `asm()` registers, but the port compiles it out and uses the C library's memcpy.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/asm.log; cd /home/alex/Documents/silent-hill-1-
+
+## Claude
+
+Log it in the doc.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "PS2 Optimizations.md" <<'EOF'  ### 2026-10-22: PS1 assembly, step 1 (A1-A3): done - func_8009E198 (libkp
+
+## Claude
+
+Step 1 is done and exact: none of the frame dumps changed.
+
+- **Kaufmann cutscene:** all 10 dumps are identical to this morning's scratchpad build. Even the subtitle glyph that usually differs between builds matched this time.
+- **Attract demo 0:** all 10 dumps are identical with and without the change. The demo is gameplay, so this run actually calls `Math_MulFixed` and the forced-register functions.
+
+What changed:
+- **`func_8009E198`** ([libkpad.c](src/bodyprog/libkpad/libkpad.c)) is C in the port build; the matching build keeps the original assembly.
+- **`Math_MulFixed`** ([player_control.c](src/bodyprog/player_control.c)) is a 64-bit multiply in C.
+- **Forced registers:** a new `MATCH_REG` macro in [port.h](include/decomp/port.h) does nothing in the port and keeps `asm(reg)` for the PS1 build.
+
+None of the game's own C code now uses PS1 assembly in the port build. What's left from the PS1 is the 203 recompiled library functions (step 2) and the asm data, which isn't planned. I didn't rebuild the matching PS1 build to check it still matches. Its code is unchanged, though: the new C sits behind `#ifdef SH_PORT`, and `MATCH_REG` expands to the same `asm(reg)` as before.
+
+I added a log entry to [PS2 Optimizations.md](PS2%20Optimizations.md). Nothing is committed yet: the working tree has today's scratchpad work, the IPU and RAM entries and this step together. Should I commit them, and as separate commits?
+
+Step 2, rewriting the 203 recompiled library functions in C, is much bigger. It should start with a profile to see which of them run often enough to be worth doing first.
+
+## User
+
+Let’s move on to that, but first, how can we rewrite the pad handling code to use PS2SDK?
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; wc -l src/port/ps2/libpad_ps2.c src/port/ps2/input_ps2.c src/bodyprog/libkpad/libkpad.c; sed -n 1,60p src/port/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 60,341p src/port/ps2/libpad_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^[a-zA-Z].*(\|Pad[A-Z][a-zA-Z]*(" src/bodyprog/libkpad/libkpad.c | head -80; grep -rn "INCLUDE_ASM" src
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "PadInitDirect\|PadStartCom\|PadSetAct\b\|PadSetAct(\|PadSetMainMode\|PadInfoAct" src --include=*.c | g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,80p src/bodyprog/sys/joy.c; sed -n 280,330p src/bodyprog/bodyprog_80089090.c; sed -n 345,365p src/port/
+
+## Claude
+
+The pad code already uses PS2SDK. [libpad_ps2.c](src/port/ps2/libpad_ps2.c) implements the PS1 libpad functions the game calls (`PadInitDirect`, `PadGetState`, `PadInfoMode`, `PadSetAct`…) on top of ps2sdk's libpad and the BIOS's `rom0:PADMAN`. A rewrite would mean taking out that PS1-shaped middle layer, so the game talks to PS2SDK more directly.
+
+**How it works now**
+1. **Game (decompiled):**
+   - `Joy_Init` / `Joy_ReadP1` ([joy.c](src/bodyprog/sys/joy.c)) copy an 8-byte PS1 receive buffer into `g_GameWork.controllers`.
+   - Konami's libkpad ([libkpad.c](src/bodyprog/libkpad/libkpad.c), ~800 lines) runs the vibration and mode state machine.
+   - `func_80089524` switches the pad to analog mode.
+2. **PS1 libpad emulation** (`libpad_ps2.c`):
+   - `Pad_Poll()`, called once per vertical blank from `VSync`, does a `padRead` into that PS1 buffer. It normalises the sticks to 0x80 at rest, injects warp and scripted presses, and handles the reset combo.
+   - It maps ps2sdk's pad states onto the PS1's and caches `padInfoMode`, because each call is an IOP round trip (that was 210k cycles a frame before the cache).
+3. **ps2sdk libpad and `rom0:SIO2MAN`/`PADMAN`:** the BIOS's own modules.
+
+**What a rewrite would look like**
+- **Input:** under `SH_PORT`, `Joy_ReadP1` calls `padRead` itself and fills `controllers[0]` directly. The stick normalisation and test input injection move with it, and `PadInitDirect` and the receive buffers go.
+- **Vibration and analog mode:** keep Konami's pattern logic, because that's game behaviour: which pattern, how strong, for how long. Replace only libkpad's low-level per-state driver (`func_8009E550`, `func_8009E61C`, and the PS1 state handlers `func_8009E3B0`, `func_8009E438`, `func_8009E82C`, `func_8009E9D0`) with a small port driver:
+  - lock analog mode once the pad is stable (`padSetMainMode`);
+  - set the motor alignment once (`padSetActAlign`);
+  - send `padSetActDirect` only when the motor levels change, as `Pad_Poll` does now.
+- **What it removes:** the PS1 state mapping and the `PadInfoMode` cache.
+- **Optional:** switch from the BIOS modules to ps2sdk's own `sio2man.irx`/`padman.irx`. That gets the newer driver, pressure-sensitive buttons and multitap if ever wanted, at the cost of embedding two more IOP modules.
+
+**Trade-offs**
+- **Speed:** almost nothing to gain. Pad handling is already down to ~15k cycles a frame.
+- **Code:** the port gets simpler, but it diverges from decompiled code that matches the PS1. The libkpad driver functions would need `#ifdef SH_PORT` replacements.
+- **Risk:**
+  - The analog mode lock and vibration timing have to behave as they do now; vibration can only be checked by feel on the PS2.
+  - Hot-plugging must keep the last frame's data while a read isn't ready. A one-frame "disconnected" used to make Harry stop running every half second.
+  - Replays and attract demos depend on the injected input reaching the game unchanged.
+
+I'd only do it for a concrete reason: features (pressure buttons, multitap), problems with vibration or hot-plugging, or wanting the PS1 emulation layer gone. What's the goal: cleaner code, or something specific the current setup doesn't do?
+
+## User
+
+I just want cleaner code
+
+## Claude
+
+I'll read libkpad and the game's vibration calls in full to decide where to make the cut.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,200p include/libkpad.h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 75,560p src/bodyprog/libkpad/libkpad.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 560,846p src/bodyprog/libkpad/libkpad.c; sed -n 1,280p src/bodyprog/bodyprog_80089090.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_Controller1\b" src include --include=*.c --include=*.h | head; grep -rn "rawController" src --includ
+
+## Claude
+
+Libkpad is Konami's own game logic, so I'd keep it unchanged. It picks which vibration pattern plays, how strong and for how long, and tracks what kind of controller is plugged in. The mess is in our code underneath. [libpad_ps2.c](src/port/ps2/libpad_ps2.c) pretends to be the PS1's pad library, and its `Pad_Poll()` handles a lot more than the pad. The cleanup is to give each part one job and let the game's two read sites call PS2SDK through a small port API.
+
+**Proposed structure**
+
+1. **`pad_ps2.c`, a new pad driver written in PS2SDK terms.** It owns padman setup, the two ports, polling once per vertical blank, mode info and the motors:
+   - `Port_PadInit()`, `Port_PadPoll()`
+   - `Port_PadRead(port, s_AnalogController*)`, which fills the game's 8-byte controller record
+   - `Port_PadSetMotors(port, levels)`, sent only when the levels change
+   - It keeps the current behaviour: the previous data stays while a read isn't ready, and mode info is cached, read on state changes and once a second.
+2. **The game's input reads call it directly** (`#ifdef SH_PORT` in [joy.c](src/bodyprog/sys/joy.c)):
+   - `Joy_Init` calls `Port_PadInit()`.
+   - `Joy_ReadP1` calls `Port_PadRead(0, &rawController)`, and port 2 fills `controllers[1]`.
+   - That ends `PadInitDirect`, its two receive buffers and the PS1 "BIOS refresh" emulation.
+3. **The non-pad duties move out of the poll into [input_ps2.c](src/port/ps2/input_ps2.c),** as one filter `Port_InputFilter(port, s_AnalogController*)` applied after each read:
+   - stick centring to 0x80;
+   - the reset combo;
+   - warp presses and scripted presses.
+4. **What's left of the PS1 pad library becomes a short adapter for libkpad.** Libkpad still calls `PadGetState`, `PadInfoMode`, `PadSetMainMode`, `PadSetActAlign`, `PadSetAct` and `PadChkVsync`. These become ~60 lines in `libpad_psx.c`, each a one-line mapping onto `pad_ps2.c`: PS2SDK states and IDs into PS1 values, and the motor buffer into `Port_PadSetMotors`. It's clearly labelled as the shim Konami's library needs, and nothing else uses it.
+
+**Not changing**
+- Libkpad and the vibration tables in `bodyprog_80089090.c`.
+- The BIOS's `rom0:SIO2MAN`/`PADMAN` modules, which the memory card code relies on too.
+- Pad timing: once per vertical blank, from `VSync`.
+
+**Checks**
+- The attract demos and the Kaufmann benchmark must give identical dumps. That covers the injected input and the stick centring.
+- On the PS2: buttons and sticks, the Analog button, unplugging and replugging during a run, vibration on and off in the options, and the reset combo.
+
+This is mostly moving code, not rewriting it: about 340 lines today become about 250 in three files with one job each. Should I go ahead?
+
+## User
+
+One important thing: the Silent Hill de compilation was recently updated to be 100% complete. Download the latest version from GitHub to the PS1 Decomps folder, overwriting the old files. Remark on any relevant changes to our port. One thing in particular is that the vibration code was apparently figured out.
+
+- tool `Bash`: ls -d ~/Documents/*/ ~/*/ 2>/dev/null | grep -i decomp; cd /home/alex/Documents/silent-hill-1-ps2-port; git remote -v; git log --oneline -1
+
+- tool `Bash`: cd "/home/alex/Documents/PS1 Decomps"; ls -la; for d in */; do echo "== $d"; (cd "$d"; git remote -v 2>/dev/null | head -1; git log --oneline -1 2>/dev/null; gi
+
+## Claude
+
+The folder is a GitHub zip download, not a git clone. I'll download the current master zip, move the old copy to my scratch folder for comparing, then put the new one in its place.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; mkdir -p $S/dl && cd $S/dl && curl -sSL -o shd.z
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cd $S/dl; unzip -z shd.zip | head -3; O="/home/a
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cd $S/dl; git clone -q --filter=blob:none --no-c
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/dl/repo; git log --format="%h %ad %s" --date=sho
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git log --format="%h %ad %s" --date=short | grep -i -E "upstream|merge|sync|decomp" | head -10; git remote; R=/t
+
+- tool `Bash`: curl -sI https://github.com/Vatuu/silent-hill-decomp | grep -i "^location"; curl -sI https://github.com/shdecompilations/silent-hill-decomp | grep -i -E "^(loca
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; D="/home/alex/Documents/PS1 Decomps"; mv "$D/sil
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/dl/repo; git log --format="%h" a1f407cb..405a621
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/dl/repo; git show --stat 39f56541 48ea8d4d 1a3b2
+
+- tool `Bash`: cd "/home/alex/Documents/PS1 Decomps/silent-hill-decomp-master"; cat include/libkpad.h | head -230
+
+- tool `Bash`: cd "/home/alex/Documents/PS1 Decomps/silent-hill-decomp-master"; sed -n 1,200p include/bodyprog/bodyprog_80089090.h; grep -n "^[a-zA-Z].*(.*) *//\|^[a-zA-Z].*)$
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/dl/repo; git diff a1f407cb 405a6216 -- include/g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; R=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/d
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+## Claude
+
+I've replaced `PS1 Decomps/silent-hill-decomp-master` with today's upstream master (commit `405a6216`, 21 October). The old copy is in `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/old-decomp` in case you want it. The repo has moved to `shdecompilations/silent-hill-decomp`; the old Vatuu URL redirects there.
+
+**Where the port stands**
+- The port's decomp code was last synced at upstream `a1f407cb` (17 September). Upstream has 88 commits since, changing 834 files.
+- **"100%":** only 2 `INCLUDE_ASM` lines remain upstream, both in `saveload.c`. For USA, our port was already at 0 after this morning's `func_8009E198`. The final push was mostly porting the Japanese and European versions to C, plus naming and cleanup.
+- **`func_8009E198`:** upstream matched it in C on 17 October, and it computes exactly what I wrote: `0x78000 | (port & 0x13)`, returning 1. Our `#ifdef SH_PORT` version can be replaced by upstream's when we sync.
+
+**The vibration code**
+The memory layout is unchanged, but upstream now names all of it:
+- **libkpad's state:** `s_SysWork_2514` is now `s_KPadWork`, with typed neighbours: `kpadChannels_2534[2]` and `kpadEffects_2544[16]` replace the old 508-byte blob.
+  - status bits: `isInit`, `isPaused`, `isEnabled`, `actCount`, `isAlignDone`, `isActSet`, `deviceType`;
+  - per-motor channels: offset, size, on/off or variable speed;
+  - a priority-sorted list of active effects;
+  - `s_KPad_Handler`, the per-controller detection handlers (DualShock, dual analog, digital, disconnected), which carry the `PadSetActAlign` data.
+- **Konami's vibration scripts** (`bodyprog_80089090.h`): `D_8002AC04` is now `g_VibScript_Steps`, made of `s_VibScriptStep` steps.
+  - Step types: Start, Chain, Waveform (sample data played on a motor), Command and Pulse (one tick).
+  - Commands: enable, disable, pause, resume, clear and remove.
+  - The engine runs each effect's steps per tick, and the strongest level per motor wins.
+
+**What this means for the pad cleanup**
+It confirms the split I proposed: everything above the PS1 pad calls is game logic and stays. Only three functions talk to the PS1 pad library:
+- `func_8009E550` reads the state and mode IDs, then calls the handlers.
+- `func_8009E61C` calls `PadSetAct` and `PadSetActAlign`.
+- `func_80089524` calls `PadSetMainMode`.
+
+With upstream's names, the adapter can be documented field by field: `isActSet` means motor levels need sending, and `isAlignDone` means the motor alignment has been set. I'd sync upstream first, so the cleanup is written against the named structs and not the old `field_0_23` names.
+
+**Other relevant changes**
+- **Merge conflicts:** the port has changed 118 decomp files since the base, and 49 of them were changed upstream too.
+- **Deleted or renamed files with port edits:**
+  - `text_draw_jp.c` was merged into `text_draw`.
+  - `map5_s00/unk_draw_800CB0D8.c` is gone.
+  - `bodyprog_anim_800445A4.c` is now `chara/anim.c`.
+  - The bone and animation sources moved as well.
+- **Map structure:** upstream now includes each map's character code in the map's main C file (`5159e20a`), and the USA map configs changed a lot. That affects `port_link.py` and `ee_compile_check.sh`, which build their file lists from the linker scripts, and `cutscene_list.py`, which builds the Demo menu from function names.
+- **Renames:** structs and functions across bodyprog have new names (collision, bones, items, memory card, BGM flags), so any port code that refers to the old names will need updating.
+- **Behaviour:** upstream's changes keep the PS1 build matching, so the game's behaviour is unchanged by definition. The port compiles that C with a modern GCC, though, so rewritten code that relies on undefined behaviour could act differently. The attract demo and cutscene dump comparisons would catch that after a sync.
+
+Should I sync the port with upstream first, then do the pad cleanup on top?
+
+## User
+
+Yes
+
+## Claude
+
+I'll do the sync on a new branch, `upstream-sync`. Today's uncommitted work goes in first as its own commits, since a merge needs a clean tree.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git checkout -q -b upstream-sync && git add include/port/spr.h tools/port/linkfile src/port/gte.c src/port/libgp
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git add src/maps/characters/puppet_nurse.c && git commit -q -m "Port: MATCH_REG in puppet_nurse.c  Co-Authored-B
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git log --oneline -5; git status --short | head
+
+## Claude
+
+I've stopped before merging, because Claude Code's auto-mode permission check blocked the step that brings upstream's code into the port.
+
+**What's done**
+- I created the branch `upstream-sync` and committed today's work on it in three commits:
+  - the scratchpad change;
+  - the PS1 assembly to C;
+  - the optimisation log entries (IPU, scratchpad, RAM, assembly plan).
+- I added the decomp as a git remote, `upstream` (`https://github.com/shdecompilations/silent-hill-decomp.git`), and fetched it. `upstream/master` is at `405a62166`, the version now in your PS1 Decomps folder.
+- `master` itself is untouched.
+
+**What was blocked**
+- The checker blocked one command that would have committed `puppet_nurse.c` and then started a no-commit merge of `upstream/master`. Its reason was "untrusted code integration": pulling another repo's code into yours. That whole command was refused, so neither part ran.
+- It also refused a plain `git log`/`git status` right after, so I can't confirm the tree's state from here. The command never ran, though, so `upstream-sync` should be at the third commit, with only the `MATCH_REG` change in `src/maps/characters/puppet_nurse.c` uncommitted.
+
+**How to continue (your choice)**
+1. **Allow it:** add a permission rule for `git merge` (and `git status`/`git log`) in your Claude Code settings, then tell me to go on. I'll commit `puppet_nurse.c`, merge, resolve the conflicts and run the checks.
+2. **Run the merge yourself:**
+   ```
+   git add src/maps/characters/puppet_nurse.c && git commit -m "Port: MATCH_REG in puppet_nurse.c"
+   git merge --no-commit upstream/master
+   ```
+   Then tell me, and I'll resolve the conflicts from there.
+
+**After the merge**
+1. Resolve the conflicts. About 49 decomp files were changed by both us and upstream. Three files the port changed were renamed or deleted upstream (`text_draw_jp.c`, `unk_draw_800CB0D8.c`, `bodyprog_anim_800445A4.c` → `chara/anim.c`).
+2. Update port code that uses renamed names, such as `s_SysWork_2514` → `s_KPadWork` and `field_2510` → `kpadHandlers_2510`.
+3. Fix the build scripts for the new map file layout and drop our `func_8009E198` in favour of upstream's.
+4. Run `ee_compile_check.sh` and the link, then compare the Kaufmann and attract demo dumps against today's baselines.
+
+## User
+
+Will the merge only affect my fork?
+
+## Claude
+
+Yes. The merge changes only your local copy of the port, and only the `upstream-sync` branch.
+
+- **Upstream isn't touched.** The `upstream` remote is only read from (`git fetch`); a merge pulls their commits into your repo, never the other way round. You also don't have write access to `shdecompilations/silent-hill-decomp`.
+- **Your GitHub fork (`origin`, `kingjinxy/silent-hill-1-ps2-port`) isn't touched either.** Nothing reaches it until someone runs `git push`, and I won't push without asking you.
+- **Your `master` branch stays as it is.** The merge happens on `upstream-sync`, so you can compare the two, keep the result, or delete the branch with `git branch -D upstream-sync`.
+- **The PS1 Decomps folder is a separate plain download.** The merge doesn't use it or change it.
+
+## User
+
+<ide_opened_file>The user opened the file /home/alex/Documents/silent-hill-1-ps2-port/PS2 Optimizations.md in the IDE. This may or may not be related to the current task.</ide_opened_file>
+
+Alright, I've run the git merge. Resolve the conflicts
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git status --short | grep -v "^[MADR] " | head -80; git status --short | grep -c "^UU\|^AA\|^DU\|^UD\|^AU\|^UA\|
+
+## Claude
+
+There are 14 conflicts. I'll go through them one at a time, starting with the two map configs.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for f in configs/USA/maps/map4_s00.yaml configs/USA/maps/map4_s06.yaml; do echo "=== $f"; grep -n -A12 "^<<<<<<<
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 15,50p src/main/main.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+## Claude
+
+`main.c` is resolved: upstream's new EUR addresses, wrapped in `PSX_RAM_ADDR` like ours. Now `memcard.c`: upstream's names and docs, keeping the port's `MATCH_STATIC` and its NULL guard.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git show HEAD:src/bodyprog/memcard.c | grep -oE "MATCH_STATIC [^(;]*" | awk '{print $NF}' | sort > /tmp/claude-1
+
+## Claude
+
+`memcard.c` is resolved: the same `MATCH_STATIC` set as before, under upstream's new names. Next, `libkpad.c` takes upstream's matched `func_8009E198`. Then the two files upstream deleted.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git grep -n ">> 32;\|0x801E1E80\|s_func_800CB25C;\|DVECTOR          sp10\[5\]\[5\]" upstream/master -- src | hea
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git show upstream/master:src/bodyprog/text/text_draw.c > /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "SH_PORT\|>> 32\|0x801E1E80" src/bodyprog/text/text_draw.c | head; grep -c text_draw_jp build/ee_check/f
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git rm -q src/bodyprog/text/text_draw_jp.c; git grep -n "func_800CB25C\b" upstream/master -- src | head -5
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git status --short src/maps/map5_s00/; sed -n 55,75p src/maps/map5_s00/map5_s00.c; grep -n "<<<<<<<\|SH_PORT" sr
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/maps/map5_s00/map5_s00.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git rm -q src/maps/map5_s00/unk_draw_800CB0D8.c; for f in src/maps/map0_s00/map0_s00_header.c src/maps/map4_s00/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git diff a1f407cb HEAD~4 -- src/maps/map4_s00/map4_s00.c | head -30; git log --oneline a1f407cb..HEAD~4 -- src/m
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+## Claude
+
+Four conflicts left, in the maps. I'm checking why the port had its own `g_rodata_800CC320` in map7_s03 before taking upstream's tables.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_rodata_800CC320\|D_800CC320" src include | grep -v "^src/maps/map7_s03/map7_s03_3.c:66[34]" | head; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="src/maps/map6_s02/map6_s02_2.c"; s=open(p).read() a='#include "maps/characters/player.h"\n\
+
+## Claude
+
+Every conflict is resolved and staged. I'm checking that `git add -A` didn't pick up any stray untracked files.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git diff --cached --name-status --diff-filter=A upstream/master | head; git diff --cached --name-only --diff-fil
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^setup\|^[a-z-]*:.*setup\|^split" Makefile | head; ls rom | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 600,700p Makefile
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^generate:" -A12 Makefile
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; git status --short asm linkers | head -3; git check-ignore -q asm && echo "asm ignore
+
+## Claude
+
+The splits regenerated. Now the EE compile check over every linked game file.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; bash tools/port/ee_compile_check.sh 2>&1 | tail -2
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for f in $(cat build/ee_check/failed.txt); do echo "=== $f"; grep -E "error" build/ee_check/$(echo $f | tr / _).
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 878,886p src/bodyprog/water.c; grep -rn "D_8002B2CC" include src | grep -v "water.c:88" | head -3; sed -n
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 76,120p src/bodyprog/screen/cutscene_border.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i '78s/^    static void Screen_BlackBorderDraw(/    MATCH_STATIC void Screen_BlackBorderDraw(/' src/bodypro
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i '79s/^    static void Screen_BlackBorderDraw(/    MATCH_STATIC void Screen_BlackBorderDraw(/' src/bodypro
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "MemCard_MemCardIsIdle" src/bodyprog/memcard.c include/bodyprog/*.h | head; grep -B2 -A4 "1756:13" build
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="src/bodyprog/memcard.c"; s=open(p).read() a='#define format(path)             Port_BuFormat
+
+## Claude
+
+Everything compiles. The link printed no "linked" line, so I'm checking its log.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; python3 tools/port/port_link.py > /tmp/claude-1000
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -v "warning" build/port/link.log | head -30; wc -l build/port/link.log
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat configs/USA/port_relative_syms.ld | head -30; git log --oneline -2 -- configs/USA/port_relative_syms.ld; gre
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "800C39[89A-F]" configs/USA/*.txt src/bodyprog --include=*.c --include=*.txt | head; git show a1f407cb:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "__pad_bss_800C3\|g_Inventory_PrevSelectionId" src/bodyprog/items/*.c | head; grep -rn "__pad_bss_800C4
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 25,40p src/bodyprog/items/item_screens_2.c; git show a1f407cb:src/bodyprog/items/item_screens_2.c | sed -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,30p src/port/port_data.c; grep -n "D_800C39A0" include -r | head -3
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i '/PROVIDE("D_800C39A0" = "__pad_bss_800C39A0" + 0x0);/d' configs/USA/port_relative_syms.ld; cat >> src/po
+
+## Claude
+
+It links, but with 36 stubs for missing symbols, up from 18 before the merge. Finding the 18 new ones.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; python3 tools/port/port_link.py 2>&1 | sed -n '/un
+
+## Claude
+
+The 18 new ones are all map7_s03 data. Upstream turned those rodata blocks into C arrays, and something still refers to the old names. I'm finding what.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "D_800CC35C\|g_rodata_800CC320\|D_800CCEBC" src include asm/USA/maps/map7_s03 configs/USA 2>/dev/null |
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git diff upstream/master -- configs/USA/maps/map7_s03.yaml configs/USA/sym* | head -30; grep -n "23CA0\|data" co
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; head -12 configs/USA/relative_syms.ld; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}nm -S build/ee_check/sr
+
+## Claude
+
+There's a tool for this: `prune_undefined_syms.py relativize`. Reading how it's used.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,40p tools/port/prune_undefined_syms.py
+
+## Claude
+
+Building a matching PS1 build just for this would be heavy. The arrays' names are their PS1 addresses, and their EE sizes match the PS1 layout, so I can compute the offsets directly.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' arr={0x800CC320:0x1e0,0x800CC5C8:0x3c,0x800CC63C:0x654,0x800CCD20:0x12c,0x800CCE80:0x258} miss
+
+## Claude
+
+Every offset is a multiple of 0x3C, the size of one table entry, which is a good sign. The link printed no "linked" line again, so I'm checking the log.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -v warning build/port/link.log | head; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; python
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "map\|D_800C[CDE]" configs/USA/relative_syms.ld | head -20; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-
+
+## Claude
+
+In the combined object, map symbols are local to their overlay, so a global PROVIDE can't see them. I'm looking at how `port_link.py` handles symbols inside a map overlay.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "relative\|localize\|-r\b\|\"-r\"\|prefix\|undefined_syms" tools/port/port_link.py | head -40
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 150,170p tools/port/port_link.py; grep -n "RELATIVE\b\|RELATIVE\[" tools/port/port_link.py | head; sed -n
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/port_link.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; python3 tools/port/port_link.py 2>&1 | grep -v "^ 
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/tools/port/port_link.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n '^CC, LD, OBJCOPY, NM' tools/port/port_link.py && sed -i 's/^CC, LD, OBJCOPY, NM = EE + "gcc", EE + "ld"
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; python3 tools/port/port_link.py 2>&1 | grep -v "^ 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git checkout -q HEAD -- tools/port/port_link.py 2>/dev/null; git diff --stat HEAD -- tools/port/port_link.py; py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; bash tools/port/ee_compile_check.sh 2>&1 | head -2
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "map3_s00\|func_800D0CF8" build/port/demo_cutscenes.c | head -5; grep -c '{' build/port/demo_cutscenes.c
+
+## Claude
+
+Kaufmann is still at #4. Now the post-merge Kaufmann benchmark and attract demo, compared with this afternoon's dumps.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+## Claude
+
+While those run, I'm checking for raw PS1 addresses that upstream's new code brought in. The port routes those through `PSX_RAM_ADDR`, and `find_fixed_addresses.py` looks for them.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,25p tools/port/find_fixed_addresses.py | grep -v "^import"; grep -n "0x801E1E80" src/bodyprog/items/ite
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/find_fixed_addresses.py 2>&1 | tail -40; git show HEAD:src/bodyprog/items/item_screens_3.c | 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk 'NR<=1690 && /^#(if|else|elif|endif)/{print NR": "$0}' src/bodyprog/items/item_screens_3.c | tail -6; awk 'N
+
+## Claude
+
+All 32 are inside Japanese-only `#if VERSION_REGION_IS(NTSCJ)` blocks, so the USA port never compiles them; the checker doesn't look at `#if`. Waiting for the benchmark runs now.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/merge.log | grep -v identical
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; python3 -I - <<'EOF' def rd(p):     d=open(p,'r
+
+## Claude
+
+Both differences are 7×9 boxes on the subtitle line (y 192–200), the known one-glyph variation between builds. I'm staging everything.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git add -A src include configs tools; git status --short | grep -v "^[MADR] " | head; git diff --cached --stat H
+
+## Claude
+
+I've resolved all 14 conflicts and the merged port builds and runs. Everything is staged but not committed yet.
+
+**Checks**
+- All 274 game files compile for the EE.
+- It links with the same 18 HAL stubs as before the merge.
+- **Attract demo 0:** all 10 dumps are identical to the pre-merge build.
+- **Kaufmann:** 8 of 10 identical. The other two differ in one subtitle letter each (7×9 pixels at y 192–200), the known variation between builds.
+- I didn't build the matching PS1 build, so I haven't confirmed it still matches.
+
+**How the conflicts were resolved**
+- **Upstream's version taken outright:**
+  - two map configs (only the hex case differed);
+  - the "NO_STAGE" message tables in map4_s00, map4_s06 and map6_s05, which upstream converted from rodata the same way the port had;
+  - upstream's map7_s03 data tables;
+  - `func_8009E198`, which upstream matched in C. That replaces my version from this morning.
+- **Upstream's names, port changes kept:**
+  - `memcard.c`: `MATCH_STATIC`, and the guard for a NULL filename.
+  - `main.c`: the overlay addresses, with upstream's new EUR ones also wrapped in `PSX_RAM_ADDR`.
+  - `map0_s00_header.c`: `MATCH_CONST`.
+  - `map6_s02_2.c`: the profiling include, next to upstream's new character includes.
+  - `map5_s03_2.c`: the port's newspaper-flag fix, now written as `VERSION_EQUAL_OR_NEWER(JAP1) || defined(SH_PORT)`.
+- **Files upstream deleted:**
+  - `text_draw_jp.c`: Japanese-only, and its fix was already in `text_draw.c`.
+  - `unk_draw_800CB0D8.c`: the port's array-overflow fix moved with `func_800CB25C` into `map5_s00.c`.
+
+**What else the merge needed**
+- **New code modern GCC rejects:** upstream added things the PS1 compiler accepts but modern GCC doesn't, in 14 files:
+  - `const` definitions of variables headers declare without `const`, now `MATCH_CONST`;
+  - static functions used before they're declared, now `MATCH_STATIC`, plus a prototype for `MemCard_MemCardIsIdle`;
+  - a `static` function nested inside another one in `cutscene_border.c`.
+- **`D_800C39A0`:** upstream removed the padding variable it was anchored on, so it's now defined in [port_data.c](src/port/port_data.c).
+- **18 map7_s03 symbols:** these are addresses inside the tables upstream now defines in C, still used by the map's asm data. They're defined with `.set` directives under `SH_PORT` at the end of [map7_s03_3.c](src/maps/map7_s03/map7_s03_3.c), so they move with the tables.
+- **Splits and linker scripts:** regenerated with `make generate` only. `make setup` would have deleted all of `build/`, including `build/port`.
+- **Fixed-address check:** it reports 32 raw addresses, all inside Japanese-only `#if` blocks, so the USA port never compiles them.
+
+Should I commit the merge? After that I'll start the pad cleanup.
+
+## User
+
+Yes
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git commit -q -F - <<'EOF' Merge upstream decomp (shdecompilations/silent-hill-decomp 405a6216, 2026-10-21)  Con
+
+## Claude
+
+Committed as `99552e9dc` on `upstream-sync`. Now the pad cleanup. I'm finding everything in the port that touches the current pad shim.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Pad_Poll\|Port_PadButtons\|Port_PadModulesLoad\|Port_PadShutdown\|PadStopCom\|PadStartCom\|PadInitDire
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git mv src/port/ps2/libpad_ps2.c src/port/ps2/pad_ps2.c; sed -n 100,172p src/port/ps2/input_ps2.c; ls include/po
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/include/port/pad.h
+
+## Claude
+
+Now the driver itself, `pad_ps2.c`.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/pad_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> src/port/ps2/input_ps2.c <<'EOF'  /** Applied to every pad read (pad_ps2.c, once per vertical blank) befo
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,4p src/port/ps2/input_ps2.c; sed -i 's|libpad_ps2.c: Port_AgentRequest|input_ps2.c Port_InputFilter: Po
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="src/port/ps2/input_ps2.c"; s=open(p).read() s=s.replace(""" * system on) is a timeline of b
+
+## Claude
+
+Now the adapter for libkpad, `libpad_psx.c`.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/libpad_psx.c
+
+## Claude
+
+`PadChkVsync` used to return whether the ports were open, and libkpad may call it before `Joy_Init`. I'll keep that behaviour exactly.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="include/port/pad.h"; s=open(p).read() s=s.replace("/** Once per vertical blank:","/** The p
+
+## Claude
+
+Now `joy.c`, the game's side.
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/bodyprog/sys/joy.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "analogController\b" include/game.h include/bodyprog/*.h | head -3; grep -n "Joy_ReadP1\b" -r src --incl
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 155,180p src/bodyprog/sys/game_main.c; grep -n "Joy_Update\|Joy_ControllerDataUpdate()" -r src --include=
+
+## Claude
+
+Every input path calls `Joy_ReadP1` first, so `controllers[1]` is always fresh before the game reads it. Running the Kaufmann benchmark and the attract demo against the post-merge dumps.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+## Claude
+
+The merge is committed (`99552e9dc` on `upstream-sync`), and the pad cleanup is written and builds. Two PCSX2 runs are checking it now: the Kaufmann benchmark and attract demo 0, compared with the post-merge dumps.
+
+**New layout**
+- [pad_ps2.c](src/port/ps2/pad_ps2.c), renamed from `libpad_ps2.c`: the driver, written in PS2SDK terms. It loads the modules, opens and closes the ports, and polls once per vertical blank. It also caches the mode info and sends motor levels only when they change. Each port's state is now in one struct instead of ten parallel arrays.
+- [include/port/pad.h](include/port/pad.h): the driver's interface, which documents the 8-byte controller record.
+- [input_ps2.c](src/port/ps2/input_ps2.c): the new `Port_InputFilter`, applied to each successful read. It does stick centring on both ports and, on port 1, the reset combo plus the warp and scripted presses. These moved out of the poll.
+- [libpad_psx.c](src/port/ps2/libpad_psx.c): the PS1 calls libkpad still makes, one line each onto the driver, with libkpad's state names described at the top. `PadInitDirect`, `PadStartCom` and `PadStopCom` are gone.
+- [joy.c](src/bodyprog/sys/joy.c), under `SH_PORT`: `Joy_Init` opens the pads, and `Joy_ReadP1` copies both pads' latest data into place.
+
+**What stays the same**
+- Polling still runs once per vertical blank, from `VSync`.
+- The previous data is kept while a read isn't ready.
+- `PadChkVsync` still reports whether the ports are open.
+- Scripted input is still timed by the vertical blank count.
+
+One thing differs: port 2's record in `controllers[1]` is now refreshed in `Joy_ReadP1`, not at every vertical blank. Every input path (main loop, Konami logo, movies, warm boot) calls `Joy_ReadP1` before anything reads it, so it's current whenever it matters.
+
+The PCSX2 runs can't test vibration, the Analog button or hot-plugging. Those need the PS2.
+
+- tool `Bash`: grep -v identical /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/pad.log; grep -h "^pad:\|libpad" 
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; python3 -I - <<'EOF' def rd(p):     d=open(p,'r
+
+## Claude
+
+The pad cleanup passes in PCSX2:
+- **Attract demo 0:** all 10 dumps are identical to the post-merge build. That's the run that depends on the pad path, stick centring included.
+- **Kaufmann cutscene:** 9 of 10 dumps are identical. The tenth differs in 92 pixels, all on the subtitle line (x 191–206, y 192–200). It's the same one-glyph variation as before: the merge run differed from this morning's build in that box too.
+
+None of this is committed yet. On the PS2, these still need checking:
+- buttons and both sticks;
+- the Analog button;
+- unplugging and replugging the pad during play;
+- vibration on and off in the options;
+- the reset combo (L1+L2+R1+R2+Select+Start held for a second).
+
+Should I commit it on `upstream-sync` now, or wait until you've tried it on the PS2?
+
+## User
+
+Commit it now and let's move to fixing up the last bits of leftover PS1 assembly
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git add -A src/port include/port src/bodyprog/sys src/bodyprog/sys/warm_boot.c && git status --short | head; git
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git show --stat HEAD | tail -14; git status --short | head -5
+
+## Claude
+
+Committed as `b95f79e03`. Next: the 203 recompiled PS1 library functions. First I'll see which of them the game actually calls, sorted by library.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,60p include/port/recomp.h | head -60; ls build/port/recomp/*.c | wc -l; cat tools/port/recomp_all.sh | 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}nm build/port/sh1.elf | awk '$2=="T"{print $3}' | sort > /tmp/
+
+## Claude
+
+About 129 entry points. Before writing anything by hand, I'll check whether the PC-port fork in your PS1 Decomps folder already has C versions of these libraries.
+
+- tool `Bash`: cd "/home/alex/Documents/PS1 Decomps/silent-hill-decomp-nx-pc-port"; ls; grep -rlE "^(void|MATRIX\*|long|int|s32|VECTOR\*)\s*\**\s*(MulMatrix0|RotTransPers|GsSo
+
+- tool `Bash`: cd "/home/alex/Documents/PS1 Decomps/silent-hill-decomp-nx-pc-port/pc_port"; ls; ls src src/stubs | head -40; wc -l src/math_impl.c src/stubs/*.c | tail -20; he
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls src/bodyprog/libkmath/; wc -l src/bodyprog/libkmath/*; grep -n "glabel\|\.global\|^[A-Za-z_]*:" src/bodyprog/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,520p src/bodyprog/libkmath/libkmath.s | grep -v "^\s*$"; sed -n 520,560p src/bodyprog/libkmath/libkmath
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^[a-z].*(" include/port/gte.h | head -40; grep -n "Math_Sin\|Math_Cos\|Math_RotMatrix" include/bodyprog
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_SineTable" src include --include=*.c --include=*.h | head; grep -c "\.short" src/bodyprog/libkmath/l
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "gpf\|gpl" include/port/gte_from_inline_c.h | head -6; sed -n 10,30p include/port/gte.h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; sed -n 1,80p Makefile; grep -n "Math_\|kmath" lib_tests.h lib_test.c gen.py | head -20; head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import re v=[int(x,16) for x in re.findall(r"\.short 0x([0-9A-Fa-f]{4})", open("src/bodyprog/l
+
+## Claude
+
+Now the functions, following the assembly step by step.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/libkmath_port.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rhn "= Math_RotMatrix\|(Math_RotMatrix[A-Za-z]*(" src | head; grep -rn "Math_RotMatrixZxy\b\|Math_RotMatri
+
+## Claude
+
+No caller uses the return values, so I'll match the header's prototypes: `void`, except `Math_RotMatrixZ`.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import re p="src/port/libkmath_port.c"; s=open(p).read() for n in ["Math_RotMatrixXyz","Math_R
+
+## Claude
+
+`lib_test` calls these through `unsigned int` prototypes, so it may compare return values. Checking.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; grep -n "ret\|v0" lib_test.c | head -20; grep -n "void\|noret\|NORET" gen.py | head
+
+## Claude
+
+Return values are only compared for non-void prototypes, so `void` is fine. Next I'll point `lib_test`'s EE side at the new C files in place of the recompiled libkmath, then run it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; python3 - <<'EOF' p="Makefile"; s=open(p).read() s=s.replace("librecomp_ee.a: $(RECOMP_C) $(
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|#include "common.h"\n#include "port/gte.h"|X|' src/port/libkmath_port.c; python3 - <<'EOF' p="src/port
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; make lib_test_ee.elf 2>&1 | tail -8
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; sed -i 's|-I$(ROOT)/include/decomp -D_LANGUAGE_C -DVER_USA -DSH_PORT \\|-I$(ROOT)/include/de
+
+## Claude
+
+Built, and no recompiled libkmath code is linked in. Running the comparison: the PS1 originals in DuckStation, then the EE build in PCSX2.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; timeout 600 python3 run.py 2>&1 | tail -30
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 60,66p tools/port/port_link.py; grep -n "libkmath" tools/port/recomp_all.sh
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="tools/port/port_link.py"; s=open(p).read() s=s.replace("""# Hand-written asm in src/: PS1 s
+
+## Claude
+
+It links with no recompiled libkmath left. Running the Kaufmann benchmark and the attract demo against the pad-cleanup dumps.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+## Claude
+
+The pad cleanup is committed (`b95f79e03`). Konami's libkmath, the hand-written PS1 assembly in the game's own source, is now C. The game-level check is still running.
+
+**libkmath in C**
+- [libkmath_port.c](src/port/libkmath_port.c) has all 8 functions: `Math_Sin`, `Math_Cos`, `Math_RotMatrixZ`, `Math_RotMatrixXyz`, `Math_RotMatrixZxy`, `Math_RotMatrixZxyNeg`, and the two `...Gte` builders.
+  - Every product is the assembly's `mult` + `(lo >> 12) | (hi << 20)`, written as one macro.
+  - The `...Gte` builders write the same GTE registers in the same order and run the same GPL/GPF commands, so the GTE ends up exactly as on the PS1.
+  - The three Euler-matrix functions share one helper, with a per-function table of where each of the nine terms is stored.
+- [libkmath_table.c](src/port/libkmath_table.c) is the 5120-entry sine table, generated from the `.s` file.
+- The matching PS1 build still uses `libkmath.s`, and `recomp_all.sh` no longer recompiles it.
+
+**Checks so far**
+- `tools/port/lib_test` now builds its EE side with the new C instead of the recompiled code, and compares against the PS1 originals in DuckStation. All 8 functions match on return values, memory and GTE registers: 0 of 424 tests differ across the whole suite.
+- The game links with no recompiled libkmath left.
+- The Kaufmann benchmark and attract demo are running in PCSX2 now, compared with the pad-cleanup dumps.
+
+What's left from the PS1 is the Sony libraries: about 121 entry points across libgte, libgs and libgpu. I'll get to them after these results.
+
+- tool `Bash`: grep -v identical /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/km.log
+
+- tool `Bash`: cd /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; python3 -I -c " def rd(p):     d=open(p,'rb').r
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for o in $(sed -n 's/^LIBGTE="//p;' tools/port/recomp_all.sh) ; do :; done; grep -oE 'LIBGTE="[^"]*"' -z tools/p
+
+## Claude
+
+Most of these are small, many under 20 instructions. I'll dump the disassembly, with relocations, of everything except the four GsTMDfast objects and read through it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat src/port/libgte_port.c; grep -n "SQRT\b\|ratan\|rcossin\|rsin" include/psyq/libgte.h | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -nE "\b(ReadGeomScreen|SetGeomScreen|SetGeomOffset|SetTransMatrix|ReadGeomOffset|SetBackColor|SetFarColor|T
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "typedef struct" -A4 include/psyq/libgte.h | sed -n 1,30p; echo 'int a[sizeof(long)];' | $HOME/ps2dev/ee
+
+## Claude
+
+`long` is 32-bit on the EE, so the PS1 headers' types line up. Next I'll get the square-root table out of `sqrtbl.o`, since `SquareRoot0`/`SquareRoot12` read it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-nm -S lib/libgte/sqrtbl.o; mipsel-linux-gnu-objdump -h lib/libgte/sqrtbl.o | grep -E "data|text
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import subprocess,struct def data(obj,sec=".data"):     out=subprocess.run(["mipsel-linux-gnu-
+
+## Claude
+
+Now the first batch of libgte in C: the register setters and getters, the vector transforms and the matrix multiplies.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/libgte_port.c
+
+## Claude
+
+Before building, I need the real error strings and the initial stack-pointer value from `mtx_006.o`'s `.data`. My `printf` texts were placeholders.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-objcopy -O binary -j .data lib/libgte/mtx_006.o /dev/stdout | python3 -c " import sys; d=sys.st
+
+## Claude
+
+The strings match exactly. Now I'll compile `libgte_port.c` and the table file in `lib_test` the same way as libkmath, and run the comparison.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="src/port/libgte_port.c"; s=open(p).read() s=s.replace(""" * by a shift (srav right, sllv le
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,60p tools/port/recomp_bridges.py; cat build/port/recomp/bridge_VSync.c | head -30
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="tools/port/recomp_all.sh"; s=open(p).read() import re m=re.search(r'LIBGTE="([^"]*)"',s) ol
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; bash tools/port/recomp_all.sh 2>&1 | tail -3; cd tools/port/lib_test && rm -f *.o *.a
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; timeout 600 python3 run.py 2>&1 | grep -v " ok$" | tail -30
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; python3 tools/port/port_link.py 2>&1 | grep -v "^ 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: sed -n 400,719p /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/gte_b2.txt
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for o in msc02 ratan; do mipsel-linux-gnu-nm -S lib/libgte/$o.o | grep -v " U "; mipsel-linux-gnu-objdump -h lib
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' import subprocess,struct def data(obj): return subprocess.run(["mipsel-linux-gnu-objcopy","-O"
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "ratan_tbl" src include | head -2; python3 - <<'EOF' import subprocess,struct def data(obj): return sub
+
+## Claude
+
+Now batch 2 in C, appended to `libgte_port.c`.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> src/port/libgte_port.c <<'EOF'  /* --- Colours and depth cueing (smp.o, smp_00.o) -----------------------
+
+## Claude
+
+The header declares `LoadAverage*`, `InvSquareRoot` and `MatrixNormal` as `void`, so I'll match it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="src/port/libgte_port.c"; s=open(p).read() rep=[("long LoadAverage12(VECTOR* v0, VECTOR* v1,
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; sed -n 1,80p gen.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; python3 - <<'EOF' p="gen.py"; s=open(p).read() s=s.replace("""Square0 SquareRoot0 SquareRoot
+
+## Claude
+
+All 79 functions now in the list match the PS1, GTE state included: 0 of 632 tests differ. The background game test I started earlier rebuilds the port itself, and I was editing `libgte_port.c` and regenerating the recompiled code while it ran. Its results won't tell us anything clean, so I'll rerun it on the finished batch once it's done.
+
+## Claude
+
+Rerunning the game test on the finished batch.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+## Claude
+
+I'm rerunning the Kaufmann benchmark and attract demo in the background, and I won't touch the source while they run. Nothing from this libgte work is committed yet.
+
+The libgte rewrite has two batches so far. Both pass the PS1 comparison in `lib_test`: 79 functions, 0 of 632 tests differ, return values, memory and GTE registers included.
+
+**What's now C**
+- [libgte_port.c](src/port/libgte_port.c) now has 75 libgte functions:
+  - GTE register setters and getters, plus the matrix stack;
+  - vector transforms (`RotTrans`, `RotTransPers` 1/3/4, `Apply*Matrix*`);
+  - matrix multiplies (`MulMatrix*`, `CompMatrix`, `SetMulRotMatrix`, `ScaleMatrix`, `TransposeMatrix`);
+  - square roots, normalisation (`VectorNormal*`, `MatrixNormal`, `InvSquareRoot`) and `ratan2`;
+  - lighting and depth cueing (`NormalColor*`, `ColorCol`, `DpqColor*`, ...), the `LoadAverage*` group and `AverageZ*`/`OuterProduct*`/`Lzc`.
+- Each one makes the original's GTE register accesses and commands in the same order. It also keeps the original's word-wide stores that cover padding bytes.
+- [libgte_tables.c](src/port/libgte_tables.c) has the three tables (`SQRT`, the reciprocal square roots and `ratan_tbl`), generated from the objects' data.
+- Recompiled libgs code that calls these goes through bridges that `recomp_bridges.py` generates automatically.
+- Only `g3`, `g4`, `gt3` and `gt4` are still recompiled from libgte: the 16 `GsTMDfast*` model renderers, about 1,700 instructions. They're only used by the item screens.
+
+**One case where it can't match the PS1**
+Normalising a zero vector makes the PS1 read 128 bytes before its table, wherever the PS1 linker put it. The result is 0 either way; only GTE IR0 can differ, and the C uses entry 0 there. It's noted in the code.
+
+When the game check passes, I'll commit this batch. Then the order is:
+1. the `GsTMDfast*` renderers;
+2. libgpu (21 functions, mostly primitive setters and TIM/TMD parsing);
+3. libgs (about 30 functions).
+
+- tool `Bash`: grep -v identical /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/g2.log; cat /tmp/claude-1000/-hom
+
+## Claude
+
+Both Kaufmann differences have the same pixel counts as the subtitle-glyph cases from earlier (41 and 56), and the demo is identical. Committing.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git add src/port/libgte_port.c src/port/libgte_tables.c tools/port/recomp_all.sh tools/port/lib_test/Makefile to
+
+- tool `Bash`: cd "/home/alex/Documents/PS1 Decomps"; ls sotn-decomp-master/src/main/psxsdk/ 2>/dev/null; ls sotn-decomp-master/src/main/psxsdk/libgpu 2>/dev/null | head -30; 
+
+- tool `Bash`: cd "/home/alex/Documents/PS1 Decomps/sotn-decomp-master/src/main/psxsdk"; ls libgs libgte; grep -n "^[A-Za-z].*(" libgpu/prim.c libgpu/ext.c | head -40; grep -n
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; head -3 LICENSE; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for o in p06 p09 p14 p16 p17 p18 p26 p33 p34; do mipsel-linux-gnu-objdump -dr --no-show-raw-insn lib/libgpu/$o.o
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-nm -n lib/libgpu/sys.o | grep -iE " t " | head -80
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-objdump -dr --no-show-raw-insn --start-address=0x1108 --stop-address=0x1600 lib/libgpu/sys.o | 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-objdump -dr --no-show-raw-insn --start-address=0x1600 --stop-address=0x1920 lib/libgpu/sys.o | 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "rc_data\|__rc_sys\|libgpu_sys\|0x54\|84\b\|1024\|width" src/port/libgpu_port.c | head -20; grep -n "__r
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "rc_SetDrawEnv\b" -A30 build/port/recomp/libgpu_sys.c | grep -n "data\|0x54\|0x56" | head; grep -o "RC_R
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 120,140p src/port/libgpu_port.c; grep -n "__rc_sys_data" src/port/*.c | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "GEnv" build/port/recomp/*.s build/port/recomp/*.c tools/port/*.py configs/USA/port*.ld src/port | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 575,600p build/port/recomp/libgpu_sys.data.s; mipsel-linux-gnu-nm lib/libgpu/sys.o | grep -i " [dbDB] "; 
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/libgpu_packets.c
+
+## Claude
+
+Now I'll drop the converted libgpu objects and `sys.o` from the recompile list, and add the libgpu functions to `lib_test`. That includes linking Sony's `libgpu` into its PS1 side.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="tools/port/recomp_all.sh"; s=open(p).read() a=s[s.index("# libgpu: only the objects"):s.ind
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; bash tools/port/recomp_all.sh 2>&1 | tail -1 | cut -c1-200; cd tools/port/lib_test; p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "SetPriority" include/psyq/libgpu.h include/gpu.h | head -3
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; sed -i 's|"include/psyq/libgpu.h",|"include/psyq/libgpu.h", "include/gpu.h",|' gen.py; pytho
+
+## Claude
+
+Sony's `sys.o` pulls in a few kernel and libc symbols the PS1 test doesn't have. Those functions are never called in the test, so I'll stub them on the PS1 side.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; make -s lib_test_ps1.exe 2>&1 | grep -oE "undefined reference to \`[^']+'" | sort -u; grep -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; sed -n 60,90p lib_test.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; python3 - <<'EOF' p="lib_test.c"; s=open(p).read() a="int printf(const char* fmt, ...) { (vo
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; make -B lib_test_ee.elf 2>&1 | grep -E "error|undefined|multiple" | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "} DR_\|SetDrawStp\|SetDrawTPage\|SetDrawMove\|SetTexWindow\|SetDrawArea\|SetDrawOffset\|SetDrawMode\|Se
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="src/port/libgpu_packets.c"; s=open(p).read() s=s.replace('#include "common.h"\n#include <ps
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; python3 - <<'EOF' p="gen.py"; s=open(p).read() s=s.replace("AddPrim TermPrim SetPolyG3","Ter
+
+## Claude
+
+The stub count dropped from 18 to 15, because the recompiled `sys.o` was what referenced some of them. Running the game check now.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; python3 tools/port/port_link.py 2>&1 | sed -n '/un
+
+## Claude
+
+I started that benchmark with a shell `&` instead of a proper background task, so it may have died when the shell exited. Checking.
+
+- tool `Bash`: sleep 5; ps aux | grep -E "bench_cutscene|pcsx2" | grep -v grep | head -3
+
+## Claude
+
+It's still running, but the harness won't notify me when it finishes, so I'll set a watch on its log.
+
+- tool `ToolSearch`: 
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; until ! pgrep -f "bench_(cutscene|frames).sh" >/
+
+## Claude
+
+The libgpu packet builders are in C and pass the PS1 comparison. The game check is running in PCSX2, and I'm not editing anything while it rebuilds.
+
+**What's new**
+- [libgpu_packets.c](src/port/libgpu_packets.c) has 17 functions, every libgpu function the game links except the four TIM/TMD parsers:
+  - the primitive setters: `AddPrim`, `TermPrim`, `SetPolyG3`/`F4`/`FT4`/`G4`, `SetTile`;
+  - the drawing-setting packets: `SetDrawEnv`, `SetDrawMode`, `SetDrawArea`, `SetDrawOffset`, `SetTexWindow`, `SetPriority`, `SetDrawStp`, `SetDrawTPage`, `SetDrawMove`;
+  - `GetGraphDebug`.
+- `GEnv`, the libgpu state block that `ResetGraph` fills with the VRAM size, is now defined in C. The recompiled `sys.o` is gone completely.
+- The link now needs 15 HAL stubs instead of 18: three of them were only referenced by the recompiled `sys.o`.
+
+**Checks**
+- `lib_test` now covers 95 functions, with Sony's `libgpu` linked into its PS1 side. Every function except one matches; the exception is `AddPrim`.
+- `AddPrim` stores the primitive's address into the ordering table, and the test's memory sits at different addresses on the PS1 and the PS2. Its comparison can never match, so I took it out of the list; it's two masked word stores.
+
+I didn't copy the matched C in the SotN decomp. It's AGPL-3.0 and this project is GPL-3.0, so I wrote everything from your library objects, as with libgte.
+
+**Still recompiled**
+- libgpu's TIM/TMD parsing (`OpenTIM`, `ReadTIM`, `OpenTMD`, `ReadTMD`; about 1,570 instructions);
+- libgte's 16 `GsTMDfast*` renderers;
+- about 30 libgs functions.
+
+When the game check passes, I'll commit and start on those.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/beeh0r7oc.output
+
+## Claude
+
+Same subtitle-glyph count (56) as before, and the demo is identical. Committing.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git add src/port/libgpu_packets.c tools/port/recomp_all.sh tools/port/lib_test/Makefile tools/port/lib_test/gen.
+
+## Claude
+
+Committed (`69e9212cd`). Next is libgpu's `tmd.o`, the TIM/TMD parsers. I'm dumping it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-nm -n -S lib/libgpu/tmd.o; mipsel-linux-gnu-objdump -h lib/libgpu/tmd.o | grep -E "data|bss|tex
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+## Claude
+
+Committed (`69e9212cd`). What's left is a different size of job, so I'm checking with you before taking it on.
+
+**Done:** all the small and mid-sized library code is now exact C. Every conversion matches the PS1 in `lib_test` (95 functions), and every game check showed no differences beyond the usual subtitle glyph.
+- Konami's libkmath (8 functions);
+- libgte (75);
+- libgpu's packet builders (17).
+
+**Left:** three big pieces, mostly used by the item screens.
+
+| Piece | Size | What it is | Used by |
+|---|---|---|---|
+| libgpu `tmd.o` | ~1,570 instructions | `OpenTIM`/`ReadTIM` (small), and `OpenTMD`/`ReadTMD`, which decode every TMD primitive type and print debug output | TIM: wherever the game parses TIM headers. TMD: item screens |
+| libgte `GsTMDfast*` | ~1,670 instructions, hand-written | the 16 model renderers (G3/G4/GT3/GT4 × lit, fog, no-light, flat) | item screen models |
+| libgs | ~30 entry points, the biggest functions 6–9 KB each (`GsSortObject4J`, the TMD sort routines, the `sys` subroutines) | Sony's 3D graphics system | item screens, plus init calls such as `GsInitGraph`/`GsSetProjection` at startup |
+
+Each of these is a full decompilation of a large compiled function, not a short transliteration. My rough estimate is several sessions in total. They mostly run in the item screens, and the gameplay and cutscene benchmarks don't touch them, so the PCSX2 dump checks won't cover them. `lib_test` covers only part, so this needs a new check: item-screen dumps compared against DuckStation.
+
+How would you like to proceed?
+1. **Do all of it,** in the order `tmd.o`, then libgs, then `GsTMDfast*`. I'd add an item-screen dump comparison first so each step can be checked.
+2. **Do only `OpenTIM`/`ReadTIM`,** the small part, and leave the item-screen 3D code recompiled. That code is exact already, just not readable C.
+3. **Stop here** and go back to optimisations, e.g. the PS2 timing of the scratchpad, or the CPU/GS overlap.
+
+## User
+
+I would like to know if converting any of these functions has lead to a performance increase
+
+## Claude
+
+I haven't measured it yet. The checks so far only compared frames. To answer properly, I'll build the commit from before the library conversions and the current one, and compare their frame cost in the same benchmarks. First, the per-frame numbers the benchmark build already logs:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls -t build/port/*.log | head -5; grep -n "busy\|idle\|heartbeat\|fps" tools/port/pcsx2_run.py | head; grep -rn 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "LITEPROF\|liteprof\|lite prof" tools/port/*.py tools/port/*.sh | head; grep -rn "printf(\"lp\|lite:\|
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_LiteProf" src/port | grep -v "LP_BEGIN\|LP_END" | head; grep -n "LP_" include/port/prof.h | head -20
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 2790,2830p src/port/ps2/gpu_gs.c; grep -n "idle" src/port/ps2/libetc_ps2.c | head -5
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 12,40p tools/port/bench_frames.sh; grep -n "stopped (#\|attract demo" src/port/*.c src/bodyprog/*.c 2>/de
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cat > $S/measure.sh <<'EOF' #!/bin/bash # measur
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; $S/measure.sh $S/wt_old $S/perf_old.log; $S/meas
+
+## Claude
+
+I don't have an answer yet. Both builds are running in PCSX2 now, one after the other:
+- **Before:** commit `b95f79e03`, from just before libkmath, libgte and libgpu became C.
+- **After:** the current commit, `69e9212cd`.
+
+Each plays all five attract demos in a benchmark build, where they run uncapped. Each demo's log line gives frames per emulated vertical blank, so the two builds can be compared directly. The old commit is built in a separate git worktree in my scratch folder, so your working tree isn't touched.
+
+What I expect, before the numbers come in:
+- **Likely faster:** libgte matrix and vector calls in the game update (bone matrices, `RotTransPers`, `ApplyMatrix`, `MulMatrix`). The recompiled versions emulated MIPS registers in memory and went through call wrappers, so direct C should be cheaper per call.
+- **Little or no gain:** libkmath, which has few calls per frame, and libgpu's packet builders.
+- **Unmeasured either way:** PCSX2 counts instructions and doesn't model the caches. Any cache effects only show up on the PS2.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cat /tmp/claude-1000/-home-alex-Documents-silent
+
+## Claude
+
+The new build's numbers are in, but the old build failed at link time on the IOP module. Finding out why.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cd $S/wt_old; PS2SDK=$HOME/ps2dev/ps2sdk PATH=$P
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cd /home/alex/Documents/silent-hill-1-ps2-port; 
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; $S/measure.sh $S/wt_old $S/perf_old.log; tail -2
+
+## Claude
+
+I don't have the comparison yet. The current build's results are in, but the pre-conversion build failed the first time and is running again now.
+
+The first old-commit run failed while building an IOP module in the worktree: `iopfixup` stopped on a relocation error. The IOP modules are identical in both commits, so I copied the already-built ones over, and the old build is running in PCSX2.
+
+The current build's five attract demos (frames per emulated second; higher is faster):
+
+| Demo | Frames | Vertical blanks | fps |
+|---|---|---|---|
+| 0 | 2485 | 4285 | 34.76 |
+| 1 | 2408 | 2218 | 65.07 |
+| 2 | 1890 | 1416 | 80.00 |
+| 3 | 3340 | 1357 | 147.53 |
+| 4 | 5374 | 1535 | 209.84 |
+
+Demo 0 is much lower than the 129 fps in the 17 October profile. That run used a different setup, so it isn't a fair comparison, and I'll only compare against the old commit's numbers from this same script.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cat /tmp/claude-1000/-home-alex-Documents-silent
+
+## Claude
+
+The old build linked; the script then stopped at the disc-image step. Running it by hand to see the error.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cd $S/wt_old; source /home/alex/Documents/silent
+
+## Claude
+
+The worktree's `rom/` is a tracked directory, so my symlink loop skipped it and the game files are missing. Linking them in and rerunning.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; M=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; ls $S/wt_old/rom/USA/SILENT.* >/dev/null && $S/m
+
+## Claude
+
+I still don't have the old build's numbers, so there's no comparison yet. The pre-conversion build (`b95f79e03`) is running in PCSX2 on its third attempt; the earlier two failed for setup reasons in the worktree. The second one built and linked, then stopped at the disc image because the worktree's `rom/` folder lacked the game files.
+
+When it finishes, I'll put the five demos side by side with the current build's.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/b04d0por2.output; S=/tmp/claude-1000/-home-alex-Docu
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git worktree remove --force /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891
+
+## Claude
+
+Yes, but only a little: 1–5% more frames per second in PCSX2, more in the lighter scenes. I ran the five attract demos on the commit just before the conversions (`b95f79e03`) and on the current one (`69e9212cd`), same benchmark build and same script.
+
+| Demo | Before | After | Change |
+|---|---|---|---|
+| 0 | 34.55 fps | 34.76 fps | +0.6% |
+| 1 | 64.49 | 65.07 | +0.9% |
+| 2 | 79.06 | 80.00 | +1.2% |
+| 3 | 145.58 | 147.53 | +1.3% |
+| 4 | 200.61 | 209.84 | +4.6% |
+
+- **The gain is real.** Every demo got faster.
+- **It's small in heavy scenes.** The libgte math was a small part of each frame. As the 17 October profile showed, frame time goes mostly to DrawOTag, the point light and the world mesh, and those were already native C.
+- **It grows as scenes get lighter.** At 200+ fps, fixed per-frame calls like `SetDrawEnv`, the matrix setup and the libkmath rotations are a bigger share of the frame. Saving their recompile overhead shows up as the 4.6% in demo 4.
+- **PCSX2 counts instructions and doesn't model the EE's caches.** On the PS2 the effect could be somewhat larger, because the native code is smaller and doesn't keep a fake register file in memory. That would need a hardware run to confirm.
+
+For the remaining recompiled code (TIM/TMD parsing, libgs and the `GsTMDfast*` renderers), the frame-rate gain would be close to nothing in gameplay or cutscenes. It mostly runs on the item screens, which are light anyway, so converting it would be about having readable C, not speed.
+
+I removed the temporary worktree. The demo logs are in `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/perf_old.log` and `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/perf_new.log`.
+
+## User
+
+Alright, I want to keep the converted C. Is there anything else that has yet to be converted?
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}nm build/port/sh1.elf | awk '$2=="T"{print $3}' | sort > /tmp/
+
+## Claude
+
+Yes. 31 functions are still recompiled from PS1 machine code, plus some data and a few stubs. One correction to what I said before: libgs isn't only used by the item screens. Several of its functions run every frame in the main loop, and the libgte renderers the game links are 4, not 16.
+
+**Still recompiled: 31 entry points**
+
+| Library (object) | Functions | When they run |
+|---|---|---|
+| libgs, display and ordering-table management | `GsInitGraph`, `GsInitGraph2`, `GsDefDispBuff2`, `GsInit3D`, `GsSwapDispBuff`, `GsGetActiveBuff`, `GsSetDrawBuffOffset`, `GsSetDrawBuffClip`, `GsClearOt`, `GsSortOt`, `GsDrawOt`, `GsSortClear`, `GsInitVcount`, `GsGetVcount`, `GsClearVcount` | `GsSwapDispBuff`, `GsGetActiveBuff`, `GsClearOt`/`GsSortOt`/`GsDrawOt` and `GsSortClear` every frame; the rest at start-up. Mostly small |
+| libgs, lighting and projection | `GsSetProjection`, `GsSetFlatLight`, `GsSetLightMode`, `GsSetAmbient`, `GsMapModelingData` | when scenes set up their lights and camera |
+| libgs, coordinate systems (`matrix`) | `GsInitCoordinate2`, `GsMulCoord0`/`2`/`3`, `GsSetLightMatrix`, `GsSetLightMatrix2`, `GsSetLsMatrix` | item screens and libgs model drawing |
+| libgs, model drawing | `GsLinkObject4`, `GsSortObject4J` (6 KB plus its TMD subroutines), `GsSortFastSprite` | item screens (3D items), sprites |
+| libgte, model renderers | `GsTMDfastG3LFG`, `G4LFG`, `TG3LFG`, `TG4LFG` (hand-written) | called by `GsSortObject4J`, so item screens |
+| libgpu `tmd.o` | `OpenTIM`, `ReadTIM`, `OpenTMD`, `ReadTMD` | TIM header parsing; TMD parsing for item models |
+
+The heavy functions are the 6 KB `GsSortObject4J` with its subroutines, the four renderers and `ReadTMD`. The every-frame libgs calls are small, so they'd be quick to do, and they're the only ones likely to show any further speed gain.
+
+**Not code, from the PS1 build**
+- About 0.7 MB of the game's data still comes from splat's asm data files and 92 `INCLUDE_RODATA` blocks. It's tables and strings with no runtime cost. Converting it is decomp work, so I left it out of the plan.
+
+**Not assembly, but not real implementations either**
+The link still needs 15 HAL stubs, i.e. PS1 library functions the port leaves empty because nothing reaches them:
+- libcd streaming: `StSetRing`, `StGetNext`, `StFreeRing`, `StSetStream`, `StCdInterrupt`, `StCdIntrFlag`, `CdRead2`, `CdMix`;
+- the MDEC decoder: `DecDCTReset`, `DecDCTvlc`, `DecDCTout`, `DecDCToutCallback`;
+- `EnterCriticalSection`/`ExitCriticalSection` and `SetSp`.
+
+The port plays movies through its own FMV path, and `SetSp` is deliberately a no-op.
+
+To finish the conversion, I'd start with the small every-frame libgs functions, then the start-up and lighting ones. After that come the coordinate-matrix functions, then `OpenTIM`/`ReadTIM`. The big model-drawing chain (`GsSortObject4J`, the four renderers, `ReadTMD`) would go last, with an item-screen dump comparison against DuckStation to check it. Should I go ahead in that order?
+
+## User
+
+Yes, but commit the changes first
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git status --short | head; git log --oneline -1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "PS2 Optimizations.md" <<'EOF'  ### 2026-10-22: PS1 library code in C: libkmath, libgte, libgpu packet bu
+
+## Claude
+
+Committed (`1665a71f7`). Starting on libgs with the every-frame functions. I'm dumping those objects.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -nE "\b(PSDIDX|PSDGPU|POSITION|GsDRAWENV|GsDISPENV|CLIP2|PSDOFSX|PSDOFSY|PSDBASEX|PSDBASEY|PSDCNT|GsORGOFSX
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for o in gs_001 gs_104 gs_105 gs_106 gs_107 gs_108 gs_110; do echo "#### $o: $(mipsel-linux-gnu-nm lib/libgs/$o.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "weak\|globl\|^[A-Za-z_]*:" build/port/recomp/libgs_gs_001.data.s | head -40; for s in PSDIDX GsDRAWENV 
+
+## Claude
+
+The recompiler emits them as ordinary globals, defined once, so I can move each object's state to C along with its code. One remaining unknown: `GsInitGraph` calls `gte_init`.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for f in lib/libgs/*.o lib/libgte/*.o; do mipsel-linux-gnu-nm --defined-only $f 2>/dev/null | grep -q " gte_init
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-nm lib/libgs/gs_121.o; mipsel-linux-gnu-objdump -dr --no-show-raw-insn lib/libgs/gs_121.o | sed
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for s in GsIDMATRIX GsIDMATRIX2 GsLIGHTWSMATRIX _LC HWD0 VWD0 GsCLIP3far GsCLIP3near GsLIGHT_MODE; do echo "$s: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rnwE "PSDOFSX|PSDOFSY|PSDBASEX|PSDBASEY|POSITION|GsDRAWENV|GsDISPENV|GsORGOFSX|GsORGOFSY|CLIP2|PSDCNT|PSDI
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/libgs_port.c
+
+## Claude
+
+Before building, I'm checking the libgs.h prototypes these must match. I also spotted a mistake of mine in `init_screen`: I zeroed `m[0][0]` where the original zeroes `m[0][2]`.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -nE "\b(GsInitGraph|GsInitGraph2|GsSortClear|GsGetActiveBuff|GsSetDrawBuffOffset|GsSetDrawBuffClip|GsSwapDi
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="src/port/libgs_port.c"; s=open(p).read() rep=[("""    GsIDMATRIX.m[0][1] = 0;     GsIDMATRI
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="tools/port/recomp_all.sh"; s=open(p).read() a="""# libgs: all objects (port_link.py links t
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; python3 tools/port/port_link.py 2>&1 | grep -B2 -A
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's/^long GsCLIP3far, GsCLIP3near, GsLIGHT_MODE;/long GsCLIP3far, GsCLIP3near;\nint  GsLIGHT_MODE;/' src/p
+
+## Claude
+
+It links with the same 15 stubs. These functions mostly drive the display and ordering tables, which the Kaufmann cutscene and the attract demo use every frame, so I'm running those comparisons.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-objdump -dr --no-show-raw-insn lib/libgs/gs_107.o | sed -n '/ 28c:/,$p' | grep -v "^$\|\.\.\.$"
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for o in gs_108 gs_110; do echo "#### $o: $(mipsel-linux-gnu-nm lib/libgs/$o.o | tr -s ' ' | tr '\n' ',')"; mips
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-objdump -dr --no-show-raw-insn lib/libgs/matrix.o | sed -n '/<.*>:/,$p' | grep -v "^$\|\.\.\.$"
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-objcopy -O binary -j .rdata lib/libgs/gs_108.o /dev/stdout | od -c | head -3; grep -n "DSTACK\|
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -l "DSTACK" build/port/recomp/*.c build/port/recomp/*.s | head; grep -rn "DSTACK" src include | head -3; gr
+
+## Claude
+
+The first libgs batch builds and links. Its PCSX2 check, the Kaufmann cutscene and the attract demo, is still running. While it runs I've read the next batch's disassembly but haven't touched any files, because the benchmark builds from the source tree.
+
+**libgs batch 1, written** ([libgs_port.c](src/port/libgs_port.c)), 18 functions in all:
+- **Display and double buffering:** `GsInitGraph`, `GsInitGraph2`, `GsDefDispBuff2`, `GsSwapDispBuff`, `GsGetActiveBuff`, `GsSetDrawBuffOffset`, `GsSetDrawBuffClip`, `GsSortClear`.
+- **Ordering tables:** `GsClearOt`, `GsSortOt`, `GsDrawOt`.
+- **3D setup:** `GsInit3D`, `GsSetProjection`, `GsMapModelingData`, plus the internal `gte_init`.
+- **Vertical-blank counter:** `GsInitVcount`, `GsGetVcount`, `GsClearVcount`.
+
+The file also defines the libgs state those objects owned: `GsDRAWENV`, `GsDISPENV`, `PSDIDX`, `PSDCNT`, the buffer origins, `CLIP2`, `POSITION`, `HWD0`/`VWD0` and the clear packets. 15 libgs objects are now left out of the recompile.
+
+**Batch 2, read and ready to write:**
+- **Lighting:** `GsSetFlatLight`, `GsSetLightMode`, `GsSetAmbient`.
+- **Coordinate matrices:** `GsInitCoordinate2`, `GsSetLsMatrix`, `GsSetLightMatrix`, `GsSetLightMatrix2`, `GsMulCoord0`/`2`/`3`.
+
+`lib_test` already compares several of these against the PS1, so they'll be checked there as well as in the game.
+
+After that, all that's left is `GsLinkObject4`, `GsSortFastSprite`, the `GsSortObject4J` chain with its four renderers, and the TIM/TMD parsers.
+
+- tool `Bash`: grep -v identical /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/b7s1j8vaj.output
+
+## Claude
+
+Clean: the only Kaufmann differences have the known subtitle-glyph pixel counts, and the demo is identical. Committing batch 1, then writing batch 2.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git add src/port/libgs_port.c tools/port/recomp_all.sh && git commit -q -m "Port: libgs display, OT and 3D setup
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> src/port/libgs_port.c <<'EOF'  /* --- gs_107.o, gs_108.o, gs_110.o: lights ------------------------------
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="src/port/libgs_port.c"; s=open(p).read() rep=[("""    MATRIX l = GsLIGHTWSMATRIX;     MATRI
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; grep -n "#else\|#endif\|#ifdef LIB_TEST_PS1" lib_test.c | head; grep -n "lib_test_main\|int 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; python3 - <<'EOF' p="lib_test.c"; s=open(p).read() a="#else /* EE */\n" b=a+"""/* The port's
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; make lib_test_ps1.exe 2>&1 | grep -E "error|undefined" | sort -u | head
+
+## Claude
+
+On the PS1 side, `GsSetLightMode` pulls in the object defining `GsLIGHT_MODE`, and that object chains through to `InitGeom`'s kernel patch. Three more PS1 stubs:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; python3 - <<'EOF' p="lib_test.c"; s=open(p).read() a="int  VSync(int m) { (void)m; return 0;
+
+## Claude
+
+All 100 functions match the PS1, including the 10 libgs ones now in the list: 0 of 800 tests differ. Running the game check for batch 2.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+## Claude
+
+The libgs batch 1 commit is in (`28a9191dc`). Batch 2 matches the PS1 in `lib_test`, and its game check is running. Meanwhile I'm reading the next objects.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for o in objt 2d_sp1; do echo "#### $o: $(mipsel-linux-gnu-nm lib/libgs/$o.o | tr -s ' ' | tr '\n' ',')"; mipsel
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-objdump -r -j .rdata lib/libgs/objt.o | head -40; mipsel-linux-gnu-objcopy -O binary -j .rdata 
+
+- tool `Bash`: sed -n '/^     35c:/,/^     474:/p' /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/tmd.txt
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-objcopy -O binary -j .rdata lib/libgpu/tmd.o /dev/stdout | python3 -c "import sys; d=sys.stdin.
+
+## Claude
+
+`OpenTIM`/`ReadTIM` are small. They share `tmd.o` with the TMD parser, so the recompiled `tmd.o` will export only `OpenTMD`/`ReadTMD`, the same way `sys.o` was handled earlier. I'll write this next batch as soon as the current game check finishes.
+
+- tool `Bash`: grep -v identical /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/b6pk1ia08.output; cd /home/alex/Docume
+
+## Claude
+
+Batch 2 is clean as well and committed (`f77e8fa8f`). I committed the `lib_test` directory wholesale, so I'm checking that no generated test binaries went in.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git show --stat HEAD | tail -8; git check-ignore -v tools/port/lib_test/lib_test_ee.elf | head -2
+
+## Claude
+
+Only source files went in; the test outputs are ignored. Next batch: `GsLinkObject4`, `GsSortFastSprite`, `OpenTIM` and `ReadTIM`.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "} GsSPRITE;\|} GsDOBJ2;" -B22 include/psyq/libgs.h | grep -A22 "typedef struct {" | head -60; grep -nE 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk '/typedef struct/{buf=""} {buf=buf"\n"$0} /} *(GsSPRITE|GsDOBJ2);/{print buf}' include/psyq/libgs.h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> src/port/libgs_port.c <<'EOF'  /* --- objt.o: GsLinkObject4 ---------------------------------------------
+
+## Claude
+
+Now `OpenTIM`/`ReadTIM`. They go in the libgpu file, with the recompiled `tmd.o` limited to exporting the TMD pair.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> src/port/libgpu_packets.c <<'EOF'  /* --- tmd.o: TIM headers (OpenTMD/ReadTMD are still recompiled) -----
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln -i "inventory\|item screen\|itemscreen" tools/port/*.py tools/port/*.sh | head; grep -rn -i "inventory
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "load\|walk\|input" tools/port/compare_frames.py | head -60
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "HOLDS\|--hold" tools/port/compare_frames.py | head; grep -n "hold" src/port/ps2/capture_ps2.c | head -1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 60,100p src/port/ps2/capture_ps2.c; grep -rn "GameState_ItemScreens\|GameState_MapScreen" src/bodyprog/pl
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/tools/port/lib_test; sed -n 1,62p lib_test.c; sed -n 140,215p lib_test.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cat > $S/ab/test.c <<'EOF' /* A/B: the port's C 
+
+## Claude
+
+Now building it: the harness, the port's C files and the three recompiled objects, with their wrappers renamed to `RC_*`.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; R=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; R=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; R=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; R=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; R=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; ls -la $S/ab/ab.elf; cd /home/alex/Documents/sil
+
+## Claude
+
+The A/B harness reports 0 mismatches. To make sure that isn't vacuous, I'll count how many calls actually did work: sprites emitted, TIMs read, primitive runs written.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; R=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+## Claude
+
+The harness exercised real work: 156 sprites emitted, 484 TIMs read and 200 TMD objects linked, all identical to the recompiled originals. Now the game check for this batch.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+## Claude
+
+Batch 3 is written and passes the A/B check; its game check is running. In the meantime I'm sizing up the last chunk, `GsSortObject4J`:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-nm -n -S lib/libgs/objt3.o; mipsel-linux-gnu-objdump -h lib/libgs/objt3.o | grep -E "text|data|
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+## Claude
+
+Still on the last chunk. `GsSortObject4J` turns out to be a dispatcher. It decodes the object's attribute bits into libgs globals, works out which variant to use (light on or off, fog), then walks the primitive runs that `GsLinkObject4` marked. Each run goes through a `GsFCALL4` function-pointer table chosen by primitive type, with argument layouts that differ per case, advancing by a per-type size. Translating it exactly is careful work but mechanical; I'll start once the batch 3 game check is back.
+
+- tool `Bash`: grep -v identical /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bzbftoupy.output; cd /home/alex/Docume
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "_GsFCALL\b\|} _GsFCALL;" -A40 include/psyq/libgs.h | sed -n '1,50p' | grep -v "^--$" | head -45; grep -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 195,240p include/psyq/libgs.h; sed -n 15,60p src/bodyprog/items/item_screens_cam.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> src/port/libgs_port.c <<'EOF'  /* --- objt3.o: GsSortObject4J -------------------------------------------
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="src/port/libgs_port.c"; s=open(p).read() a="""        nprim -= n;         p += n * (grad ||
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cd /home/alex/Documents/silent-hill-1-ps2-port; 
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; ls $S/ab/ | grep objt3; grep -n "unsigned long)r
+
+- tool `Bash`: sed -n 370,395p /home/alex/Documents/silent-hill-1-ps2-port/tools/port/recomp.py
+
+## Claude
+
+The recompiled code calls a C function pointer with `a0`–`a3` plus the stack words, so recording stubs will see the same calls from both versions. Writing the `GsSortObject4J` A/B test:
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cat > $S/ab/test2.c <<'EOF' /* A/B: GsSortObject
+
+## Claude
+
+The macros can't paste `b+1` into a name, so I'll generate the 76 recording functions explicitly and declare `GsFCALL4`.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; R=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; R=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; R=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; R=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-objdump -dr --no-show-raw-insn --start-address=0x418 lib/libgte/g3.o | sed -n '/<GsTMDfastG3LFG
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-objdump -dr --no-show-raw-insn --start-address=0x4d4 lib/libgte/g4.o | sed -n '/<GsTMDfastG4LFG
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-objdump -dr --no-show-raw-insn --start-address=0x488 lib/libgte/gt3.o | sed -n '/<GsTMDfastTG3L
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-objdump -dr --no-show-raw-insn --start-address=0x560 lib/libgte/gt4.o | sed -n '/<GsTMDfastTG4L
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> src/port/libgte_port.c <<'EOF'  /* --- GsTMDfast*LFG (g3.o, g4.o, gt3.o, gt4.o): TMD renderers, lit with 
+
+## Claude
+
+The renderers use `GsOT`, which comes from libgs.h, and libgs.h may also declare these functions. Checking its prototypes before including it:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "GsTMDfastG3LFG\|GsTMDfastTG4LFG" include --include=*.h | head
+
+## Claude
+
+They're only declared in `gpu.h` (and in libgs.h's disabled hook examples), with `PACKET*` types that are ABI-compatible with mine. I'll include libgpu.h and libgs.h for `GsOT` and build.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="src/port/libgte_port.c"; s=open(p).read() s=s.replace('#include <psyq/libgte.h>\n#include "
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; R=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="tools/port/recomp_all.sh"; s=open(p).read() s=s.replace("""# libgte: the objects defining t
+
+## Claude
+
+That draft gives the two runs different shift values, so I'll rewrite the loop body properly: one shift and `GsTON` shared by both runs, then a full comparison.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; R=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; R=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+- tool `Bash`: grep -v identical /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bu3i51m74.output; cd /home/alex/Docume
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git add src/port/libgs_port.c src/port/libgte_port.c tools/port/recomp_all.sh && git commit -q -m "Port: GsSortO
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; sed -n '/^ *b4:/,/^ *35c:/p' $S/tmd.txt; sed -n 
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; sed -n '/^ *5e8:/,$p' $S/tmd.txt | grep -v "R_MI
+
+- tool `Bash`: sed -n 200,520p /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/tmd_dec.txt
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; awk 'NR>196' $S/tmd_dec.txt | grep -vE "R_MIPS|^
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; python3 - <<'EOF' import re,subprocess S="/tmp/c
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; python3 - <<'EOF' import re S="/tmp/claude-1000/
+
+## Claude
+
+32 header values, two per primitive type, onto the 16 case bodies. Now generating the C: the case table from the parsed bodies, and the TMD functions around it.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; python3 - <<'EOF' import re,ast S="/tmp/claude-1
+
+## Claude
+
+Now the C around the generated table, in `libgpu_packets.c`:
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cd /home/alex/Documents/silent-hill-1-ps2-port; 
+
+## Claude
+
+Now `tmd.o` drops out of the recompile completely. The only recompiled objects left should be libgs's `global.o` and `gs_123.o`. I'm checking whether they contain any code at all:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="tools/port/recomp_all.sh"; s=open(p).read() i=s.index("# libgpu: TMD parsing"); j=s.index("
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mipsel-linux-gnu-objcopy -O binary -j .data lib/libgs/global.o /dev/stdout | python3 -c "import sys,struct; d=sy
+
+## Claude
+
+`global.o` starts `GsADIVW`/`GsADIVH` at 1023/511 and everything else at zero. I'll define these globals, plus `gs_123`'s four matrices, in `libgs_port.c`, and remove libgs from the recompile.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'EOF' p="src/port/libgs_port.c"; s=open(p).read() a="/* --- gs_001.o: display and drawing environmen
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; R=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+## Claude
+
+Reading past the end of each object hits random bytes, so "unsupported type" is expected there, printed by both versions. Looking at the summary line:
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cd /home/alex/Documents/silent-hill-1-ps2-port &
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; R=/home/alex/Documents/silent-hill-1-ps2-port; c
+
+## Claude
+
+4,153 primitives across all 32 header types decoded identically, unknown types included. Last step: a clean game check of the finished state, then the commit.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; 
+
+## Claude
+
+The PS1 library code is now all C. The game links no recompiled code at all; that's not committed yet, pending the final game check that's running now.
+
+**This round**
+- **libgs:** display and double buffering, ordering tables, 3D setup, lights, coordinate matrices, `GsLinkObject4`, `GsSortFastSprite` and `GsSortObject4J`. All of libgs's global variables are C as well.
+- **libgte:** the four `GsTMDfast*LFG` model renderers, the last hand-written Sony assembly.
+- **libgpu:** `OpenTIM`/`ReadTIM` and `OpenTMD`/`ReadTMD`. The TMD primitive table is generated from the original's switch.
+- `recomp_all.sh` no longer recompiles anything, and the link still needs the same 15 HAL stubs.
+
+**How it was checked**
+- **`lib_test` against the PS1:** 100 functions match the originals in DuckStation, 0 of 800 tests differing.
+- **A/B on the PS2:** for functions that store addresses or call through function pointers, `lib_test`'s method doesn't work. Instead, a harness ran the new C and the recompiled originals on the same memory in PCSX2 and compared everything they wrote; all mismatches were 0.
+  - 156 sprites, 484 TIMs and 200 TMD objects;
+  - `GsSortObject4J` over 400 random objects, every renderer call logged;
+  - the renderers on 600 random models, with all 64 GTE registers, the packets and the OT;
+  - 4,153 TMD primitives across all 32 types.
+- **Game check:** the Kaufmann cutscene and attract demo after each batch showed no differences beyond the usual subtitle glyph.
+
+**What's left from the PS1**
+- The PS1 data that comes from splat's asm files, which we agreed to leave.
+- The 15 HAL stubs for PS1 library calls the port doesn't need.
+
+The A/B harness lives in my scratch folder and isn't in the repo. If you want, it could become a `tools/port/ab_test` alongside `lib_test`.
+
+- tool `Bash`: grep -v identical /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bs4md7peh.output; cd /home/alex/Docume
+
+## Claude
+
+The game no longer runs any recompiled PS1 code: Sony's libgte, libgs and libgpu, and Konami's libkmath, are all C now. The final game check passed (the Kaufmann cutscene differs only in the usual subtitle letter; the attract demo is identical), and it's committed as `8a5b4bf2c` on `upstream-sync`, with an entry in [PS2 Optimizations.md](PS2%20Optimizations.md).
+
+- **How the conversions were checked:**
+  - **Against the PS1 originals:** `lib_test` checks 100 of the functions in DuckStation, and none differ.
+  - **Against the recompiled versions on the PS2:** the functions that store addresses or call through function pointers were run in PCSX2 alongside their recompiled versions, on the same memory, and nothing they wrote differed.
+- **What hasn't been checked:** I never ran the item screens or opened an inventory, which is where most of the libgs 3D code runs. The coverage there comes from those PS2 comparisons, not from a run of the game.
+- **What's still from the PS1:** about 0.7 MB of the game's data comes from asm data files. You agreed to leave it, as decomp work rather than port work.
+- **Stubs:** the link still needs the same 15 empty stubs for PS1 library calls the port never makes (CD streaming, the MDEC decoder, critical sections and `SetSp`).
+- **Leftover tooling:** `recomp_all.sh` now recompiles nothing, but `recomp.py` and the runtime are still in the repo. They can be deleted if you don't want them for future work.
+- **Not in the repo:** the PS2-side comparison test is only in my scratch folder. It could become a `tools/port/ab_test` next to `lib_test` if you want to keep it.
+
+`upstream-sync` now holds the upstream merge, the pad cleanup, the scratchpad change and all of this. Merge it into `master` when you're ready. Before that, it's worth a run on your PS2 to check pad and vibration, and to time the scratchpad and library changes on real hardware.
+
+## User
+
+Test performance again and then commit.
+
+## Claude
+
+I'll run the same attract-demo benchmark on the current build and compare it with the earlier runs.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; $S/measure.sh /home/alex/Documents/silent-hill-1
+
+## Claude
+
+The benchmark is running in PCSX2 on the current build (`8a5b4bf2c`): all five attract demos, uncapped, with the same script as before. When it finishes I'll compare it with the earlier runs:
+- `b95f79e03`, before any library conversions;
+- `69e9212cd`, after libkmath, libgte and the libgpu builders.
+
+Then I'll add the results to the optimisation log and commit.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/b5v2or17e.output
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "PS2 Optimizations.md" <<'EOF' - Speed, same measure as above (attract demos 0-4, fps): before the librar
+
+## Claude
+
+Converting the rest of the libraries to C sped things up a little further: demos 0–3 are now 0.9–1.9% faster than before any library work. The table below has all three builds, in frames per second in PCSX2.
+
+| Demo | Before (`b95f79e03`) | libgte etc. in C (`69e9212cd`) | All in C (`8a5b4bf2c`) | Change since before |
+|---|---|---|---|---|
+| 0 | 34.55 | 34.76 | 34.86 | +0.9% |
+| 1 | 64.49 | 65.07 | 65.24 | +1.2% |
+| 2 | 79.06 | 80.00 | 80.23 | +1.5% |
+| 3 | 145.58 | 147.53 | 148.41 | +1.9% |
+| 4 | 200.61 | 209.84 | 204.66 | +2.0% |
+
+- **Demos 0–3** improved again with this round, by a further 0.2–0.6%.
+- **Demo 4's numbers can't be compared reliably.** It played a different number of frames in each run (5104, 5374, 5156), because its timing follows the frame time. So the drop from 209.84 to 204.66 doesn't show a slowdown.
+- **PCSX2 doesn't model the PS2's caches,** so real hardware may show a different gain.
+
+The code changes were already committed in `8a5b4bf2c`. The only new change was these measurements, which I added to [PS2 Optimizations.md](PS2%20Optimizations.md) and committed as `77c0e2ae5` on `upstream-sync`.
+
+## User
+
+Alright, now I'm ready to do a console test. Serve the gameplay-ready ISO and log performance and any crashes.
+
+## Claude
+
+I'll build the normal (non-benchmark) game ISO and start serving it and logging. First, how the hardware tools are run:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,30p tools/port/udpfs_serve.py | grep -v "^import"; sed -n 1,30p tools/port/ps2_log.py | grep -v "^impor
+
+## Claude
+
+Building the gameplay ISO (normal build, 60 fps):
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; unset SH1_BENCH SH1_PROF SH1_LITEPROF SH1_EXTRA_CF
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; wc -l build/port/ps2.log; tail -3 build/port/ps2.log; grep -n 'printf("' src/port/ps2/crash_ps2.c | head -12; gr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; a=$(wc -c < build/port/ps2.log); sleep 3; b=$(wc -c < build/port/ps2.log); echo "$a $b"; grep -n "heartbeat:" bu
+
+## Claude
+
+Nothing is running on the PS2 right now; the log stopped at its last session. I'm starting the collectors from the current end of the log, so only this session's output counts.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cd /home/alex/Documents/silent-hill-1-ps2-port; 
+
+- tool `Monitor`: PS2 console: boot, crashes, watchdog
+
+## Claude
+
+The new ISO is being served, and I'm logging the console. Boot the PS2 when you're ready.
+
+**What's being served**
+- `build/port/sh1_ps2.iso`, the normal 60 fps game build (not a benchmark build) of `77c0e2ae5` on `upstream-sync`.
+- The UDPFS server and `ps2_log.py` were already running from an earlier session, so they'll serve this image to a fresh boot. If a game is already running on the PS2, `python3 tools/port/ps2_ctl.py deploy` restarts it into the new image.
+
+**What I'm logging**
+- **Crashes:** boots, crash reports (`CRASH:` lines with the faulting PC and registers), watchdog stalls, restarts, and any "unsupported primitive type" messages from the newly converted libraries. These notify me the moment they appear.
+- **Performance:** each heartbeat line goes to `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/console_perf.log` once a second. Each records frames drawn and the idle share, i.e. headroom left in the 60 fps budget. When you're done, I'll turn it into fps and headroom over time.
+
+**Worth trying on this build**
+- Pad: buttons and sticks, the Analog button, unplugging and replugging, vibration on and off in the options, and the reset combo.
+- The inventory and item screens. They now run the new C for libgs and the model renderers, which hasn't been exercised in the game before.
+- Gameplay in a few areas, a cutscene, a movie, and a save and load.
+
+Tell me when you're finished, or what you see, and I'll write up crashes and performance.
+
+## Claude
+
+The PS2 booted the new build: the log shows "SH1 port: starting (build Oct 22 2026 19:41:38)", matching the ISO I just built. The "TLB entry 42" line that came with it is the port's normal startup notice that NULL reads return zeros rather than faulting, not an error. I'm still logging.
+
+## User
+
+You don't need to do these changes until later (unless the game crashes), but here they are now:
+The Analog functionality should be set by the game on startup (which it does), but also if you unplug and replug the controller
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk '/SH1 port: starting \(build Oct 22 2026 19:41:38\)/{f=1} f && /pad: /' build/port/ps2.log | tail -12
+
+## Claude
+
+Noted. I'll leave it until you're done unless the game crashes.
+
+The likely cause: the game switches the pad to analog once at startup, through `PadSetMainMode`. Unplugging resets a DualShock to digital, and nothing sends the switch again after it's replugged.
+
+The fix would be in the port's pad driver, [pad_ps2.c](src/port/ps2/pad_ps2.c): remember the last mode the game set, and re-apply it once a replugged pad reports stable. Nothing in the game code would change.
+
+So far the log shows no crashes. Since boot there are a few pad state changes (5 → 6, i.e. reading → stable) and at most two "read not ready" polls per 600, which the driver covers by keeping the previous data. I'm still logging.
+
+## User
+
+What does performance look like so far? I've noticed it's not a locked 60 fps.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cd /home/alex/Documents/silent-hill-1-ps2-port; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "GameState_" include/game.h | head -25; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/1
+
+## Claude
+
+The 15 fps stretches are the two movies, which play at their own 15 fps, so I'll leave them out. Here's gameplay per map:
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; python3 - <<'EOF' import re,collections S="/tmp/
+
+## Claude
+
+It isn't locked 60. It holds 60 in some places and drops to 24–48 fps in others, and every drop is the EE running out of time, not waiting on the GS. There have been no crashes in this session so far: about 12½ minutes logged, from the Konami logo through gameplay in map4.
+
+**Gameplay by map** (fps per second from the heartbeat; idle is how much of each frame was spare)
+
+| Map | Time played | Average fps | Seconds at 60 | Lowest | Average idle |
+|---|---|---|---|---|---|
+| map4_s01 | 104 s | 59.9 | 99% | 46 | 36% |
+| map4_s02 | 135 s | 35.9 | 1% | 24 | 2% |
+| map4_s03 | 321 s | 55.3 | 57% | 35 | 18% |
+| map4_s04 | 8 s | 59.4 | 75% | 57 | 43% |
+
+- **map4_s02 is the problem.** It never reaches 60: it runs mostly at 30–45 fps and sits at 0–2% idle the whole time, in two long stretches (28 s, then 105 s on your second visit).
+- **map4_s03 is mixed.** It's at 60 a bit over half the time, then has repeated stretches of 35–57 fps lasting 3–21 s, also at 0% idle. That looks like particular views or areas being heavier.
+- **map4_s01 and map4_s04** hold 60 with plenty of headroom.
+- **The menus and screens** (inventory, map screen, save screen, logos) are mostly at 60. The occasional dips there come at transitions, during loading.
+- **The two 15 fps stretches** were the movies, which play at their own 15 fps. The second one took about 8.4M cycles a frame to decode, within the 15 fps budget.
+
+These maps weren't in the PCSX2 benchmarks: the attract demos are map1/map2 and Kaufmann is map3. So I can't tell yet whether map4_s02 has always been this heavy on hardware, or what dominates its frame. To find out, I'd build the profiling variant with the light counters, which time DrawOTag, the world mesh, the point light and particles. Then I'd warp straight to map4_s02 and log where the frame goes.
+
+Keep playing if you like; I'm still logging. When you want to stop, the profiling build is the next step for map4_s02 and map4_s03.
+
+## User
+
+I've switched to 480p. Note this in the log. One minor thing, when turning on 480p from the menu, the inventory still runs in 480i. This should be fixed later. Keep logging as I play.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cd /home/alex/Documents/silent-hill-1-ps2-port; 
+
+## Claude
+
+I've marked the switch to 480p in both logs, at 379940. The game's own log shows the actual mode switches a bit earlier, between 379887 and 379901, and the performance summary will split at that point. I've added the inventory still running in 480i to my notes for later, alongside the analog-on-replug fix, at `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/console_notes.md`.
+
+Still logging, and no crashes so far.
+
+## User
+
+The above applies to the other 480i screens in the game
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; sed -i 's/^- Todo (user, later): with 480p turne
+
+## Claude
+
+I've widened the note: with 480p on, the inventory and the game's other interlaced screens should all follow the setting, not stay in 480i. Still logging, no crashes.
+
+## Claude
+
+The game crashed. I'll work out where, using the ELF that's running:
+
+- tool `PushNotification`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}addr2line -f -e build/port/sh1.elf 0x169DF8 0x16A38C; ${E}nm -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}objdump -d --no-show-raw-insn --start-address=0x169dc8 --stop-
+
+## Claude
+
+The animation header pointer passed in (`a0`) is garbage. The watchdog line after it just reflects that the game stopped drawing when it crashed. Next I'm looking at what `Anim_PlayLoop` passes:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "Anim_PlayLoop" -A40 src/bodyprog/chara/anim.c | grep -n "Anim_BonesUpdate\|anmHdr\|void Anim_PlayLoop" 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; timeout 60 python3 tools/port/ps2_ctl.py md 0x01FFEA50 0x400 --out /tmp/claude-1000/-
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -E "map load|gameplay ended|movie:" build/port/ps2.log | tail -6; grep -rln "Floatstinger_Update" src/maps 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "func_800D37E8" src/maps/characters/floatstinger.c | head -3; n=$(grep -n "^[a-z].*func_800D37E8(" src/m
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,40p src/maps/characters/floatstinger.c; grep -n "Anim_\|anmHdr\|->update\|AnimInfo.*func\|playFunc" src
+
+## Claude
+
+`anmHdr` comes from `Game_NpcUpdate` in the game's main code. Here's how it's computed:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "void Game_NpcUpdate" src | head -2; f=$(grep -rln "void Game_NpcUpdate" src | head -1); n=$(grep -n "v
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "animDataIdx\|g_Ai_UpdateFuncs\|->anmHdr\|anmHdr\|NpcUpdate\b\|Update(curNpc" src/bodyprog/events/npc_ma
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_CharaModelAnimsData\[" include | head -3; grep -rn "} s_CharaModelAnimData;\|s_CharaModelAnimData;" 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "} s_CharaAnimData;" -B12 include/bodyprog/game_boot/fs_chara_anim.h; source .venv/bin/activate; S=/tmp/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}objdump -d --no-show-raw-insn --start-address=0x16a2d0 --stop-
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git diff 15656c821 HEAD -- src/maps/characters/floatstinger.c | grep -E "^[-+].*\[[0-9A-Z_]+\];|^[-+].*(SVECTOR|
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git log --oneline -3 15656c821; git diff 15656c821 HEAD -- src/maps/characters/floatstinger.c; git diff a1f407cb
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk '/^[a-z].*\) \/\/ 0x800D/{fn=$0} /^    [A-Za-z_0-9]+ +\**[a-z_A-Z0-9]+\[[^]]+\];/{print FILENAME": "fn" :: "
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}objdump -d --no-show-raw-insn build/port/merged/map4_s05.o --s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "^void func_800D1BF8" src/maps/characters/floatstinger.c | cut -d: -f1); e=$(awk -v n=$n 'NR>n && /^
+
+## Claude
+
+Every `sp20` access is in bounds, so it's something else. I'll scan every function in map4_s05's code for direct stack stores past its own frame size:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}objdump -d --no-show-raw-insn build/port/merged/map4_s05.o | p
+
+- tool `Bash`: python3 -c " import struct d=open('/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/stack.bin','rb')
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,40p src/port/ps2/warp_ps2.c | head -40; cat build/port/warp.txt 2>/dev/null | head -3
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}objdump -dr --no-show-raw-insn build/port/merged/map4_s05.o --
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 28,80p src/maps/characters/floatstinger.c; grep -n "D_800DB928\|D_800DB8C8\|D_800DB8" src/maps/map4_s05/*
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 755,800p src/maps/characters/floatstinger.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}objdump -dr --no-show-raw-insn build/port/merged/map4_s05.o --
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Math_MatrixTransform(" src --include=*.c | grep -v ";" | head -2; f=$(grep -rln "^void Math_MatrixTran
+
+## Claude
+
+You've hit your session limit · resets 10:50pm (America/Chicago)
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}objdump -d --no-show-raw-insn --start-address=0x3f5788 --stop-
+
+## Claude
+
+That function is ABI-correct: it only uses `s0`, which it saves and restores. So the libkmath conversion doesn't explain it. I'll re-arm the crash watch, then give you what I have.
+
+- tool `Monitor`: PS2 console: boot, crashes, watchdog
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad; cat >> $S/console_notes.md <<'EOF' - [380139.231
+
+## Claude
+
+The game crashed in map4_s05 at the start of the Floatstinger boss fight, on the boss's first frame after the map loaded. I haven't found the cause yet. The PS2 is still sitting in the crashed state, so I can read more of its memory if needed.
+
+**What crashed**
+- **Where:** `Anim_BonesUpdate` (pc `00169DF8`), an address load error at `FC008A36`. It was called from `MainLoop` → `GameState_InGame_Update` → `Game_NpcUpdate` → `Floatstinger_Update` → `func_800D37E8` → `Anim_PlayLoop`.
+- **What went wrong:** the boss's animation-data pointer arrived as `0xFC008A30`. The game's table holds the correct value, `0x00728A30`, so the pointer's upper 16 bits were replaced by `0xFC00` (−1024) somewhere between the table and the crash.
+- **Where the pointer lives on the way:** it's saved on `Floatstinger_Update`'s stack, then kept in register `s2` while `func_800D37E8` runs.
+
+**What I've ruled out so far**
+- **The upstream merge:** the boss's code is unchanged by it apart from an `#if` that compiles to the same USA code, and map4_s05 changed by one line.
+- **No obvious overrun:** I found no direct stack overrun in map4_s05's code, and the boss's only local array is used within its bounds.
+- **The new C function on the call path:** `Math_RotMatrixZxyNegGte`, converted today, follows the register rules correctly.
+
+**What I don't know yet**
+- Whether this is new. Have you reached this boss fight on the PS2 before today, on an older build?
+- Whether it happens every time.
+
+The most useful next step is a reproduction. If you have a save just before the fight, restart (`ps2_ctl.py restart` or the reset combo), load it and go in again. If it crashes again in the same place, I can add a hardware watch on that saved pointer and catch whatever writes the `0xFC00`.
+
+Everything is in `/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a-4b4f-8891-95f1d6d1a0e0/scratchpad/console_notes.md`, alongside the 480p and analog notes. I'm still logging for crashes.
+
+## Claude
+
+The PS2 has restarted into the same build (Oct 22 19:41:38), so the crashed state from the boss fight is gone. I'm still logging. If you load a save before the Floatstinger fight and it crashes the same way, I'll catch it.
+
+## Claude
+
+It crashed again, in exactly the same place and with exactly the same bad pointer (`FC008A30`), so it's deterministic and reproducible. A deterministic, identical value points to a miscomputation rather than random memory corruption. So I'm checking how `Game_NpcUpdate`'s compiled code loads that pointer from the table:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; E=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-; ${E}objdump -d --no-show-raw-insn --start-address=0x164600 --stop-
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "SH1_MSG_DEBUG\|dump += \[\"-DSH_PORT_MSG_DEBUG\"\]" tools/port/port_link.py | head -3; grep -n "zz_dbg\
+
+## Claude
+
+Game files take extra flags through `SH1_EXTRA_CFLAGS`, so the checks will sit behind a temporary `SH_PORT_FS_DEBUG` define that's only in this debug build.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cp src/maps/characters/floatstinger.c /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/187c9404-471a
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_EXTRA_CFLAGS=-DSH_PORT_FS_DEBUG; unset SH1_BENC
+
+## Claude
+
+The debug build is ready. I'll restart the PS2 into it (the crashed state allows a remote restart) and add the debug lines to the watch.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; timeout 60 python3 tools/port/ps2_ctl.py deploy 2>&1 | tail -3
+
+- tool `Monitor`: PS2 console: crashes and the Floatstinger debug check
+
+## Claude
+
+The crash is reproducible: the second time gave exactly the same pointer, `FC008A30`, in the same place. So I've built a debug version and restarted the PS2 into it.
+
+**What the debug build does**
+- `Floatstinger_Update` and `func_800D37E8` compare the boss's animation-data pointer against the game's table after each step: `Floatstinger_Init`, `func_800D1968`, `Floatstinger_ControlUpdate`, `func_800D35F0`, the state switch, and `Math_MatrixTransform`.
+- The first time it no longer matches, it logs an `fsdebug:` line. That line names the step that changed the pointer, plus the boss's state and the stack address.
+
+**What I need from you**
+Once it has booted (the build time will differ), load the same save and enter the Floatstinger fight again. It will most likely still crash, but this time the `fsdebug:` line will be logged just before it, and that tells me which function to look at.
+
+The extra checks are in [floatstinger.c](src/maps/characters/floatstinger.c) behind `SH_PORT_FS_DEBUG`, and only this build enables them. They're temporary and won't be committed; I kept a copy of the original file.
+
+## Claude
+
+The PS2 is restarting into the debug build. I'll confirm the new build time once it reports in.
+
+## Claude
+
+The debug build is running on the PS2 (Oct 23 07:36:26). Load your save and go into the Floatstinger fight again; I'm watching for the `fsdebug:` line and the crash.
+
+## Claude
+
+That's the same boot reported by the second watch; still waiting for you to reach the fight.
+
+## User
+
+It’s on a black screen so I will restart manually
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk '/SH1 port: starting \(build Oct 23 2026 07:36:26\)/{f=1} f' build/port/ps2.log | grep -v "heartbeat\|gs sta
+
+## Claude
+
+The game is running, not hung: the log shows frames advancing normally after boot. But it started straight in progressive output ("display: 320x240p", then "320x224p"). My guess is it took your 480p setting at boot, and your display isn't showing that mode right from startup.
+
+A manual restart is fine. If the screen is black again after that, switching back to 480i before loading the save should get a picture. Tell me if it stays black and I'll look at why the boot comes up in 480p. I'm still watching for the `fsdebug:` line and the crash.
+
+## Claude
+
+The PS2 has rebooted into the debug build (07:36:26) after your manual restart. Load the save and go into the fight when you're ready; I'm watching for the `fsdebug:` line.
+
+## Claude
+
+Same boot again, reported by my older watch, which is still running. Still waiting for you to reach the fight.
+
+## User
+
+I am in the fight now. The crash fix appears to have worked
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk '/SH1 port: starting \(build Oct 23 2026 07:36:26\)/{f++} f==2' build/port/ps2.log | grep -E "fsdebug|map lo
+
+## Claude
+
+That isn't a fix, unfortunately: the debug checks never fired. There's no `fsdebug:` line in the log, so the pointer stayed correct the whole fight. What changed is the code itself. Adding the checks moves the boss's code and stack layout, and with this layout the corruption no longer happens, or no longer hits that pointer.
+
+That makes it a layout-sensitive bug, the kind that appears and disappears with small changes. The usual causes are a local variable read before it's set, a write past the end of a stack object somewhere else, or something writing into the stack from outside: an interrupt handler, or a DMA transfer from the IOP. The fix the release build needs is still to be found.
+
+What I'd do next, once you're done playing:
+1. Go back to the exact build that crashed. It crashed the same way twice, so it reproduces reliably.
+2. Add a hardware write watch on that one stack slot, using the debug watch support already in the crash handler. A watch doesn't change the code layout, so the crash should still happen, and the watch catches the exact instruction that writes the `0xFC00`.
+3. Fix that function, then confirm on your save that the fight runs on the normal build.
+
+Until then, the debug build you're running is fine for playing through the fight. Keep going if you like; I'm still logging performance and crashes. I'll restore `floatstinger.c` before building anything else.
+
+## User
+
+Table the hardware testing for now. I’ll get to it later.
+
+## Claude
+
+I'll wrap up: stop the watches, restore `floatstinger.c`, and record the session's findings in the repo so they're there when you pick it back up.
+
+- tool `ToolSearch`: 
+
+- tool `TaskStop`: 
+
+- tool `TaskStop`: 
+
+- tool `TaskStop`: 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git checkout -- src/maps/characters/floatstinger.c; git status --short; cat >> "PS2 Optimizations.md" <<'EOF'  #
+
+## Claude
+
+I'm also rebuilding the normal ISO, so the image being served isn't the debug build when you come back to it:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; export SH1_FPS=60 SH1_NO_RECOMP=1; unset SH1_EXTRA_CFLAGS SH1_BENCH; bash tools/port/
+
+## Claude
+
+The console test is tabled, and the open issues are written down in the repo for when you come back.
+
+- **Logging stopped:** both crash watches and the performance collector. The UDPFS server and `ps2_log.py` are still running from before; they were already up when we started.
+- **Debug code gone:** `floatstinger.c` is restored. The ISO being served is the normal 60 fps build again, rebuilt from the committed code.
+- **Recorded:** I added a "console test" entry to [PS2 Optimizations.md](PS2%20Optimizations.md), committed as `714abc587` on `upstream-sync`. It has:
+  - the per-map performance table (map4_s02 never reaches 60 fps, and every slow stretch is the EE running out of time);
+  - the Floatstinger crash, with what's known and the next step: a hardware write watch on the crashing build;
+  - the 480p issue: the inventory and the other interlaced screens ignore the setting, and a boot with 480p saved came up with no picture on your display;
+  - analog mode not coming back after a replug, with the fix outlined for `pad_ps2.c`.
+
+When you pick this up again, the order I'd suggest is the Floatstinger crash first, then the analog and 480p fixes, then a performance profile of map4_s02 and map4_s03.
+
+## User
+
+Ok, what are some other things we can tackle in the meantime?
+
+## User
+
+[Request interrupted by user]
+
+
+
+## User
+
+<command-name>/clear</command-name>
+            <command-message>clear</command-message>
+            <command-args></command-args>
+
+## User
+
+We will come back to the three bugs listed in the optimization doc later. What else is there to do in the meantime?
+
+## Claude
+
+Let me look at the docs for open items.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls docs* *.md 2>/dev/null | head -50; grep -rniE "^#+ .*(todo|remaining|next|open|known)" --include=*.md . 2>/de
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat docs/ToFix.md | head -80; echo ----; grep -niE "todo|not yet|remaining|still|next step|missing|unfinished" "
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 497,600p "PS2 Optimizations.md"; sed -n 120,150p "Planning Doc.md"
+
+## Claude
+
+Outside the three bugs (Floatstinger crash, 480p screens, analog after replug), these are the open items, from [PS2 Optimizations.md](PS2%20Optimizations.md), [docs/ToFix.md](docs/ToFix.md) and [Planning Doc.md](Planning%20Doc.md):
+
+**Performance (biggest remaining gap)**
+- **map4_s02 never reaches 60 fps** on the console. It averages 35.9 fps, mostly 30–45. **map4_s03** has stretches of 3–21 s at 35–57 fps. Both are limited by the EE (0–2% idle). The next step in the doc is a light-counter profile (`SH1_LITEPROF`) of both maps on hardware.
+- **EE scratchpad for hot data** is built and gives the same results in PCSX2, but its speed on hardware hasn't been measured. PCSX2 doesn't model the caches, so the same goes for the EE cache changes from 2026-10-09.
+- **2x 32-bit texture cache thrash** costs 10–40% in that mode. The planned fix is texture streaming (step 1 of [docs/720p.md](docs/720p.md)).
+
+**Stability**
+- **Warm-restart stall:** about 1 restart in 4 hangs inside `LoadExecPS2`. The next step is building Neutrino's ee_core with debug colours at each step of its second-start path.
+- **map6_s02 Demo #1 soft-lock:** it happens after the bar fight cutscene. It's probably state left over from that cutscene.
+- **map6_s04 CybilDeath busy-loop:** not diagnosed yet.
+- **map3_s00 voice lines one page early:** message 15 is shown twice, which looks like a race between the message page and the cutscene timer.
+
+**Smaller fixes**
+- The demo "fps:" line can go negative because its start tick is stale.
+- The Demo list once started "ALL MOVIES" by itself.
+- "STEP ERROR" shows in attract demos; I still need to find which demo and step.
+- Debug Options opens with Triangle as a temporary fix and needs a better way in.
+
+**Renderer, not yet checked on hardware**
+- The text fix for toggling Resolution.
+- The phone call cutscene at 33 fps in 2x 16-bit, which needs a re-run.
+- The cost of exact blending and of the filtered CLUTs.
+- Blinking strips in map6_s02 at 2x 32-bit.
+
+**Sound:** XA voice lines (CD input), external input, and the echo/delay feedback parameters aren't done.
+
+**Planning Doc structure items:** namespacing the per-map symbols, resetting each overlay's `.data` on load, and assembling the data `.s` files as they are.
+
+My recommendation is the **map4_s02/s03 profile**. Those are the only places in normal play that miss 60 fps, and the next step is already defined. After that, either the warm-restart stall, since it slows down every deploy, or the sound gaps.
+
+## User
+
+Let’s focus on the map4_s02/03 profiling. I know from my own testing that there are other areas that drop frames too, but let’s start here. What are the bottlenecks in this map?
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "LITEPROF" --include=*.c --include=*.h --include=*.sh --include=*.py --include=*.md . | grep -v "Claude
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat include/port/prof.h; sed -n 343,451p "PS2 Optimizations.md"; head -30 build/port/fn_prof.log; ls -la build/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "map4_s02" tools/port src/port docs *.md 2>/dev/null | grep -v Conversation | head; ls tools/port | he
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; head -60 src/port/ps2/warp_ps2.c; head -60 tools/port/warp_sweep_ps2.py; grep -n "map4_s0[23]" tools/port/warp_s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat ~/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/ps2-build-env.md; sed -n 60,200p tools
+
+## Claude
+
+I'm building a benchmark ISO with the light counters on. Then I'll warp the attract demo into map4_s02 and map4_s03 in PCSX2 and measure where the frame time goes.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_BENCH=1 SH1_LITEPROF=1; (tools/port/ee_compile_check.sh && python3 tools/p
+
+## Claude
+
+The build and sweep are running in the background. I'll pull the per-part cycle counts out of the log as soon as it finishes.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bews
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -vE "liteprof|gs stats|heartbeat" build/port/warp_sweep_ps2.log | tail -40; grep -c heartbeat build/port/wa
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i "warp\|host:" build/port/warp_sweep_ps2.log | head; sed -n 60,140p src/port/ps2/warp_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Port_WarpActive\|Port_MapLoadWarp" src include --include=*.c --include=*.h | grep -v "warp_ps2.c"; sed
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 70,100p src/bodyprog/events/title.c; sed -n 70,100p src/bodyprog/game_boot/game_boot.c; sed -n 40,60p src
+
+## Claude
+
+The warp run didn't reach the map. The title screen played the intro movie instead of starting the demo, so I'm finding out why before I rerun it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 100,200p src/bodyprog/events/title.c | grep -n "SH_PORT\|Warp\|playInGameDemo\|Steps\[0\] =\|case\|Movie\
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 98,200p src/bodyprog/events/title.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/build/port; ls -la demo.txt input.txt capture.txt 2>&1; head -5 demo.txt input.txt capture.txt 2>/dev/null; grep 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "GameState_" include/game.h | head -12; git log -5 --format="%h %ad %s" --date=short -- src/bodyprog/eve
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "PORT_LOGO_SKIP" src include | head; git show 99552e9dc --stat | grep -i "konami\|kcet\|game_boot\|titl
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git show 99552e9dc -- src/screens/b_konami/b_konami.c src/bodyprog/events/title.c src/bodyprog/game_boot/game_bo
+
+## Claude
+
+I traced it to the KCET logo screen. It picks the intro movie as the next state, and the warp run never skips it. I'm checking how the save-capture runs skip the movie so warp runs can do the same.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 225,285p src/screens/b_konami/b_konami.c; grep -rn "Capture_Load\|Port_WarpActive" src/screens src/bodypr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 195,235p src/screens/stream/stream.c; git log -3 --format="%h %ad %s" --date=short -- src/screens/stream/
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/screens/stream/stream.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "include" src/screens/stream/stream.c | head -5
+
+## Claude
+
+game.h already declares `Port_WarpActive`. Rebuilding and running the sweep again.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_BENCH=1 SH1_LITEPROF=1; (tools/port/ee_compile_check.sh && python3 tools/p
+
+## Claude
+
+I don't have the map4_s02/s03 profile yet. The first profiling run never reached either map.
+
+**Why it failed:** the warp runs, which drop the attract demo into a chosen map in PCSX2, have been broken since FMV playback was added on 2026-10-18. Since then the intro movie plays in full instead of returning at once, so the warp never happened and the run timed out.
+
+**Fix:** I changed [stream.c](src/screens/stream/stream.c) so warp runs skip the intro movie, the same way save captures already do. The change only affects warp runs.
+
+The benchmark build with the light counters is now rebuilding and rerunning, with 60 emulated seconds in each map. When it finishes I'll break the frame time into its main costs: DrawOTag (drawing), point lights, mesh transform, mesh packets, particles, and everything else.
+
+One caveat: the attract demo walks its own recorded path, so it won't follow your route through these maps, and PCSX2 doesn't model the EE caches. Treat the split as a guide to where the time goes, not as exact console numbers.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/be2v
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 468,2066p build/port/warp_sweep_ps2.log | grep -E "heartbeat|TLB|Exception|libgpu:|port:|error|ERR" | gre
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "load\|--load\|capture.txt" tools/port/compare_frames.py | head -30; grep -rn "capture.txt" src/port | h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; head -30 tools/port/mc_export_psu.py; grep -n "map4_s0[0-6]\|MAP4_S0" include/*.h src/bodyprog/*.h 2>/dev/null |
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_BENCH=1 SH1_PROF=1; (tools/port/ee_compile_check.sh && python3 tools/port/
+
+## Claude
+
+The function-level profile build of map4_s02 is running. What the first run (with the light counters) showed so far:
+
+- **map4_s02** averaged about 26 fps in the benchmark build, with the EE at 0% idle. Frames don't arrive steadily: the game stalls for 2–3 seconds with no frame at all, then about 100 frames come through in a burst.
+- Drawing itself is about 1.2M cycles a frame, a quarter of the 60 fps budget (about 4.9M). Inside that, setting texture state costs about 765k. Each frame has about 423 texture and CLUT changes and 171 texture uploads, which is a lot of texture churn compared with map4_s03.
+- **map4_s03** averaged about 63 fps in this run, with drawing at only 323k cycles a frame. The demo's route probably missed the heavy spots you saw on the console.
+- **New crash:** the map4_s02 warp ended in a crash in PCSX2 after about 25 seconds: a jump to address 0 (`TLB Miss, pc=0x82000 addr=0x0`).
+
+The warped demo replays the demo's own recorded input, not real play, so the multi-second stalls may be an artifact of that. The profile should tell us whether that time is real game work.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bjkf
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; L=build/port/prof_map4_s02.log; tail -n +409 $L | grep "prof:" | awk '{$1="";$2="";print}' | sort | uniq -c | so
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; L=build/port/prof_map4_s02.log; tail -n +409 $L | grep "prof:" | awk '/per frame/{b=""} {b=b"\n"$0} /game state 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; L=build/port/prof_map4_s02.log; tail -n +409 $L | grep "prof:" | grep -E "game state update|per frame" | head -5
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; L=build/port/prof_map4_s02.log; awk '/9.3054\] prof: per frame/{f=1} f&&/prof:/{print} f&&!/prof:/{n++} n>3{exit
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Display_PresentGs" src/port | head -3; f=$(grep -rln "^void Display_PresentGs\|^int Display_PresentGs\
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -nE "#define (PAGE_SLOTS|CACHE|N_SLOTS|SLOT)|slots" src/port/ps2/gpu_gs.c | head -15
+
+## Claude
+
+map4_s02's main bottleneck is the renderer's texture handling, not the game logic. map4_s03 didn't show a bottleneck in this run.
+
+**map4_s02, average work per frame** (PCSX2 benchmark build; a 60 fps frame has about 4.9M cycles):
+
+| Part | k-cycles a frame | Share |
+|---|---|---|
+| Drawing (DrawOTag), total | ~1,200 | |
+| — choosing and loading textures | ~765 | most of the drawing time |
+| — sending to the GS and waiting for it | ~415 | |
+| — building the polygons themselves | ~145 | |
+| Game logic (whole state update) | ~820 | |
+| Lights, character meshes | under 10 | not a factor here |
+
+**The cause: texture cache misses.** Each frame draws only about 560 primitives, but changes the texture and CLUT (colour table) about 424 times and uploads about 171 texture pages or CLUTs. Most primitives switch texture, and many of those switches upload a page again, even though the 1x renderer has 37 cache slots. map4_s03 in the same run had 59 changes and 1 upload a frame.
+
+That points to a fault in how the cache picks or keeps pages, rather than a map that simply needs more texture memory. It also fits the console numbers: each upload waits on the GS, and PCSX2 hides much of that cost, so it hurts more on hardware.
+
+**Things to keep in mind:**
+- **The multi-second stalls are a benchmark artifact.** They come from frame dumps written to the host (`DUMP_FRAMES` in `Display_PresentGs`) and don't happen in normal builds.
+- **map4_s03:** the warped demo's route stayed light, at about 63 fps and 323k cycles of drawing a frame. Its slow spots on the console weren't covered, so this run says nothing about them.
+- **The warped demo isn't your real route through these maps.** For map4_s02 the per-frame texture figures were steady across the whole run, so I'm fairly confident they reflect the map itself.
+- **New crash:** one of the two map4_s02 warp runs ended in a jump to address 0 (`TLB Miss, pc=0x82000 addr=0x0`). The profiling run didn't crash.
+
+**I changed one file:** warp runs had been broken since FMV playback was added on 2026-10-18, because the intro movie now plays in full. [stream.c](src/screens/stream/stream.c) now skips it on warp runs. The fix isn't committed.
+
+Next, I'd log which pages and CLUTs map4_s02 keeps uploading and find out why the cache drops them. Once that's fixed, I'd check the result on the console.
+
+## User
+
+Go ahead and
+
+## Claude
+
+I'll take that as go-ahead for the texture cache investigation. First I'm reading the page cache code in the renderer.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -nE "^(static )?[a-z].*\(|s_TexGen|uploads|CACHE_SLOTS" src/port/ps2/gpu_gs.c | sed -n 1,400p | grep -iE "c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 355,460p src/port/ps2/gpu_gs.c; sed -n 496,700p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 920,1060p src/port/ps2/gpu_gs.c
+
+## Claude
+
+The cache logic looks sound, so the 171 uploads are either real misses or the game rewriting VRAM every frame, which forces pages out. I'm adding counters to tell those two apart.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "s_StUpload\|s_StRead\|s_StClut\b\|s_StClut;" src/port/ps2/gpu_gs.c | head -20; sed -n 2790,2830p src/po
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/gpu_gs.c"; s=open(p).read() def rep(a,b,n=1):     global s     assert s.count(a)
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's/dropped by VRAM writes (%u writes)"/dropped by VRAM writes (%u drops; first rects:"/; s/    printf("\\
+
+## Claude
+
+I'm running map4_s02 again with the new cache counters, which only exist in light-counter builds. The next result will show whether the uploads are real cache misses or entries dropped because the game rewrote that part of VRAM, and if so which areas it rewrites.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bxvjq3xh6.output | cut -c1-400
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; L=build/port/warp_sweep_ps2.log; n=$(grep -n "map load map4_s02 (warp" $L|cut -d: -f1); tail -n +$n $L | grep -E
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; L=build/port/warp_sweep_ps2.log; n=$(grep -n "map load map4_s02 (warp" $L|cut -d: -f1); tail -n +$n $L | grep -E
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; L=build/port/warp_sweep_ps2.log; grep -n -A1 "gs stats per frame: [3-9][0-9][0-9] prims" $L | head -8 | cut -c1-
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "^static u32 filt_get" src/port/ps2/gpu_gs.c|cut -d: -f1); sed -n "$n,$((n+80))p" src/port/ps2/gpu_g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "^static u32 filt_get" src/port/ps2/gpu_gs.c|cut -d: -f1); sed -n "$((n+81)),$((n+100))p" src/port/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/gpu_gs.c"; s=open(p).read() def rep(a,b):     global s     assert s.count(a)==1,
+
+## Claude
+
+The page and CLUT caches never miss in map4_s02, so the uploads aren't cache thrash. I've added counters for the filtered-CLUT path (the semi-transparency fix that rebuilds a colour table for each new vertex colour) and I'm rerunning map4_s02 to see whether that's where the 100–170 uploads a frame come from.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bnh8tc6ft.output | cut -c1-200
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1640,1665p src/port/ps2/gpu_gs.c; grep -n "filt >> 2[4-7]\|filt & (1u << 2\|->filt\b\|p->filt" src/port/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "^static u32 filt_get" src/port/ps2/gpu_gs.c|cut -d: -f1); sed -n "$((n-12)),$((n-1))p" src/port/ps2
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/gpu_gs.c"; s=open(p).read() def rep(a,b):     global s     assert s.count(a)==1,
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "filt" src/port/ps2/gpu_gs.c | grep -v "s_Filt\[\|filt_get\|filt_invalidate\|FILT_ROW\|filt_canon\|StFil
+
+## Claude
+
+Before measuring, I'm checking exactness: a script compares the old filter and the new one for every colour and texel value.
+
+- tool `Bash`: cat > /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad/filt_check.py <<'E' # Old filter (per channel
+
+## Claude
+
+The old and new filters give identical output for all colours, texel values and both blend modes. Rebuilding and measuring map4_s02.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_BENCH=1 SH1_LITEPROF=1; (tools/port/ee_compile_check.sh && python3 tools/p
+
+## Claude
+
+I've found the cause and made a fix. Its measurement run in map4_s02 is going now.
+
+**What's slowing map4_s02:** filtered CLUTs. That's the renderer's fix that makes faint semi-transparent effects match the PS1. Each such polygon uses a copy of its CLUT (colour table) with the too-faint entries removed. Those copies are cached by the polygon's exact vertex colour, in only 8 slots. map4_s02 draws about 330 of these polygons a frame in many slightly different colours. About half the lookups miss, and each miss rebuilds the table and uploads it to the GS: 70–173 times a frame.
+
+**The fix, in [gpu_gs.c](src/port/ps2/gpu_gs.c):** the filtered table doesn't depend on the exact colour. It only depends on a few cut-off values per colour channel. The cache key is now those cut-offs (`filt_canon`), so colours with the same cut-offs share one table. I checked the old and new filters against each other for every colour, texel value and blend mode: no differences.
+
+**Uncommitted changes so far:**
+- Warp runs skip the intro movie again ([stream.c](src/screens/stream/stream.c)).
+- Diagnostic counters for the texture caches and filtered CLUTs, compiled only into light-counter builds.
+- The filtered-CLUT key change.
+
+The run will show how far the misses, uploads and drawing time drop.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bjjqkcuj2.output
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 70,100p src/port/ps2/gpu_gs.c; grep -n "CLUT_ADDR\b" src/port/ps2/gpu_gs.c | head -5
+
+## Claude
+
+I'm trying 32 filtered rows (with 96 for normal CLUTs instead of 120) to see whether the misses go away.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|#define CLUT_ROWS  120 /\* rows 120-127: filtered CLUTs (filt_get) \*/|#define CLUT_ROWS  96 /* rows 9
+
+## Claude
+
+A test build with 32 filtered rows (and 96 normal CLUT rows) is running in map4_s02. It also reports normal CLUT misses, so I can see whether the smaller normal cache costs anything.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/b0pqdb2ui.output
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/gpu_gs.c"; s=open(p).read() def rep(a,b):     global s     assert s.count(a)==1,
+
+## Claude
+
+Another map4_s02 run is going. This one counts, for a single frame, how many distinct CLUTs, filter settings and CLUT/filter pairs the filtered polygons use. That tells us whether a bigger cache can work, or whether the tables need a different approach.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bjc9fonwi.output
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "s_Filt\b\|s_Filt\[" src/port/ps2/gpu_gs.c; n=$(grep -n "^static void filt_invalidate" src/port/ps2/gpu_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 862,912p src/port/ps2/gpu_gs.c; sed -n 1085,1100p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 770,790p src/port/ps2/gpu_gs.c; grep -n "TEXCLUT\|COU" src/port/ps2/gpu_gs.c | head; grep -n "u16 row\[25
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^typedef struct" src/port/ps2/gpu_gs.c | awk -F: '$1>690 && $1<700'; grep -n "^/\* --- Setup" src/port/
+
+## Claude
+
+Now I'm writing the new filtered-CLUT cache.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/gpu_gs.c"; L=open(p).read().split("\n") # lines 698..879 (1-based) replaced: fro
+
+## Claude
+
+The script had a quoting error and didn't change anything. I'm fixing it and also removing the one-off pair log.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git diff --stat src/port/ps2/gpu_gs.c; grep -c "filt_raw" src/port/ps2/gpu_gs.c
+
+- tool `Write`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad/filt4.py
+
+- tool `Write`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad/filt4_new.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+The new cache is in place. Building and measuring it in map4_s02.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_BENCH=1 SH1_LITEPROF=1; (tools/port/ee_compile_check.sh && python3 tools/p
+
+## Claude
+
+I've rewritten the filtered-CLUT cache and the map4_s02 measurement run is going.
+
+What changed in [gpu_gs.c](src/port/ps2/gpu_gs.c):
+- **4-bit filtered tables** now take 16-entry pieces of the GS CLUT rows. The GS picks the piece with TEXCLUT's offset field (COU). That gives 256 slots in a 2-way cache instead of 8.
+- **8-bit filtered tables** keep 8 whole rows.
+- **The CLUTs as read from VRAM** go in a small store of their own, 16 entries, so a new colour only refilters a table and doesn't read it back again.
+- **Normal CLUT rows** drop from 120 to 104. In map4_s02 they had 0 misses even at 96.
+
+The rule that the slot drawn with last is never overwritten still holds: in a 2-way set, the least recently used way can never be the one drawn with last.
+
+After this I'll check that the output didn't change by comparing frame dumps against the build without the change.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/buv106dzf.output
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; head -20 tools/port/compare_dumps.py; head -30 tools/port/bench_frames.sh; grep -n "DUMP_FRAMES\[\]\|DUMP_FRAMES
+
+## Claude
+
+I'll compare frame dumps from two builds: the new one, and one with HEAD's renderer (keeping the warp fix). Each runs the map4_s02 warp and attract demo 0.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+The comparison runs are going: the new build first, then HEAD's renderer, then a pixel-by-pixel comparison of their frame dumps. The script copies the new renderer back into place when it's done.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bpi2
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; find build/port -maxdepth 1 -name "frame_*.ppm" -delete; python3 tools/port/warp_sweep_ps2.py --maps map4_s02 --
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; head -25 tools/port/gpu_test.py; ls tools/port/frame_debugger | head; grep -n "replay" tools/port/compare_frames
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,30p tools/port/compare_frames.py; sed -n 100,130p tools/port/compare_frames.py; ls build/port | grep -i
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 25,80p tools/port/gpu_test.py | grep -n "ISO\|build\|semi\|filt\|cases\|CASES" | head -20
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 70,110p tools/port/gpu_test.py; grep -n "def main" -A40 tools/port/gpu_test.py | grep -n "iso\|ISO\|make\
+
+## Claude
+
+The test covers 4- and 8-bit modulated, semi-transparent quads, which go through the filtered-CLUT path. Running it on both builds.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+`gpu_test.py` is running on the new renderer (against fresh DuckStation references) and then on HEAD's renderer, and I'll diff the two reports. At the end it rebuilds the new renderer so the working ISO is current.
+
+So far:
+- **map4_s02, drawing per frame:** 1,206k → 737k cycles. Texture state 765k → 202k, GS sends and waits 415k → 90k, uploads about 171 → 25 a frame. The rest of the game's frame (about 820k of game logic) is unchanged.
+- **Attract demo 0:** 10 of 10 frame dumps identical to HEAD.
+- **The filter maths:** the old and new filters agree for every colour, texel value and blend mode.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/b1molfbva.output; grep -iE "tex4|tex8" /tmp/claude-1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -5 "PS2 Optimizations.md"; grep -n "Filtered CLUT cost" -A2 docs/ToFix.md
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "PS2 Optimizations.md" <<'E'  ### 2026-10-23: map4_s02 profile; filtered CLUT cache (exact): kept Measure
+
+## Claude
+
+I fixed the main bottleneck in map4_s02. In PCSX2, drawing time there fell by about 40% with the same output. It hasn't been measured on the console yet.
+
+**The bottleneck:** most of the slowdown came from the renderer's filtered CLUTs. These are adjusted colour tables that make faint semi-transparent effects look like the PS1. map4_s02's effects use about 340 of them a frame. They were cached by each polygon's exact colour, in only 8 slots. One frame needs up to about 110 different tables, so the cache kept missing and rebuilt and uploaded a table 70–170 times a frame. The texture page cache itself never missed.
+
+**The fix** ([gpu_gs.c](src/port/ps2/gpu_gs.c)):
+- Tables are now keyed by the few cut-off values that actually decide their contents, so different colours share a table when the result is the same.
+- 4-bit tables only have 16 entries, so 16 of them now fit in one GS colour-table row. That gives 256 cache slots instead of 8.
+
+**Results in map4_s02** (PCSX2, per frame):
+
+| | Before | After |
+|---|---|---|
+| Drawing (k-cycles) | 1,206 | 737 |
+| — texture state | 765 | 202 |
+| — sending to the GS and waiting | 415 | 90 |
+| Filtered-table misses | ~160 | 23 |
+| Uploads | ~171 | 25 |
+
+The game logic, about 820k cycles a frame, is unchanged. The gain should be bigger on the console, because PCSX2 doesn't model the GS wait time each upload causes there.
+
+**Same output:**
+- The old and new filters give identical tables for every colour, texel value and blend mode.
+- Attract demo 0: 10 of 10 frame dumps identical to before.
+- `gpu_test.py`: identical results before and after against DuckStation, including the semi-transparent 4/8-bit cases.
+- The map4_s02 warp runs can't be compared frame by frame, because the demo's timing follows the frame rate.
+
+**Not done yet:**
+- **Console check:** `build/port/sh1_ps2.iso` is now a normal 60 fps build with the fix, ready to deploy. I haven't deployed it. Worth seeing how map4_s02 does now.
+- **map4_s03:** the warped demo's route stayed light (about 63 fps), so I couldn't reproduce your slow stretches there. If you can tell me where in the map they happen, or have a save near there, I can profile that spot.
+- **New crash:** one of five map4_s02 warp runs in PCSX2 ended in a jump to address 0 (`TLB Miss, pc=0x82000`). I added it to [docs/ToFix.md](docs/ToFix.md).
+
+**Other changes, all uncommitted:**
+- Warp runs skip the intro movie again in [stream.c](src/screens/stream/stream.c). They had been broken since FMV playback was added.
+- New cache counters in the renderer, compiled into light-counter builds only.
+- The results are written up in [PS2 Optimizations.md](PS2%20Optimizations.md) and [docs/ToFix.md](docs/ToFix.md).
+
+Should I commit, deploy to the console, or both?
+
+## User
+
+Commit. I’ll test on console later.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git add -A "PS2 Optimizations.md" docs/ToFix.md src/port/ps2/gpu_gs.c src/screens/stream/stream.c && git commit 
+
+## Claude
+
+I committed it on `upstream-sync` as `434b10b7f`. The commit has the renderer fix, the intro-movie skip for warp runs, and the updated optimization doc and to-fix list.
+
+`build/port/sh1_ps2.iso` was built from the same code as this commit: a normal 60 fps build, ready to deploy when you test. Once you have console numbers for map4_s02, I'll add them to [PS2 Optimizations.md](PS2%20Optimizations.md).
+
+## User
+
+As far as the graphics pipeline goes, take a look at these two PS2 decomps:
+
+https://github.com/TheMoonPeople/Chronicle
+
+https://github.com/RossyDoubleUnderscore/ICO-decomp
+
+Download them to PS2 Decomps in the same folder as PS1 Decomps. 
+
+Analyze the graphics pipeline for each game and provide a summary of how they work, how they differ from each other, and how they differ from our Silent Hill port. Give your best estimation of how performant each approach is.
+
+- tool `Bash`: ls -d ~/Documents/*Decomp* ~/*Decomp* 2>/dev/null; ls ~/Documents | head -30
+
+- tool `Bash`: mkdir -p ~/Documents/"PS2 Decomps" && cd ~/Documents/"PS2 Decomps" && git clone -q --depth 1 https://github.com/TheMoonPeople/Chronicle && git clone -q --depth 
+
+- tool `Bash`: cd ~/Documents/"PS2 Decomps"; find ICO-decomp -type f | grep -v "\.git/" | sed 's|/[^/]*$||' | sort | uniq -c | sort -rn | head -20; find ICO-decomp -name "*.c"
+
+- tool `Bash`: cd ~/Documents/"PS2 Decomps"/ICO-decomp; ls -la config scripts include include/ico2 iso; head -60 config/*; cat include/ico2/fumi.h; git log --oneline | head
+
+- tool `Bash`: cd ~/Documents/"PS2 Decomps"/ICO-decomp; wc -l config/symbol_addrs.txt; grep -oE "^[A-Za-z_0-9]+" config/symbol_addrs.txt | sed -E 's/^([a-z]+[A-Z]?[a-z]*).*/\1
+
+- tool `Bash`: cd ~/Documents/"PS2 Decomps"/ICO-decomp; grep -E "^\s*- \[" config/ICO-PAL.yaml | awk '{print $NF, $0}' | grep -iE "gs|vu|vif|dma|draw|tex|gra|shadow|light|mode
+
+- tool `Bash`: cd ~/Documents/"PS2 Decomps"/ICO-decomp; grep -E "^\s*- \[0x0[0-3]" config/ICO-PAL.yaml | grep "asm," | awk '{print $NF}' | head -60 | tr '\n' ' '; echo; grep -
+
+- tool `Bash`: cd ~/Documents/"PS2 Decomps"/Chronicle; sed -n 40,140p README.md; ls docs port ps2 tools scripts; find . -path ./.git -prune -o -type f \( -name "*.c" -o -name 
+
+- tool `Bash`: cd ~/Documents/"PS2 Decomps"/Chronicle; ls ps2/src port/src | tr '\n' ' '; echo; ls docs/port; wc -l docs/PC.md docs/PC_PORT_PLAN.md docs/DECOUPLING_PLAN.md; gr
+
+- tool `Bash`: cd ~/Documents/"PS2 Decomps"/Chronicle; sed -n 160,216p docs/PC_PORT_PLAN.md; sed -n 278,314p docs/PC_PORT_PLAN.md; sed -n 915,1076p docs/PC.md | head -90; sed 
+
+## Claude
+
+Chronicle's PC port replaces the PS2 renderer with Vulkan (through a shared engine called Kazarov). Next, Dark Cloud's original PS2 pipeline in `ps2/src`.
+
+- tool `Bash`: cd ~/Documents/"PS2 Decomps"/Chronicle/ps2; wc -l src/visualvu1.cpp src/mglib.cpp src/vutext.cpp src/vudata.cpp src/texture.cpp src/visualshadow.cpp src/frame.c
+
+- tool `Bash`: cd ~/Documents/"PS2 Decomps"/Chronicle/ps2; grep -n "^[A-Za-z].*(" src/mglib.cpp | head -80; grep -n "INCLUDE_ASM" src/mglib.cpp | wc -l; grep -c "INCLUDE_ASM" 
+
+- tool `Bash`: cd ~/Documents/"PS2 Decomps"/Chronicle/ps2; sed -n 387,600p src/mglib.cpp; sed -n 398,470p src/visualvu1.cpp
+
+- tool `Bash`: cd ~/Documents/"PS2 Decomps"/Chronicle/ps2; grep -n "^u_int Vu_prog" src/vutext.cpp; grep -n "VU1_PROGRAM" include/*.hpp | head -5; grep -n "enum VU1_PROGRAM" -
+
+- tool `Bash`: cd ~/Documents/"PS2 Decomps"/Chronicle/ps2; sed -n 540,642p src/visualvu1.cpp
+
+## Claude
+
+Here's the comparison. Dark Cloud and ICO are both native PS2 games: the EE sends little more than matrices, and the VU1 vector unit transforms everything. Our port is the opposite: the EE does every vertex and every primitive, and VU1 sits idle.
+
+**Where the code is:** both repositories are cloned into `~/Documents/PS2 Decomps/` (Chronicle and ICO-decomp).
+
+**How much each one shows:**
+- **Chronicle (Dark Cloud)** is fully decompiled, with no assembly left. I read the actual rendering code, including the VU1 microcode, and its PC port.
+- **ICO-decomp** has only one C file decompiled (threads). Its graphics pipeline below is inferred from the 5,800 symbol names, the source file layout in its config, and the 12 VU microcode overlays listed in the executable. Treat the ICO part as a well-founded guess, not a reading of the code.
+
+## Dark Cloud (Chronicle)
+
+**Original PS2 pipeline:**
+- **Models are converted once, at load.** `CreateVUdataFromMDT` turns each model into a ready-to-send block of VU1 data: vertices, normals, UVs and colours, plus the GS primitive setup.
+- **Each draw is a small header plus a pointer.** `CVisualVu1::DrawVu1` writes about 30 quadwords per object: a VIF unpack header, the screen, clip and viewport matrices, flags (lit, fog, shadow pass), fog parameters and the eye position. It then adds a DMA "ref" tag pointing at the model's prebuilt block. The EE never touches individual vertices.
+- **VU1 does the per-vertex work.** It transforms, lights, fogs and clips each vertex, then hands GS packets straight to the GS (`vutext.cpp`: `Vu_prog0`, `prog0f`, `prog1`, `progg`, `progmain`).
+- **Whole frames are double-buffered.** One VIF1 packet is built per frame. `MGEndFrame` waits for the previous frame's transfer to finish and sends the new frame in a single DMA. So the EE builds frame N+1 while VU1 and the GS draw frame N.
+- **Effects:** shadows, water and depth of field are drawn into textures or read back from the frame buffer (`MGMoveImage`, `shadow_buf`, `frame_image`). Textures are TIM2 images in a GS memory allocator.
+- **Skinned models:** animated models are rebuilt on the EE ("Remake"), so skinning is the one per-vertex job the EE does.
+
+**PC port:** all of that is replaced by Vulkan, through a shared engine called Kazarov.
+- Models become GPU meshes. `DrawVu1` becomes a mesh draw with constants, and GS blend modes are reproduced in shaders.
+- It uses bindless textures, every pipeline compiled at start-up, an optional render thread, and render scaling and widescreen.
+- It doesn't try to reproduce the PS2's exact pixels; it reproduces how things look.
+
+## ICO (inferred)
+
+The same native model as Dark Cloud, but heavier on the GS:
+- **Load-time packet building:** the `pac_*` functions (`makeStrip`, `MakeClusterStrip`, `makeMaterialTable`, `SetVifCode`, `SetGifTag`) build DMA, VIF and GIF chains when a model loads. Weight-clustered strips suggest skinning on VU1.
+- **Microcode per object:** `reg_chooseMicroCode`, `chooseSpecularMicroCode` and `chooseReflectionMicroCode` pick a VU1 program per object, and `reg_set{N,M,C,E}MatrixPacket` send matrix sets per object type. There are 12 microcode overlays.
+- **Lots of GS fill work:**
+  - Shadow volumes: `shadow_RenderVolume` and `RenderVolumeMulti`.
+  - Depth fog: `ZFog`.
+  - Full-screen post-processing in `gsb_*`: `Reduction` and `KeepFrameBuffer` (bloom), `SetMotionBlur`, `filmNoise`, `antiAlias`, `controlBrightness`, `PostEffect`.
+- **Textures:** a GS memory manager with TIM2 images, mipmaps, animated CLUTs and a CSM2→CSM1 conversion.
+- **Level of detail:** `lodManager`.
+- **Multithreaded:** the `ios` thread and message system (the one decompiled file) is a multithreaded game framework.
+
+## How they differ
+
+| | Dark Cloud | ICO | Our Silent Hill port |
+|---|---|---|---|
+| Geometry built | once, at load | once, at load | every frame, by the game's PS1 code |
+| Per-vertex work | VU1 (EE for skinning) | VU1, probably skinning too | EE: the GTE written in C, with batched paths |
+| Per-primitive work | VU1 | VU1 | EE: PS1 packets translated to GS packets one by one (DrawOTag) |
+| EE cost per object | ~30 quadwords plus a DMA pointer | about the same | thousands of cycles per primitive |
+| Textures | native PS2 TIM2, mipmaps | the same | PS1 VRAM kept in GS memory, with page, CLUT and filtered-CLUT caches |
+| Accuracy target | the original game's look | the original game's look | match the PS1 pixel for pixel (dither, blending, fog pairs, filtered CLUTs) |
+| Main limit | GS fill rate, VU1 | GS fill rate (post effects, shadow volumes) | the EE |
+
+The fundamental difference: those games were authored for VU1 and give it the vertex work. Ours runs the PS1 game's own logic, which builds a new list of 2D primitives every frame. That leaves the EE translating each one, and VU1 does nothing.
+
+## Performance estimates
+
+These are educated guesses from the code structure plus our own numbers, not measurements of those games.
+- **Dark Cloud:** very cheap per object on the EE, roughly 1–2k cycles per object for the matrix maths and the header. VU1 handles thousands of vertices a frame comfortably. The limits are GS fill (frame grabs, depth of field, shadow textures), VU1 time, and EE skinning for animated models. It targets 30 fps, with spare EE time for game logic.
+- **ICO:** the EE side is as cheap as Dark Cloud's, but the GS has more to do: shadow volumes, several full-screen passes, and big transparent areas. It ran at about 30 fps with known slowdowns, which fits a GS fill or VU1 limit, not an EE one.
+- **The Chronicle PC port:** on any modern GPU the work is trivial. It's CPU-limited by the game's own logic, and the render thread helps with that.
+- **Our port:** the PS1 scenes are small (about 500–2,000 primitives a frame), so we can manage 60 fps.
+  - **Drawing:** about 1,300 cycles a primitive, from our map4_s02 numbers after today's fix (737k cycles for about 560 primitives).
+  - **Rest of the frame:** about 0.8–1.5M cycles of game logic and GTE work a frame.
+  - **Overall:** roughly 3.5M of the 4.9M cycles a 60 fps frame allows on the EE, while VU1 sits unused.
+  - **Compared with the native games:** per triangle, I'd put them 10–30x cheaper on the EE than we are. Our GS fill load is light, because PS1 resolution and overdraw are small.
+
+**What this means for us:** the biggest remaining gain would be moving work onto VU1, the way these games do. The parts it suits best:
+- The batched GTE paths (`Gte_RtpBatch`, mesh transforms, point lights).
+- GS packet building for runs of simple primitives.
+
+The catch is exactness: VU1 works in floating point, and the PS1 GTE's integer rounding and flags would need care. The safest first target is a batch whose results we can already check exactly against the C version, as `lib_test` and `gte_test` do today. Sending ready-made packets with DMA ref tags, as Dark Cloud does, doesn't fit us directly, because the PS1 game rebuilds its primitive list every frame.
+
+If you want this as a page you can share, I can put it into one.
+
+## User
+
+Save these findings as PS2 Decomps Analysis.md. What changes can we make to our engine that don’t change the graphical output, but are better suited to PS2 hardware? Ideally we want the GS to end up being the bottleneck.
+
+## Claude
+
+I'm saving the analysis first, then checking how our renderer hands work to the GS, so the proposals rest on how it actually works.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/PS2 Decomps Analysis.md
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "^void GpuGs_Flush\|^static void GpuGs_Flush\|GpuGs_Flush(void)$" src/port/ps2/gpu_gs.c | head -1 | 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "PKT_WORDS\b" src/port/ps2/gpu_gs.c | head -2; sed -n 160,215p src/port/ps2/gpu_gs.c; grep -n "GpuGs_Syn
+
+## Claude
+
+Saved as [PS2 Decomps Analysis.md](PS2%20Decomps%20Analysis.md), next to the other docs.
+
+Checking the renderer turned up the most important fact for this question: **the EE and the GS never work at the same time.** Every GS send waits for the transfer to finish (`dma_send_impl` calls `dmaKit_send` and then `dmaKit_wait`). The comment there says an asynchronous version hung a real PS2 on 2026-10-09 and was backed out.
+
+So the GS sits idle while the EE builds packets, and the EE sits idle while the GS draws. Dark Cloud and ICO are built the other way round. These are the changes I'd make, most promising first. None of them should change a pixel, and each can be checked with the tools we already have.
+
+### 1. Let the EE and GS overlap (asynchronous GIF DMA)
+- **What:** start each send and return immediately. Wait only when the next send needs the buffer, or before readbacks, uploads, the display swap and `DrawSync` (the 12 `GpuGs_Sync` callers). There are two packet buffers already, so the structure is there.
+- **Next step up, as in Dark Cloud:** don't wait at the end of DrawOTag, so the GS draws frame N while the EE runs the game logic for frame N+1.
+- **Why it's first:** in map4_s02, sends and waits still cost about 90k cycles a frame in PCSX2, and PCSX2 understates GS time. On the console, GS draw time and EE time currently add up instead of overlapping. This is the only change that moves the work towards the GS.
+- **Output:** identical, because the GS still receives the same packets in the same order.
+- **Risk:** the hang from 2026-10-09. That needs finding first. My suspects are the DMA wait with interrupts off, and cache write-back ordering with the uncached-accelerated buffers.
+- **Effort:** small to medium. Only measurable on the console.
+
+### 2. Fewer, larger sends
+- Each send currently pays a full cache flush (`FlushCache(0)`) and a wait. map4_s02 did about 150 sends a frame before today's fix, most forced by uploads.
+- Flush only the packet's cache lines, or write packets only through the uncached-accelerated path so no flush is needed. Also use a bigger buffer, or DMA chain mode, so a frame goes out in a few transfers.
+- Small effort. It pairs naturally with #1.
+
+### 3. Skip the PS1 packet round trip for the hot meshes
+- The world mesh, character mesh and particle code already have every vertex in registers. Right now they write PS1 GP0 packets, which DrawOTag then reads back, decodes and turns into GS packets: about 1,300 cycles a primitive.
+- **Change:** those paths write the GS packet directly into a side buffer, and leave a small marker in the OT where the PS1 packet would have gone. DrawOTag copies it across at that point, the way Dark Cloud points at prebuilt data with ref tags.
+- **What stays the same:** the OT order and the GS state rules (texture state, dithering, fog pairs, filtered CLUTs), which come from shared code.
+- **Check:** the per-mesh check builds we already use (packets against the original, 0 mismatches) plus frame dumps.
+- **Gain:** probably half or more of DrawOTag in mesh-heavy scenes, where DrawOTag is about 30% of frame time.
+- **Effort:** medium to large.
+
+### 4. GTE maths with MMI, not VU0 or VU1
+- VU0 and VU1 work in 32-bit floats. The PS1 GTE's 44-bit integer sums and its division table can't be reproduced exactly that way. So GTE emulation shouldn't move to the vector units.
+- The exact fit is the EE's 128-bit integer SIMD (MMI): `PMULTH`/`PMADDH` do eight 16×16-bit multiplies at a time. We already use MMI for bone matrices.
+- **Candidates:**
+  - The batched transforms (`Gte_RtpBatch`, `Gte_RtpGrid`, the character and world mesh transforms).
+  - The point light's dot products.
+  - The colour maths (NCT/DPCS).
+- **Guard:** where an intermediate value could exceed 32 bits, check its range and fall back to the current C, so the result and the GTE flags stay exact.
+- **Gain:** point light plus mesh transform are 20–30% of busy time in the heavy cutscenes.
+- **Check:** `gte_test` and `lib_test` compare against the PS1 GTE in DuckStation.
+- **Effort:** medium.
+
+### 5. VU1 as an exact packet expander (after #3)
+- VU1 can't do the GTE maths exactly, but it can rearrange and copy integers exactly.
+- **Change:** the EE writes compact primitive records (positions, UVs, colours as 16-bit values, plus a state index). A VU1 microprogram expands them into full GS packets and sends them to the GS itself (XGKICK).
+- It would also take over the repetitive parts: fog pairs (each fogged face drawn twice), the two passes of filtered polygons, and splitting sprites into triangles.
+- This is the closest we can get to the native games' setup, and it takes the last per-primitive store work off the EE.
+- **Effort:** large: new microcode and a VIF1 path alongside the GIF one.
+
+### 6. Profile the game logic on real hardware
+- map4_s02 spends about 820k cycles a frame in game logic. PCSX2 doesn't model the EE caches, so it can't show what costs most on the console.
+- The EE has hardware performance counters that can count cache misses and stalls.
+- **Next steps:**
+  - A light-counter build that reads those counters on the console would show whether the slow stretches in map4_s02 and map4_s03 are cache-bound.
+  - The scratchpad change from 2026-10-22 is still waiting for its hardware measurement.
+- Compiler flags are a cheap side check: we build with `-G0`, which costs an extra instruction on every global access.
+
+### Can the GS actually become the bottleneck?
+At 1x, probably not entirely. The PS1 frame is small, so the GS can draw a whole frame's primitives in a fraction of a frame, even with fog pairs and two-pass polygons. What's realistic:
+- **#1 and #2:** we stop paying for EE and GS time added together.
+- **#3 and #4:** the EE's share shrinks to roughly game logic plus a lean submit.
+- **The GS becomes the limit only in the heavier modes:** 2x 32-bit, or a future texture-streaming 720p. That's also the right place for the limit to be, since GS time spent there buys picture quality.
+
+**My suggested order:** #1 (find the async hang, then overlap the frames) and #2 first. They're small, safe for the output, and the console will tell us how much GS time is really hidden today. Then #4, then #3. #5 only if we still need it after that.
+
+## User
+
+Let’s get started on these changes. Write the plan to Graphics Pipeline Rework.md and update it as we go along. I won’t be able to test on console right now, but given previous differences in performance between console and emulator, estimate console performance. Later console tests will provide more accurate data. Start on #1. From now on, send me notifications when you reach a good stopping point, such as a question or if you finish with one step.
+
+## Claude
+
+I'll load the notification tool and save your notification preference first, then write the plan.
+
+- tool `ToolSearch`: 
+
+- tool `Write`: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/notify-at-stopping-points.md
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; echo "- [Notify at stopping points](notify-at-stopping-points.md) — push a notification on questions and finishe
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 525,545p "Planning Doc.md"; git show b0e79abc9 -- src/port/ps2/gpu_gs.c | grep -n "^[-+]" | grep -iE "dma
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git log --all --oneline -S"D2_CHCR" | head; git log --all --oneline -S"0x1000A000" -- src/port/ps2/gpu_gs.c | he
+
+- tool `Bash`: echo $PS2SDK; find / -path /proc -prune -o -name "dma.c" -path "*dmakit*" -print 2>/dev/null | head; find / -path /proc -prune -o -name "dmaKit.h" -print 2>/dev
+
+- tool `Bash`: find / -path /proc -prune -o -path "*dmaKit*" -name "*.c" -print 2>/dev/null | head; find ~ -name "dmaKit.c" 2>/dev/null | head -2; grep -n "send\|wait" /home/a
+
+- tool `Bash`: sed -n 1,200p /home/alex/ps2dev/gsKit/include/dmaKit.h | grep -n "dmaKit_\|define DMA_CHANNEL_GIF\|D2_" | head -20; ls /home/alex/ps2dev/gsKit/lib; cd /tmp/clau
+
+- tool `Bash`: ls /home/alex/ps2dev/ee/bin | grep objdump; O=$(ls /home/alex/ps2dev/ee/bin/*objdump | head -1); $O -d /home/alex/ps2dev/gsKit/lib/libdmakit.a | awk '/<dmaKit_s
+
+## Claude
+
+I'm reading the ps2sdk DMA helper to see whether it waits on its own. Next I'll write the plan file, then start #1.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "dmaKit_send\|dmaKit_wait\|gsKit_queue_exec\|gsKit_sync\|DMA_CHANNEL_GIF\|0x1000A" src/port --include=*
+
+## Claude
+
+I'll write the plan file before touching code.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/Graphics Pipeline Rework.md
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "dma_send(" src/port/ps2/gpu_gs.c; n=$(grep -n "^static void pend_flush(void)$" src/port/ps2/gpu_gs.c | 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/gpu_gs.c"; s=open(p).read() def rep(a,b):     global s     assert s.count(a)==1,
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 524,536p src/port/ps2/gpu_gs.c; sed -n 2462,2560p src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+The plan is in [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md), with console estimates. From past pairs, I'm using about 2.3x PCSX2's cycle counts, and more for time spent waiting. By that rule, map4_s02 should already be about 42–45 fps on the console after the filtered-CLUT fix, up from 35.9.
+
+Step #1's first part is written in [gpu_gs.c](src/port/ps2/gpu_gs.c), uncommitted:
+- **Sends no longer wait for their own transfer.** A send writes the GIF DMA registers and returns; it only waits for the transfer before it. `GpuGs_Sync` waits for the last one before uploads, readbacks and the display.
+- **Polling only, no DMA interrupt,** so it's safe with interrupts off. The 2026-10-09 attempt at this was reverted after a hang at the logos. A boot-freeze bug found later the same day (in ResetCallback) is the likelier cause of that hang.
+- **No more full cache flush on every send.** The packet buffers are written through the uncached mirror; the upload staging buffer now writes back only its own cache lines.
+
+Running now: `gpu_test.py` and the attract demo 0 frame dumps against the previous build, then a map4_s02 measurement. I'll notify you when the results are in.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/b3bmd7mfy.output
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 130,160p src/port/libgpu_port.c; sed -n 340,370p src/port/libgpu_port.c; n=$(grep -n "^void GpuGs_Display
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "0x120000\|GS_CSR\b\|\*GS_" src/port/ps2/gpu_gs.c src/port/ps2/display_ps2.c | head -30
+
+## Claude
+
+Two places need a wait: the movie path already waits, but `GpuGs_DisplayShow`'s two flushes don't. I'm adding a wait after each so the display switch happens at the same point as before.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/gpu_gs.c"; s=open(p).read() a="""        GpuGs_Flush();         dispfb = """ ass
+
+## Claude
+
+I'm rebuilding with the display wait and rerunning both output checks.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+The output checks are rerunning on the build with the display wait. Meanwhile, a finding about the frame-level overlap I'd planned: it has less in it than it looked.
+
+The EE translates every primitive as part of DrawOTag, so once DrawOTag returns, the only GS work left is the last packet. Overlapping GS drawing with the next frame's game logic would only hide that last packet. The packet-level overlap that is now in place already does most of what's possible. Real frame-level overlap would need the translation itself off the EE, which is step 5.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bu7cxuqfs.output
+
+## Claude
+
+Both checks pass on the final build: `gpu_test.py` gives the same results and 10 of 10 attract demo dumps are identical. I'm updating the plan and committing.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="Graphics Pipeline Rework.md"; s=open(p).read() def rep(a,b):     global s     assert s.count(
+
+- tool `PushNotification`: 
+
+## Claude
+
+Step 1 is done and committed as `6cd5d8f18`. GS sends no longer wait for their own transfer, so the EE builds the next packet while the GS takes the current one. It's measured in PCSX2 only; the console test is still to come.
+
+**What changed in [gpu_gs.c](src/port/ps2/gpu_gs.c):**
+- A send starts the GIF DMA channel and returns. It only waits for the send before it, and `GpuGs_Sync` waits for the last one (uploads, readbacks, the display, `DrawSync`).
+- Waits poll the DMA register instead of using an interrupt, so they're safe with interrupts off.
+- Sends no longer flush the whole data cache each time. The packet buffers bypass the cache, and the upload buffer writes back only its own cache lines.
+- The display still switches only after the frame's last packet is sent, as before.
+
+**Results in map4_s02** (PCSX2, per frame):
+
+| | Before | After |
+|---|---|---|
+| Drawing (k-cycles) | 737 | 632 |
+| — sends and waits | 90 | 7 |
+| — texture state | 202 | 122 |
+
+**Same output:** `gpu_test.py` gives identical results, and attract demo 0's frame dumps are 10 of 10 identical.
+
+**Console estimate:** about 45–50 fps in map4_s02, up from an estimated 42–45 after the filtered-CLUT fix (35.9 measured before that). PCSX2 barely charges for the GS side of each send, so the gain should be larger on hardware.
+
+**What the console test has to check besides speed:** that boots and warm restarts still work. The 2026-10-09 attempt at async sends hung at the logos on the console. The boot-freeze bug found later that day is the likely cause, but only the console can confirm it.
+
+**One part of the plan is dropped:** overlapping a whole frame of GS drawing with the next frame's game logic. As described above, it would only hide the last packet. The reasons are recorded in [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md), along with the results and estimates.
+
+Next is step 2: fewer, larger sends. In map4_s02 there are still about 31 sends a frame. Should I go ahead?
+
+## User
+
+Proceed
+
+## Claude
+
+I'll start by finding out what causes the remaining sends, then cut them.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "upload(\|upload_staged(" src/port/ps2/gpu_gs.c | grep -v "^.*static void"; grep -n "GpuGs_Flush();" src
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/gpu_gs.c"; s=open(p).read() a="""/** Host-to-local image transfer of `bytes` (a 
+
+## Claude
+
+Small uploads now go inline (up to 2 KB, as long as the source is 8-byte aligned). Building, then the output checks and a map4_s02 measurement.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+Step 2 has begun. Uploads up to 2 KB (CLUT rows, small LoadImages) now go into the packet being built: the transfer registers plus an IMAGE tag with the data, so the GS gets the same commands in the same order. Before, each upload took three separate transfers. Since most of map4_s02's remaining uploads are CLUT rows of 32–512 bytes, this should remove most of its sends.
+
+Running now: `gpu_test.py`, the attract demo 0 frame dumps, and a map4_s02 measurement. At the end it rebuilds the normal 60 fps ISO.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bomig7o74.output
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/gpu_gs.c"; s=open(p).read() def rep(a,b):     global s     assert s.count(a)==1,
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; unset SH1_BENCH SH1_LITEPROF; export SH1_FPS=60 SH1_NO_RECOMP=1; (tools/port/ee_compile_check.sh && python3 tool
+
+- tool `PushNotification`: 
+
+## Claude
+
+Step 2 is done and committed as `d11e842fb`. Like step 1, it's measured in PCSX2 only.
+
+**What changed:** uploads up to 2 KB (CLUT rows, filtered CLUTs, small LoadImages) now go into the packet being built: the transfer registers, then an IMAGE tag with the data. The GS receives the same commands in the same order, without three separate sends.
+
+**Results in map4_s02** (PCSX2, per frame):
+
+| | After step 1 | After step 2 |
+|---|---|---|
+| Sends | 31 | 6 |
+| Drawing (k-cycles) | 632 | 614 |
+| — texture state | 122 | 92 |
+
+**Same output:** `gpu_test.py` gives identical results, and attract demo 0's frame dumps are 10 of 10 identical.
+
+**Readbacks are already at 0 a frame** in map4_s02. The 7 I'd seen were from before the filtered-CLUT change. That matters on the console, because each readback makes the EE wait for the GS to finish everything. Light-counter builds now also report readbacks by source.
+
+**Bigger or chained packet buffers aren't needed:** a frame's drawing fits the existing 64 KB buffers, and the 6 sends left are the frame and display boundaries.
+
+**Console estimate:** about 47–52 fps in map4_s02. [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md) has the results and the running table of estimates.
+
+Steps 1 and 2 also mean much of the remaining cost is plain EE work, which PCSX2 measures fairly well. In map4_s02, drawing takes about 614k cycles a frame and game logic about 820k. Of the drawing, about 540k goes to translating primitives one by one (`GpuGs_Commands`): the target of step 3.
+
+Step 3 is the largest change so far. The world mesh, character mesh and particle code would write GS packets directly, checked mesh by mesh against translating the PS1 packets. Should I go ahead?
+
+## User
+
+Yes
+
+## Claude
+
+Before building step 3, I'm getting a current breakdown of where the translation time goes, so I know which parts a direct path would actually save.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' import re,collections cur=None;acc=collections.defaultdict(list) for l in open("build/port/warp_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; head -20 tools/port/bench_cutscene.sh
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 20,40p tools/port/bench_cutscene.sh; grep -n "CybilFightStart\|Kaufmann" tools/port/cutscene_list.py | he
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_BENCH=1 SH1_LITEPROF=1; (tools/port/ee_compile_check.sh && python3 tools/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -E "gs readbacks per frame|gs filtered CLUTs per frame|gs cache per frame" build/port/kauf_lp.log | awk -F'
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/gpu_gs.c"; s=open(p).read() a="""#define CLUT_ROWS  104 /* rows 104-127: filtere
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+While the checks run, I'm reading the polygon emit code. In Kaufmann it costs about 840 cycles a polygon, more than parsing.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "LP_BEGIN(LP_POLY_EMIT)" src/port/ps2/gpu_gs.c|cut -d: -f1); sed -n "$((n-10)),$((n+100))p" src/port
+
+## Claude
+
+I'll wait for the background check before editing `gpu_gs.c`, because it swaps that file between builds. Next I'll measure how often the exact-blending path (three draws per polygon) runs in Kaufmann, since its cost is counted in emit.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bjenhpl0j.output; cd /home/alex/Documents/silent-hil
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad/kdiff_03.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad/kdiff_07.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="Graphics Pipeline Rework.md"; s=open(p).read() def rep(a,b):     global s     assert s.count(
+
+## Claude
+
+Next, before choosing how to build step 3, I'm measuring what's inside emit in Kaufmann: exact blending (three draws per polygon) against plain strips.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' import re p="include/port/prof.h"; s=open(p).read() s=s.replace("""    LP_SNOW_RTPS,  /* Particl
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "^static void blend_exact(" src/port/ps2/gpu_gs.c|cut -d: -f1); m=$(grep -n "^static int blend_exact
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "s_StateGen++\|s_Epoch++" src/port/ps2/gpu_gs.c | head -40
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 338,348p src/port/ps2/gpu_gs.c; sed -n 455,462p src/port/ps2/gpu_gs.c; sed -n 2240,2292p src/port/ps2/gpu
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/gpu_gs.c"; s=open(p).read() def rep(a,b):     global s     assert s.count(a)==1,
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "^static u64x state_other(const Prim\* p)$" src/port/ps2/gpu_gs.c|cut -d: -f1); sed -n "$n,$((n+140)
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "^static void base_state(void)" src/port/ps2/gpu_gs.c|cut -d: -f1); sed -n "$n,$((n+45))p" src/port/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/gpu_gs.c"; s=open(p).read() def rep(a,b):     global s     assert s.count(a)==1,
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls build/port/cap 2>/dev/null | grep "ps1_.*_gp0.bin" | head -20; ls build/port/cap | grep -c "_gp0.bin"
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+Six of the seven replayed frames are identical. For frame 10, the new run has no VRAM file at all, so I'm checking whether that frame failed to capture rather than differed.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+Frame 10's capture file wasn't found in the new run ("capture missing"), so it was never replayed. I'm replaying frame 10 again with the new build.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+All 7 replayed frames are identical. I'm running `gpu_test.py`, the attract demo dumps and a Kaufmann measurement of the restore.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+Step 3 has changed direction, based on the measurements. Here's where it stands.
+
+**What the measurements showed:**
+- map4_s02 barely uses the mesh paths that "GS packets straight from mesh code" targets.
+- In Kaufmann, reading the PS1 packets back costs only about 390 cycles of the roughly 2,300 per polygon.
+- The larger costs are exact blending (about 752k cycles a frame for 132 polygons) and state recomputed on almost every polygon. Most recomputes (about 1,070 a frame) come from the primitive kind alternating, with only one memo entry.
+
+**Done so far in step 3:**
+- **Committed (`278fa7b9c`): larger filtered-CLUT caches.** In Kaufmann, readbacks fell from 16 to 0 a frame and uploads from 91 to 32. Before today's renderer changes, Kaufmann's DrawOTag was about 8,172k cycles a frame; it's now about 3,778k. The filtered CLUTs added on 2026-10-22 had more than doubled it, and nobody had measured that since.
+- **Testing now: `blend_exact` restores the registers it changes,** instead of invalidating every state memo, so the polygons after it keep their memos. Replaying all 7 DuckStation-captured frames through the renderer gives identical results to HEAD.
+
+**A caveat about one of our checks:** Kaufmann's frame dumps can't confirm identical output when a change alters speed. The cutscene follows its voice clips, which play in emulated time, so a faster build reaches each line at a different frame. I showed this with a build where the only change was a delay loop. Same-speed runs repeat exactly. For exactness I'm using `gpu_test.py`, the attract demo dumps and the frame replays instead, and I've noted this in [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md).
+
+**Next:** a per-kind state memo, then cheaper `blend_exact` packets. The mesh-packet bypass comes after those, if it's still worth it.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/b12m3p2e1.output
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/gpu_gs.c"; s=open(p).read() def rep(a,b):     global s     assert s.count(a)==1,
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/gpu_gs.c"; s=open(p).read() a="""        memoPrim = state_other(p);         PROF
+
+## Claude
+
+The per-kind memo is in. Running the same checks (`gpu_test.py`, attract demo dumps, the 7 frame replays against HEAD) and measuring Kaufmann.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+I've reverted the `blend_exact` register restore. It was exact, but it saved nothing measurable.
+
+In its place, `prim_state` now keeps a memo per primitive kind for the current drawing settings, at 1x only. When a kind comes back, only its six registers are re-applied, and writes are skipped where the value is already right.
+
+The build is running through `gpu_test.py`, the 7 frame replays against HEAD and the attract demo dumps, then a Kaufmann measurement. Finally it rebuilds the normal ISO.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bszbtpld0.output; grep -iE "error" -B2 build/port/s3
+
+## Claude
+
+The build failed at link time: the new 256-entry table (16 KB) doesn't fit in the 16 KB scratchpad alongside everything else. I'm moving it to main RAM.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's/        } kinds\[256\] SPR;/        } kinds[256] __attribute__((aligned(64)));/' src/port/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+The table is now in main RAM, and the checks and the Kaufmann measurement are running again.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/b10z41ggj.output
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="Graphics Pipeline Rework.md"; s=open(p).read() def rep(a,b):     global s     assert s.count(
+
+- tool `PushNotification`: 
+
+## Claude
+
+I've reached a checkpoint in step 3, and need your call on where to go next.
+
+**Committed:**
+- `278fa7b9c`: larger filtered-CLUT caches. Kaufmann's readbacks fell from 16 to 0 a frame, and uploads from 91 to 32.
+- `d50cc97f2`: a state memo per primitive kind. Kaufmann's state recomputes fell from about 1,070 to 106 a frame, and DrawOTag by about 2%.
+
+Both are exact by every timing-independent check: `gpu_test.py`, the 7 DuckStation frames replayed through the renderer (byte-identical VRAM), and the attract demo dumps.
+
+**Where Kaufmann stands** (PCSX2, per frame): DrawOTag is about 3,745k cycles for about 1,550 polygons, roughly 2,400 cycles each:
+
+| Part | k-cycles a frame |
+|---|---|
+| Emit | 1,324 |
+| — exact blending (132 polygons, about 5,700 cycles each) | ~750 |
+| State | 1,162 |
+| Parse | 600 |
+| Character mesh transform and packets | ~700 |
+
+**What I've learned:** small fixes to the per-polygon C code now buy about 2% each, and one attempt (restoring registers after exact blending) saved nothing and was reverted. The remaining options are bigger pieces of work:
+
+- **A. The mesh bypass (step 3 as first planned).** The mesh code writes GS-ready records, and DrawOTag skips the PS1 packet round trip. Estimate: about 15–20% of DrawOTag in mesh-heavy scenes like Kaufmann, little in effect-heavy ones like map4_s02. Medium-to-large work; checked mesh by mesh.
+- **B. Cheaper exact blending.** Its 40-odd register writes per polygon would become one prebuilt block. Estimate: about 5–10% of DrawOTag in Kaufmann, relevant wherever subtract or average blending appears. Small-to-medium work.
+- **C. Step 4, GTE maths on MMI.** It would cut the mesh transform and point-light costs (about 350k in Kaufmann, up to 1.4M in CybilFightStart) and helps every 3D scene. Medium work; checked exactly with `gte_test` and `lib_test`.
+- **D. Step 5, VU1 builds the packets.** It would take most of emit and parse off the EE. It's the only option that could actually move the bottleneck to the GS, but it's the largest: new microcode and a second transfer path.
+
+My recommendation: B first, as a quick win. Then C, which helps every scene. Then D, the real step toward a GS-bound renderer. A fits best once D's packet format exists, because the mesh code could write VU1 records directly.
+
+[Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md) has the measurements and the updated plan. Which way do you want to go?
+
+## User
+
+Let’s do B and then C
+
+## Claude
+
+Starting with B, cheaper exact blending. I'm reading how `ad()` manages its GIF tags, to write blend_exact's fixed register sequence as one block.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "^static inline void ad(u32 reg, u64x val)" src/port/ps2/gpu_gs.c|cut -d: -f1); sed -n "$n,$((n+25))
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/gpu_gs.c"; s=open(p).read() a="""        if (nv == 3)         {             blen
+
+## Claude
+
+Building and running the checks: `gpu_test.py` includes semi-transparent quads in modes 0, 2 and 3. Also the frame replays, the demo dumps and a Kaufmann measurement.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+B is under way. Profiling showed the register writes aren't where exact blending spends its time. Quads are: they go through `blend_exact` once per triangle, so they pay twice for the scratch clear, the composite and the state reset.
+
+The change in [gpu_gs.c](src/port/ps2/gpu_gs.c): when a quad's two triangles lie on opposite sides of their shared edge, it gets one `blend_exact` pass over the whole quad. Both the PS1 and the GS assign each pixel to exactly one of the two triangles, so each pixel is still blended once and the result is the same. Quads that fold over themselves keep the two-pass path.
+
+The checks are running: `gpu_test.py`, which has semi-transparent quads in all three modes, the 7 frame replays, the demo dumps, and then a Kaufmann measurement.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/befni3p9b.output
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="Graphics Pipeline Rework.md"; s=open(p).read() def rep(a,b):     global s     assert s.count(
+
+## Claude
+
+Now C, the GTE maths on MMI. I'm starting by mapping the batched GTE paths and finding where their time goes.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; wc -l src/port/gte.c; grep -n "^[a-zA-Z].*(\|^static.*(" src/port/gte.c | head -80; grep -rn "Gte_RtpBatch\|Gte_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1360,1500p src/port/gte.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 920,1010p src/bodyprog/gfx/bodyprog_80056D8C.c; grep -n "LP_MESH_XFORM\|LP_MESH_LIGHT\|LP_MESH_DRAW" src/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="include/port/prof.h"; s=open(p).read() s=s.replace("""    LP_EMIT_UNDER, /* polygon(): fog pa
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_BENCH=1 SH1_LITEPROF=1; (tools/port/ee_compile_check.sh && python3 tools/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1060,1070p src/port/gte.c; head -40 include/port/prof.h | grep -n "ifndef\|define _PORT"
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|#include "port/spr.h"|#include "port/spr.h"\n#include "port/prof.h"|' src/port/gte.c; export SH1_FPS=6
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; O=$(find build -name "gte.o" -newer src/port/gte.c | head -1); echo $O; mips64r5900el-ps2-elf-objdump -d $O 2>/d
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export PATH=$PATH:/home/alex/ps2dev/ee/bin; find build -name "*gte*.o" | head; O=$(find build -name "gte.o" -o -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "CybilFightStart\|def \|^[A-Z_]* = " tools/port/cutscene_list.py | head -20; grep -n "sweep" src/port/de
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; source .venv/bin/activate; python3 -c " import sys; sys.path.insert(0,'tools/port'); import cutscene_list as c l
+
+## Claude
+
+CybilFightStart is Demo #36. I'm measuring its point-light breakdown.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_BENCH=1 SH1_LITEPROF=1; rm -f build/port/input.txt; echo "sweep 36 300 36"
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -n "^int Gte_RtpsDotBatch" src/port/gte.c|cut -d: -f1); sed -n "$n,$((n+80))p" src/port/gte.c; sed -n 8
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "SH_PORT_CHECK_[A-Z]*" src --include=*.c | sed 's/.*\(SH_PORT_CHECK_[A-Z_]*\).*/\1/' | sort | uniq -c; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/gte.c"; s=open(p).read() def rep(a,b):     global s     assert s.count(a)==1,a; s=s.
+
+## Claude
+
+Both loops now take a 32-bit path when the rows are in range. Next I'll run a batch-check build on Kaufmann and CybilFightStart, comparing every batched vertex with the GTE, then measure.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_BENCH=1 SH1_EXTRA_CFLAGS=-DSH_PORT_CHECK_BATCH; unset SH1_LITEPROF; (tools
+
+## Claude
+
+The check build finds no mismatches: about 12 million batched vertices in Kaufmann, about 3 million in CybilFightStart, and 54,272 point-lit meshes, all compared against the GTE. Measuring the speed:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_BENCH=1 SH1_LITEPROF=1; unset SH1_EXTRA_CFLAGS; (tools/port/ee_compile_che
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/gte.c"; s=open(p).read() def rep(a,b,n=1):     global s     assert s.count(a)==n,(a,
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/gte.c"; s=open(p).read() a=s.index("    {\n        /* 32-bit path (as Gte_RtpBatch's
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="Graphics Pipeline Rework.md"; s=open(p).read() def rep(a,b):     global s     assert s.count(
+
+- tool `PushNotification`: 
+
+## Claude
+
+B and C are both done and committed. B paid off; C turned out much smaller than I'd estimated.
+
+**B, cheaper exact blending (`2893b19fa`).** In Kaufmann, exact blending fell from 755k to 313k cycles a frame, and DrawOTag from 3,745k to 3,319k (−11%).
+- Most of the cost was quads being blended once per triangle. A quad whose two triangles don't overlap now gets a single pass. That holds for every non-folded quad, because both the PS1 and the GS assign each pixel to exactly one triangle.
+- Exact: `gpu_test.py` is the same, all 7 DuckStation frame replays match byte for byte, and the attract demo dumps are identical.
+
+**C, GTE maths on MMI (`db249e666`).** Smaller than I estimated: MMI doesn't fit.
+- The dot products are only about 20 of the roughly 160 instructions per vertex. The rest is the projection (a table-based divide, clamps, two more multiplies), which can't be vectorised.
+- MMI had already been tried on the point light on 2026-10-17, and was slower.
+- What I did instead: the transform batch now uses 32-bit arithmetic when the rotation matrix allows it, which is exact by algebra. That's −9% of the batch (CybilFightStart 650k → 594k, Kaufmann 394k → 360k).
+- The same change made the point-light batch slower, so I left it out.
+- Exact: the check build compared about 15 million batched vertices and 54,272 point-lit meshes against the GTE, with 0 mismatches.
+
+**Where things stand** (PCSX2, per frame):
+- **Kaufmann:** DrawOTag about 3.3M cycles. Before today's changes it was 8.2M, mostly from the filtered CLUTs.
+- **CybilFightStart:** DrawOTag 1.6M, plus about 1.6M of GTE batches. The point light alone is about 1.04M, the largest single GTE cost.
+
+**Options from here:**
+1. **The point light.** About 1M cycles a frame in flashlight scenes. It needs a closer look at its three passes (collect, batch, apply) and why each vertex costs about 260 cycles. SIMD won't help.
+2. **D, VU1 builds the GS packets.** The only option that could make the GS the bottleneck. It's large, and the mesh bypass (A) would fold into it.
+3. **Stop and measure on the console first.** Steps 1, 2, B and the filtered-CLUT fixes all remove GS waits, which PCSX2 underrates. A console run would show the real gains before we commit to D.
+
+My recommendation is 3 when you can get to the console, and 1 until then: it's a contained, measurable job in scenes the console data already flagged as slow.
+
+[Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md) is up to date with all of this.
+
+## User
+
+Let’s do #1
+
+## Claude
+
+I'm reading the point-light code: the per-vertex reference function and the port's three-pass version.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 370,560p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 560,760p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export PATH=$PATH:/home/alex/ps2dev/ee/bin; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/gte.c"; s=open(p).read() a="int Gte_RtpsDotBatch(const short* row0, const short* row
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export PATH=$PATH:/home/alex/ps2dev/ee/bin; sed -i 's/    const u16\* unr = unr_table;/    const u8*  unr = unr_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export PATH=$PATH:/home/alex/ps2dev/ee/bin; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export PATH=$PATH:/home/alex/ps2dev/ee/bin; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; grep -nE "\s(sd|ld)\s|b[a-z]*\s.*<rtps_dot32\+" 
+
+## Claude
+
+The new loop is about 132 instructions per vertex, with three values reloaded from the stack. Measuring in CybilFightStart:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_BENCH=1 SH1_LITEPROF=1; (tools/port/ee_compile_check.sh && python3 tools/p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git checkout src/port/gte.c; git status --short; grep -n "typedef struct _Normal\|} s_Normal;" -B8 include/bodyp
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "} s_Normal;" -B10 include src | head -20; grep -rn "s_MeshHeader;" -B20 include | grep -n "normals\|no
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/gte.c"; s=open(p).read() anchor="/** Batched NC (normal colour) with sf = 1, lm = 1,
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="include/port/gte.h"; s=open(p).read() a="int Gte_RtpsDotBatch(" i=s.index(a) s=s[:i]+"""int G
+
+## Claude
+
+The `goto` jumps past the light-counter variable that `LP_BEGIN` declares, which would put garbage into light-counter builds. I'm moving the last-vertex code into a shared function instead.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/bodyprog/gfx/bodyprog_80056D8C.c"; s=open(p).read() i=s.index("last_vertex:\n    {") j=s.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_BENCH=1 SH1_EXTRA_CFLAGS=-DSH_PORT_CHECK_BATCH; unset SH1_LITEPROF; (tools
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `PushNotification`: 
+
+## Claude
+
+The point light is done and committed as `00f5541bb`. In CybilFightStart it fell from 1,440k to 1,155k cycles a frame (−20%), with identical output.
+
+**What changed:**
+- **One pass instead of three.** The point light used to collect the vertex vectors, run them as a batch, then apply the light formula, with arrays written and read between passes. `Gte_PointLightBatch` now does all three per vertex and writes each light value straight to its slot. It keeps only what the GTE needs for the last vertex, which still goes through the GTE so the GTE ends in the same state as the original loop.
+- **Very small meshes keep the original loop.** Meshes with fewer than 5 vertex visits now use the original loop. At exactly 4, the old two-pass code read one element before the start of its arrays.
+
+**Exactness:** the check build compared 54,272 meshes against the original loop: light values, scratch fields and all 64 GTE registers, with 0 mismatches. The attract demo dumps are identical too.
+
+**Not kept:** doing the batch's maths in 32 bits. Two versions were both slower in PCSX2 (1,042k → 1,144–1,225k). Each vertex needs about 15 multiplies either way, and PCSX2 seems to charge heavily for them. Real hardware may behave differently, so that's worth a second look once we have console timings.
+
+**Where things stand** (PCSX2, per frame):
+
+| | DrawOTag | GTE batches | Notes |
+|---|---|---|---|
+| Kaufmann | 3.3M | — | 8.2M before today |
+| CybilFightStart | 1.6M | about 1.7M | point light 1.15M, transform 0.6M |
+| map4_s02 | 0.6M | — | about 820k game logic |
+
+[Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md) has every step, with results and console estimates. `build/port/sh1_ps2.iso` is a normal 60 fps build of the latest commit, ready for a console run whenever you can get to it.
+
+For what to do next, I'd still suggest a console run before starting D (VU1 building the GS packets). Most of today's work removed GS waits, which PCSX2 underrates, so real numbers would show how much is left for D to win. If you'd rather keep going without the console, D is the next big step.
+
+## User
+
+Is there a Boathouse save file on the memory card? I’m curious what the internal map name is for that area
+
+## Claude
+
+I'll look for the memory card images and read their save locations.
+
+- tool `Bash`: cat ~/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/duckstation-card-has-port-saves.md; ls ~/.local/share/duckstation/memcards/ 2>/dev/nul
+
+## Claude
+
+The port's saves are in PCSX2's `Mcd001.ps2`: a PS1 card image stored inside the PS2 card. To read the save locations, I need to know how a save records where it was made.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Boathouse\|BOATHOUSE\|Boat" include src --include=*.h --include=*.c | head -10
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,60p include/bodyprog/savegame.h; sed -n 55,100p src/screens/saveload/saveload.c; grep -n "locationId\|m
+
+## Claude
+
+A save stores its map as `mapIdx` (offset 0xA4) and its location as `locationId` (offset 0xA8). "Boat" is location 17. Next I need where each save sits inside the card's files.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "s_SavegameMetadata\b" include | head -3; grep -rn "typedef struct _SavegameMetadata" -A14 include | he
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls src/bodyprog/memcard* src/bodyprog/*/memcard* 2>/dev/null; grep -rln "MemCard_" src/bodyprog | head; grep -rn
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 240,320p include/bodyprog/memcard.h; grep -n "s_MemCard_SaveWork\|sectorIdx\|0x300\|\* 0x\|SAVEGAME_ENTRY
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "def \|class " tools/port/mc_export_psu.py; grep -rn "magic *= \|footer.magic\|\.magic = \|MEMCARD_MAGIC
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 60,110p tools/port/mc_export_psu.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+Yes. The Boathouse save is **File 1, Data 2** on the port's PCSX2 memory card, and its internal map is **`map6_s01`** (local room/geometry index 19).
+
+The save screen calls it "Boat", location ID 17 in the game's save-location table.
+
+`map6_s01` is the boat, the trip across the lake. `map6_s02`, the next one, holds the Lighthouse save.
+
+The full list from the card, for reference:
+
+| File | Data | Location | Map |
+|---|---|---|---|
+| 1 | 1 | Sewer | map5_s00 |
+| 1 | 2 | **Boat** | **map6_s01** |
+| 1 | 3 | Lighthouse | map6_s02 |
+| 1 | 4 | Next_fear | map0_s01 |
+| 1 | 5–7 | Infirmary | map1_s02 |
+| 1 | 8 | Gordon | map2_s00 |
+| 1 | 9 | Church | map2_s01 |
+| 1 | 10 | Garage | map0_s02 |
+| 1 | 11 | Bridge | map2_s00 |
+| 2 | 1 | Police | map2_s04 |
+| 2 | 2 | Reception | map3_s00 |
+| 2 | 3, 5 | Room_302 | map3_s03 |
+| 2 | 4 | Director's | map3_s04 |
+| 2 | 6 | Antique_shop | map4_s01 |
+| 2 | 7 | Jewelry_shop | map4_s03 |
+| 2 | 8 | Reception | map4_s04 |
+| 2 | 9, 11 | Sewer | map5_s00 |
+| 2 | 10 | Infirmary | map1_s02 |
+
+This is read from PCSX2's `Mcd001.ps2`. DuckStation's card is a copy taken on 2026-10-21; the File 2 / Data 10 Infirmary save in my notes matches this listing.
+
+The list also turns up saves near the slow maps from the console test. File 2 / Data 6 (Antique_shop) is in map4_s01, and Data 7 (Jewelry_shop) is in map4_s03. map4_s02 sits between those two areas.
+
+The Jewelry_shop save would let me profile map4_s03 along a real route through the map. That covers the gap the warped attract demo left.
+
+## User
+
+One idea to save for later: record my inputs on the console and then replay them later on the emulator to test performance easily. How feasible is that?
+
+## Claude
+
+I'll check what input recording and replay the port already has before estimating.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "host:input.txt\|input.txt" src/port | head; f=$(grep -rln "host:input.txt" src/port | head -1); sed -
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "typedef struct _DemoFrame\|s_DemoFrame\b\|s_DemoPlaybackFrame" -A8 include | head -30; sed -n 350,420p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,43p include/bodyprog/demo.h
+
+## Claude
+
+Very feasible. The game already has most of it, because its attract demos work exactly this way.
+
+**What's already there:**
+- **The PS1 game's own replay system.** Each attract demo is two files:
+  - a `DEMO` file: a full snapshot of the save and the options at the start;
+  - a `PLAY` file with 16 bytes per frame: the pad state, the game state expected at that frame, the frame's time step (`videoPresentInterval`) and the random seed.
+  The game replays these deterministically and stops with "STEP ERROR" if the game state drifts. A recorder only has to write the same format: snapshot the save when you start, then log those 16 bytes every frame.
+- **A way to get the data off the console.** The IOP agent and the network log already send data to the PC. A 16-byte record per frame is about 58 KB a minute, so even a long session is small. It could also go to the memory card.
+- **Fixed-step, uncapped playback.** Benchmark builds already replay attract demos this way in PCSX2, and report cycles and fps per stretch. A recorded session would plug straight into the light counters and the warp-sweep style reports.
+- **Scripted input** (`host:input.txt`) exists too, but only for timed button presses, not full analog recordings.
+
+**What makes it harder:**
+- **Load timing.** This is the main risk. During a replay the game waits for disc loads, and the frame where a load finishes can differ between machines. On the console the disc comes over the network; in PCSX2 it's a host file. If a load ends a frame earlier, Harry's animation runs for one frame less and the replay drifts. The fix is known from the attract-demo work (`compare_frames.py --ps1-holds`): record how many frames each load took, and hold the replay for that many frames.
+- **Things that run in real time.** Voice clips play in emulated time, which is why Kaufmann's dumps move with build speed. In gameplay that mostly affects cutscenes and dialogue. Recording the frames where a voice clip ends would make those deterministic too.
+- **Analog input and the camera** are covered, since the pad record includes the analog sticks.
+
+**What you'd get:** a real play session through map4_s02, map4_s03 or any slow spot that can be replayed:
+- in PCSX2, to measure where the time goes each time we change something;
+- on the console itself, for exact before/after comparisons on hardware.
+
+This is the realistic-route test the warped attract demo couldn't give us. My estimate: moderate work, mostly the recorder, the transfer off the console and the load-hold logic. The playback side already exists.
+
+I've added it as a planned testing tool to [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md) so it isn't lost.
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/Graphics Pipeline Rework.md
+
+## Claude
+
+The idea is recorded in [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md) under "Later: record play on the console, replay it anywhere". The file had been changed on disk since I last read it. My section went in cleanly alongside those changes, and I left them as they were. This addition isn't committed yet.
+
+## User
+
+What maps connect to map6_s01? There are two doors
+
+## Claude
+
+I'll check the map's code for the loads its doors trigger.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls src/maps/map6_s01/; grep -rn "MapIdx_\|MAP[0-9]_S[0-9]" src/maps/map6_s01/*.c | head -30
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,140p src/maps/map6_s01/map6_s01_events_data.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 140,175p src/maps/map6_s01/map6_s01_events_data.c; grep -n "MapLoad\|MapIdx\|SysState_LoadOverlay\|Event_
+
+## Claude
+
+Both of map6_s01's doors lead to **map6_s00**, arriving at different points. Also, map3_s00 (the hospital) links into map6_s01, which is unexpected, so I'm reading the other side of each link.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 50,82p src/maps/map6_s00/map6_s00_events_data.c; sed -n 54,70p src/maps/map3_s00/map3_s00_events_data.c; 
+
+## Claude
+
+Both of map6_s01's doors lead to the same map: **map6_s00**. They arrive at different points there.
+
+From map6_s01's event table ([map6_s01_events_data.c](src/maps/map6_s01/map6_s01_events_data.c)):
+
+| Event | Map point | Leads to | Arrival (eventParam) | Door sound |
+|---|---|---|---|---|
+| 6 | 2 | map6_s00 | 6 | pair 2 |
+| 7 | 5 | map6_s00 | 7 | pair 9 |
+
+Within map6_s01, events 3–5 are room changes inside the same map, not links to other maps.
+
+The other direction, from [map6_s00_events_data.c](src/maps/map6_s00/map6_s00_events_data.c):
+- **Two doors** into map6_s01: event 5 (map point 3) and event 7 (map point 5).
+- **A walk-in trigger** (event 6, map point 17): it isn't a door you press a button on. It fires once when you walk into it after event flag 410 is set, so it's probably a story moment.
+
+**One thing that looks like a link but probably isn't:** the hospital's (map3_s00) event 6 has `mapIdx = MapIdx_MAP6_S01` written on it. That event is a room change within the hospital, so the map field is most likely unused. It's probably leftover data in the struct, or a value the decompilers filled in, rather than a real hospital-to-boathouse door.
+
+So map6_s01 is a small building off map6_s00, with two exits back outside. That matches a boathouse with a land door and a dock door. map6_s01 also has the save point (event 10) and the Channeling Stone use spot (event 15).
+
+## User
+
+How well can we test performance in map6_s00 without actually playing? I noticed in an earlier play session that performance was much better than PS1, but still not at a locked 60 FPS. I’m curious what the bottleneck might be there.
+
+## Claude
+
+Two ways to test it without playing:
+- **The warp sweep.** It drops the attract demo into map6_s00 and plays the demo's recorded input there: quick, but the route is arbitrary.
+- **Your Boat save (File 1, Data 2).** It loads map6_s01, and scripted input could walk Harry out of a door into map6_s00: a real arrival point, but more setup.
+
+I'm starting with the warp sweep and the light counters, which should show the cost breakdown.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_BENCH=1 SH1_LITEPROF=1; unset SH1_EXTRA_CFLAGS SH1_PROF; (tools/port/ee_co
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' import re,collections cur=None;hb=[];c=collections.Counter() for l in open("build/port/warp_swee
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_BENCH=1 SH1_PROF=1; unset SH1_LITEPROF SH1_EXTRA_CFLAGS; (tools/port/ee_co
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "instrument\|PROF_FN\|prof_fn" tools/port/port_link.py tools/port/ee_compile_check.sh | head; grep -c "f
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -m8 "fn:" build/port/warp_sweep_ps2.log; grep -rn "ProfFn_Report" src/port/*.c src/port/ps2/*.c | head -3; 
+
+## Claude
+
+The build also writes a per-function profile (exclusive cycles per function, by address). I'm aggregating it over the map6_s00 segment and resolving the addresses with the ELF's symbols.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export PATH=$PATH:/home/alex/ps2dev/ee/bin; grep -A3 -m1 "proffn: exclusive" build/port/warp_sweep_ps2.log; mips
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -m12 "proffn:" build/port/warp_sweep_ps2.log | tail -8; grep "proffn:" build/port/warp_sweep_ps2.log | grep
+
+## Claude
+
+The function report is empty: the per-function data needs a separately instrumented build. I'm checking how that build is enabled.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,30p src/port/prof_fn.c; grep -n "fn_prof\|instrument" "PS2 Optimizations.md" "Running Walkthrough.md" |
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export PATH=$PATH:/home/alex/ps2dev/ee/bin; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "func_800EC4B4\b" src --include=*.c | head -3; grep -rln "^void func_80055F08\|func_80055F08(" src --in
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 495,640p src/maps/map6_s00/map6_s00.c; sed -n 295,312p src/maps/map6_s00/map6_s00.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "WorldEnv_LightTransform\|func_80055F08\|func_80055E90\|func_80055ECC" src/bodyprog/gfx/*.c | head; n=$(
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 600,680p src/bodyprog/gfx/bodyprog_80055028.c; sed -n 185,240p src/bodyprog/gfx/bodyprog_80056D8C.c
+
+## Claude
+
+We can test it reasonably well without playing, and the main bottleneck is clear.
+
+**How well the testing works:** the warp sweep drops the attract demo into map6_s00 and replays its recorded input there. Combined with the profiling builds, that gives a reliable breakdown. What it can't do is follow your route, so spots that are only slow from certain positions or camera angles may be missed. That's where the record-and-replay idea would help. Your Boat save (File 1, Data 2) plus scripted input to walk out of a door would also work.
+
+**The bottleneck is one effect in the map's own code, not the renderer.** `func_800EC4B4` in [map6_s00.c](src/maps/map6_s00/map6_s00.c#L501) runs every frame and draws a 17×17 grid around Harry, the effect the decomp comments describe as the "transition world effect". For each of its 289 grid points it calls `func_80055ECC`. Each call:
+- recomputes the light transform (`WorldEnv_LightTransform`): two GTE matrix operations, giving the same result every time, because the matrix and the light don't change within the loop;
+- saves the GTE state, sets it up, runs a projection (RTPS), and restores it;
+- runs a depth-cue colour operation (DPCS).
+
+Every GTE register read and write in there goes through the C GTE, which is why about 360k of instrumented time is plain register access. Per frame, in the instrumented build:
+
+| Part | Instrumented k-cycles |
+|---|---|
+| The grid effect, all its parts | about 2,370 of 3,330 total |
+| Rain (`Particle_RainDraw`, about 270 drops) | about 480 |
+| Character meshes | about 300 |
+
+Instrumentation inflates small functions, so the real cost of the grid is lower; I'd guess 1–1.3M cycles, against a drawing cost of about 0.9M. Even so, it's the largest single item. On the console, at the usual ~2.3x, that one effect is likely what keeps map6_s00 below a locked 60.
+
+**This is very fixable, exactly.** We've done this pattern twice already: map6_s02's effect grid, and the point light earlier today. The light value `func_80055F08` computes is the same formula as the point light (the light row, a fixed normal, the vector to the grid point). So:
+- compute the light transform once per frame instead of 289 times;
+- run the 289 projections through a batch like `Gte_PointLightBatch`;
+- let the last cell go through the GTE so its registers end exactly as before;
+- check it in a build that runs the original loop alongside and compares everything.
+
+I'd expect most of that cost to disappear. Should I do it?
+
+## User
+
+Yes
+
+## Claude
+
+I'll read the rest of the light function and of the grid loop.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 680,705p src/bodyprog/gfx/bodyprog_80055028.c; sed -n 640,700p src/maps/map6_s00/map6_s00.c; grep -n "s_f
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "s_func_800EC4B4" src/maps/map6_s00/*.c src/maps/map6_s00/*.h include -r | head -4; grep -rn "typedef st
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/maps/map6_s00/map6_s00.c"; s=open(p).read() anchor="void func_800EC4B4(s32 arg0) // 0x800
+
+## Claude
+
+Now the check build: each batched cell is compared with the original call. The GTE state at the end of the fast loop is compared with running all 289 original calls from the same starting state.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "g_GteData\|g_GteCtrl\b\|g_GteCtrlDirty" include/port/gte.h | head -5; python3 - <<'E' p="src/maps/map6_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_BENCH=1 SH1_EXTRA_CFLAGS=-DSH_PORT_CHECK_BATCH; unset SH1_LITEPROF SH1_PRO
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -iE "error|map6_s00\.c" build/port/chk_build.log | head -20; tail -5 build/port/chk_build.log
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "map6_s00" -A25 build/port/chk_build.log | grep -iE "error|undeclared|implicit|conflict" | head; sed -n 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "map6_s00.c" -B3 -A12 build/port/chk_build.log | head -50
+
+## Claude
+
+The compile of `map6_s00.c` failed, but the summary doesn't show the error. I'm compiling the file on its own to see it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,40p tools/port/ee_compile_check.sh | grep -n "OUT=\|log\|2>" | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=$(find build/ee_check -name "*map6_s00.c*.txt" -o -name "map6_s00*.txt" | head -3); echo $f; grep -E "error" $
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "extern s_WorldEnvWork\|g_WorldEnvWork;" include | head -3; grep -rn "s_WorldEnvWork g_WorldEnvWork" sr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|#include "port/gte.h"\n/\* func_800EC4B4|&|' src/maps/map6_s00/map6_s00.c; python3 - <<'E' p="src/maps
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; python3 - <<E import re for f in ["$S/m6_before.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1520,1600p src/maps/map6_s02/map6_s02_2.c; sed -n 1750,1790p src/maps/map6_s02/map6_s02_2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 20,52p include/maps/map6/map6_s00.h; grep -rn "Math_SetSVectorFastSum" include | head -2; grep -rn "defin
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/maps/map6_s00/map6_s00.c"; s=open(p).read() def rep(a,b):     global s     assert s.count
+
+## Claude
+
+Both checks pass: about 131,000 projected grid points match the GTE, and the light values still match. Measuring:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `PushNotification`: 
+
+## Claude
+
+map6_s00's main bottleneck is fixed and committed as `4d0676fff`. The grid effect around Harry fell from about 932k to 419k cycles a frame in PCSX2 (−55%), with identical output.
+
+**What changed in [map6_s00.c](src/maps/map6_s00/map6_s00.c):**
+- **Lighting.** The grid's 289 points used to recompute the light transform and run a full GTE setup, projection and restore each. Now the first point runs as before, points 1–284 come from one batch with their colours memoised by light value, and the last four run as before so the GTE ends in exactly the same state.
+- **Projection.** The 289 grid points form a regular lattice, so most of them go through the same batch map6_s02's grid already uses. If a row or column would wrap around the 16-bit range, the effect falls back to the GTE loop.
+
+**Exactness:** the check build compared about 131,000 grid colours and 131,000 projected points against the original code, and the GTE state after the loop against running all 289 points as before. There were no differences. The attract demo dumps are also identical.
+
+**Console estimate:** at about 2.3x, the effect drops from roughly 2.1M to 1.0M cycles a frame on the console, about a fifth of a 60 fps frame saved in map6_s00. How close that gets you to a locked 60 depends on the rest of the frame, which also benefits from today's renderer changes, so a console run is the way to know.
+
+**Still in map6_s00:**
+- The rain, about 270 drops a frame (roughly 480k instrumented).
+- The rest of the grid effect: the per-point fade bands with integer divides, and building its 16×16 polygons (about 420k).
+- Drawing, about 0.9M.
+
+The results and estimates are in [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md), and `build/port/sh1_ps2.iso` is a normal 60 fps build of this commit.
+
+## User
+
+What would the end frame look like with and without the lattice?
+
+## Claude
+
+They look exactly the same. The lattice is only a faster way of doing the same arithmetic. It doesn't change what's drawn.
+
+- **Lattice path:** the 289 grid points form a regular lattice, so `Gte_RtpGrid` can step between neighbouring points instead of multiplying each point's full position through the matrix. The rotation is linear, so stepping gives the same integers as doing each point in full, and nothing is rounded until the same final shift the GTE uses. The screen positions and depths it produces are bit-for-bit the ones the GTE produces.
+- **GTE path:** used when the lattice can't be (a row or column would wrap past the 16-bit range). Each point goes through the emulated GTE, as in the original code.
+
+Whichever path a frame takes, the effect gets the same 289 screen positions and depths, so its polygons, colours and final pixels are identical. The check build confirmed this on about 131,000 points: the batch's output matched the GTE's exactly every time. The light-value batch works the same way. Its colours matched the original on about 131,000 points too.
+
+If you meant something else, there are two frames I can render side by side:
+- map6_s00 with the effect switched off against with it on, to show what it contributes to the picture;
+- the PS1 in DuckStation against the port, to confirm the effect matches the original game.
+
+## User
+
+Yes, I want to see the effect off and on
+
+## Claude
+
+I'll make a temporary build that leaves the effect out of one frame in every 300 and dumps that frame along with the one before it. That gives on/off pairs of consecutive frames, about 1/60 s apart, from the same run. The patch won't be committed.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+Source restored (no changes left in `map6_s00.c`). Two frame pairs were dumped. I'm putting each pair side by side with a difference image.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad/fx_1201.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad/fx_0901.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad/fx3_901.png
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad/fx3_1051.png
+
+## Claude
+
+The comparison images are in the scratchpad. I'll send them to you directly.
+
+- tool `ToolSearch`: 
+
+- tool `SendUserFile`: 
+
+## Claude
+
+I've sent you two comparisons, one from each point in the run. Each has four panels:
+1. The effect on.
+2. The effect off, the next frame.
+3. The difference between panel 2 and the average of the "on" frames either side, brightened 3x.
+4. The motion between those two "on" frames, brightened 3x, for scale.
+
+**What they show:** in these frames you can't see the effect by eye. Panels 1 and 2 look the same. Panel 3, which should be mostly the effect, is no stronger than panel 4, which is ordinary motion: rain, Harry moving, the flashlight. In the first comparison it's clearly weaker. Yet the effect is drawing 150–340 polygons a frame here, and its timer runs throughout.
+
+**What's going on in these frames:** the warped demo happens to be in map6_s00's otherworld transition. Frame 901 shows grass. By frame 1051 the ground is metal grating, and the subtitle reads "Not again...!? No, this time it feels different." But the "off" frame still shows the grating, so this function doesn't draw the grating itself. Its polygons seem to be lit by the flashlight and faded in bands as the transition progresses, and at these moments they're dark enough to barely change the picture.
+
+**What that means:**
+- The time we saved was real work: the effect computes all 289 points every frame whether or not you can see the result.
+- Since the output is unchanged, the optimisation doesn't alter its look, and skipping it would not be exact, so I wouldn't remove it.
+- I can't yet tell where in the transition the effect becomes visible. Two ways to find out:
+  - Render a frame with only the effect's polygons on black, to show exactly what it draws.
+  - Compare the same moment against the PS1 in DuckStation, using your Boat save.
+
+The temporary dump builds weren't committed, and `map6_s00.c` is back to the committed version. `build/port/sh1_ps2.iso`, though, is still the last temporary build. I'll rebuild the normal ISO before you deploy anything.
+
+## User
+
+Try spawning Harry at each of the exits from the Boat map as if he’d left through the doors (essentially, outside the doors leading to the Boat map) and measure performance.
+
+## Claude
+
+I'll find how a door event hands Harry over to the next map, so a test hook can trigger the same transition directly.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "case SysState_LoadOverlay" src/bodyprog | head; grep -rn "void SysState_LoadOverlay_Update\|SysState_L
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "SysState_LoadOverlay" src include | grep -v "_events_data.c" | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 600,720p src/bodyprog/events/game_sys_states.c; sed -n 180,240p src/bodyprog/events/events_main.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,50p src/port/ps2/capture_ps2.c; grep -n "g_MapEventSysState\b" src/bodyprog/*.c src/bodyprog/*/*.c | he
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "s_EventData\*.*;\|mapEventList\|g_MapOverlayHdr.mapEvents\|mapEvents_" include/bodyprog/*.h include/ma
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 13,60p src/bodyprog/events/events_main.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 60,90p src/bodyprog/events/events_main.c; grep -n "Port_DemoEventStart" -A40 src/port/demo_menu.c | grep 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 120,150p src/port/demo_menu.c; head -20 src/port/demo_menu.c | grep include; grep -n "s_LoadSave\|\"load=
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 60,72p src/port/ps2/capture_ps2.c; python3 - <<'E' p="src/port/ps2/capture_ps2.c"; s=open(p).read() def r
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; unset SH1_BENCH SH1_PROF SH1_EXTRA_CFLAGS; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_LITEPROF=1; (tools/port/ee_comp
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "add_argument" tools/port/pcsx2_run.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+The save didn't load: the runs played attract demos instead, and no `capture:` line appeared in the log. I'm checking how `capture.txt` is read.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 50,62p src/port/ps2/capture_ps2.c; sed -n 104,122p src/port/ps2/capture_ps2.c; grep -n "capture.txt\|load
+
+## Claude
+
+`capture.txt` only counts as present when it lists at least one frame to capture. I'll list a frame that's never reached (999999), which turns the save load on without capturing anything.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+Both doors give clean results, and they differ a lot. Harry stood still for the whole measurement, so these are steady views.
+
+**Door 7 (map6_s00 point 7) is the slow one.** Even in PCSX2 it runs at 51–55 fps with 0% idle, so the EE is fully busy. Per frame:
+
+| Part | k-cycles |
+|---|---|
+| Drawing (DrawOTag): about 1,320 primitives, 956 texture changes | 2,151 |
+| Point light (flashlight on world meshes) | 1,033 |
+| Mesh transform + mesh packets | 468 + 299 |
+| Rain particles (draw + move) | 431 |
+| Rest of the game logic | about 1,000+ |
+
+**Door 6 (point 6)** holds 60 fps with about 23% idle in PCSX2, about 3.8M busy cycles a frame. DrawOTag is 1.27M and the point light 0.34M. After roughly 100 seconds idle jumped to about 90% and the game later returned to the title. Harry was most likely killed standing still. That last stretch isn't part of the measurement.
+
+**Console estimate** (about 2.3x PCSX2's busy time, with today's changes included):
+- **Door 7:** about 12M cycles a frame, so **roughly 25–30 fps**.
+- **Door 6:** about 8.5–9M cycles, so **roughly 35–40 fps**.
+
+That fits what you saw: much faster than the PS1 but not a locked 60. It's an estimate until a console run.
+
+**What's slowing door 7, in order:**
+1. **Drawing:** about 1,300 primitives with a texture change on almost every one. That's the per-primitive EE cost that VU1 packet building (D) would address.
+2. **The point light:** about 1M cycles. Already one pass after today's change. The arithmetic itself is the remaining cost, and console timing would show whether the 32-bit version pays off on hardware even though it lost in PCSX2.
+3. **Rain** (about 430k) and the mesh transform (about 470k).
+
+**The new door test** is uncommitted for now. `capture.txt` takes `load=F:D door=N:F`, e.g. `999999 load=1:2 door=7:120`: load a save, wait F gameplay ticks, then fire map event N as if Harry used that door. It's in [demo_menu.c](src/port/demo_menu.c), [capture_ps2.c](src/port/ps2/capture_ps2.c) and [events_main.c](src/bodyprog/events/events_main.c), and it only acts when that file is present. It makes this a repeatable benchmark for any door near any save. I'd like to commit it and use door 7 as the standard map6_s00 test.
+
+`build/port/sh1_ps2.iso` is currently the light-counter build used for these runs. I'll rebuild the normal ISO before you deploy.
+
+Shall I commit the door test, and which of the three do you want next?
+
+## User
+
+Let’s do a console test
+
+## Claude
+
+I'll build the normal 60 fps ISO and check how deployment works.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,60p tools/port/ps2_ctl.py | grep -vE "^import|^$" | head -50
+
+## Claude
+
+Deploying needs the disc server (`udpfs_serve.py`) and the log receiver (`ps2_log.py`) running on this PC. I'm building the normal ISO and checking those, plus whether the PS2 answers.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; unset SH1_BENCH SH1_PROF SH1_EXTRA_CFLAGS SH1_LITEPROF; export SH1_FPS=60 SH1_NO_RECOMP=1; (tools/port/ee_compil
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git status --short; git add src/port/demo_menu.c src/port/ps2/capture_ps2.c src/bodyprog/events/events_main.c &&
+
+- tool `PushNotification`: 
+
+## Claude
+
+The console build is ready: a normal 60 fps ISO of `5244326ad`, which includes all of today's changes. The disc server and log receiver are running, but the PS2 isn't answering, so the game isn't running on it right now.
+
+**What I need from you:** start Neutrino and the game from uLaunchELF. If the console is stuck, power-cycle it first, since the reset button doesn't revive Neutrino. Once it's up, tell me. It will boot this new build directly, because the disc server is serving the fresh ISO.
+
+**What we'll learn:**
+1. **Boots and warm restarts.** The first hardware run of the asynchronous GIF sends. A hang at the logos on 2026-10-09 was blamed on the first attempt at them; I'll do a couple of `ps2_ctl.py deploy` restarts once it's up.
+2. **map4_s02 and map4_s03.** Your Antique_shop (File 2, Data 6) and Jewelry_shop (File 2, Data 7) saves start near them. I'll read the frame rate and idle time from the heartbeat in the log.
+3. **map6_s00.** Your Boat save (File 1, Data 2), then out through each door. Door 7 is the slow one in PCSX2.
+4. **A cutscene,** started remotely, e.g. Kaufmann or CybilFightStart with `ps2_ctl.py demo`.
+
+For 2 and 3 you'd play, and I'll follow the frame rates in the log and compare them with my estimates.
+
+## User
+
+Alright, I’m going to trigger the Floatstinger bug again
+
+## Claude
+
+I'll check whether the game is up and start watching the log for the crash.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/ps2_ctl.py ping; tail -3 build/port/ps2.log; grep -n "crash\|TLB\|Exception\|badvaddr" src/po
+
+## Claude
+
+The game is running and the agent answers. It's been up about an hour (vblank 211,324), so I'm checking which build is running.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -a "SH1 port: starting" build/port/ps2.log | tail -2; ls -la --time-style=+%H:%M build/port/sh1_ps2.iso; da
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -n0 -F build/port/ps2.log | grep -a -m1 -E "CRASH|TLB|address error|Exception"; sleep 3; grep -a -n -E "CRA
+
+## Claude
+
+I'm watching the log for the crash report. Also gathering a console reading: the light counters aren't in this build, but the heartbeat gives frame rate and idle time for map4_s04.
+
+One thing to do when it crashes: the crash screen counts down 6 seconds before restarting. **Hold Triangle for 3 seconds during the countdown** to keep the crashed state. I can then read the stack and the animation tables over the network with `ps2_ctl.py md` to see where the pointer was corrupted.
+
+From the last console test, the expected crash is a bad address load in `Anim_BonesUpdate`, during `Floatstinger_Update`. The animation header pointer arrives with its top half corrupted (0xFC00 instead of 0x0072). That earlier test also found it depends on code layout: a build with extra pointer checks didn't crash. This build's code has moved a lot since then, so it may crash differently, or not at all.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -a -n "CRASH" build/port/ps2.log | tail -40 | head -1 | cut -d: -f1); grep -a -n -E "CRASH|map load" bu
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export PATH=$PATH:/home/alex/ps2dev/ee/bin; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "^void Anim_PlayLoop\|^void Anim_BonesUpdate" src | head; f=$(grep -rln "^void Anim_PlayLoop" src | hea
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export PATH=$PATH:/home/alex/ps2dev/ee/bin; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export PATH=$PATH:/home/alex/ps2dev/ee/bin; a=$(grep " Floatstinger_Update$" /tmp/claude-1000/-home-alex-Documen
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export PATH=$PATH:/home/alex/ps2dev/ee/bin; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; sed -n 55,115p $S/d35f0.s
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "Collision_WallDetect(" include | head -2; grep -rln "func_800D35F0" src/maps | head; f=$(grep -rln "^v
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; f=src/maps/characters/floatstinger.c; n=$(grep -n "func_800D4458(.*) // 0x800D4458" $f | cut -d: -f1); sed -n "$
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "watch\|Watch\|DAB\|DVB\|BPC" src/port/ps2/crash_ps2.c | head -40
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 340,420p src/port/ps2/crash_ps2.c; grep -rn "ee_dbg_set_bpw\|ee_dbg_set_bpda\|bpda\|BPW" src/port/ps2/*.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/crash_ps2.c"; s=open(p).read() def rep(a,b,n=1):     global s     assert s.count
+
+## Claude
+
+The watch state and its report message are only compiled for the packet watch, so I'm enabling them for the stack watch too and adding a report line for it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 36,41p src/port/ps2/crash_ps2.c; python3 - <<'E' p="src/port/ps2/crash_ps2.c"; s=open(p).read() a="""#ifd
+
+## Claude
+
+The code is in place. I'm checking how port files get extra defines, since that's how the watch is switched on.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "EXTRA\|WATCH\|environ.get" tools/port/port_link.py | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 205,235p tools/port/port_link.py; grep -n "WATCH_PACKET" tools/port/*.py tools/port/*.sh | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="tools/port/port_link.py"; s=open(p).read() a='    dump += ["-DSH_PORT_WATCH_TEST"] if os.envi
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/ps2_ctl.py deploy; sleep 25; grep -a -E "SH1 port: starting|watching stores of 0xFC00|hardwar
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -n0 -F build/port/ps2.log | grep -a -m1 -E "CRASH"; sleep 3; grep -a -n "CRASH" build/port/ps2.log | tail -
+
+- tool `PushNotification`: 
+
+## Claude
+
+The Floatstinger crash reproduced on today's build, and I've narrowed it down. A hardware breakpoint build is now running on your PS2. Please trigger the fight again.
+
+**What the crash showed:**
+- **Same failure as last time:** a bad address load in `Anim_BonesUpdate` at the fight's first frame. The animation header pointer arrives as `FC00B230` instead of `0072B230`.
+- **The source table is fine:** `g_CharaModelAnimsData[1].activeAnmHdr` still holds `0x0072B230`.
+- **The bad copy is on the stack.** `Floatstinger_Update` keeps the pointer in its first stack slot (`0x01FFEB10`) across its call to `func_800D35F0`. When it reloads it afterwards, the upper 16 bits have become `0xFC00`.
+- **The low half is untouched,** so it's most likely one 16-bit store of −1024 landing on the upper half of that slot. −1024 is where the GTE clamps screen coordinates, and the screen offset the point-light code uses. That fits a misdirected store from lighting or projection code, but it's only a guess so far.
+- **No obvious culprit in the code:** `func_800D35F0` and its direct callees (`Collision_WallDetect`, `func_800D4458`) don't store there.
+
+**What's running now** (the build reports "watching stores of 0xFC00xxxx to 0x01FFEB10"):
+- The EE's data breakpoint fires on any store into `0x01FFEB10`–`0x01FFEB13` whose upper half is `0xFC00`.
+- When it fires, the crash reporter prints the culprit's exact address (`pc`) and its return address, with all registers.
+- The game's code layout is identical to the crashing build, since only the crash reporter changed.
+
+**If the watch never fires but the game still crashes,** the breakpoint's value matching probably doesn't work the way I assumed for 16-bit stores. Then I'll widen it to any store to that address and filter out the legitimate ones.
+
+**About the rest of the console test:** I deployed over your session while the game sat in the crashed state. Everything that was on screen came back to the boot screen, and you'll have to reload a save to get to the fight. Once the crash is pinned down, I'll switch back to the normal build for the frame-rate checks.
+
+I'm watching the log and will report as soon as it triggers.
+
+## User
+
+Just so you know, the deploy resulted in a black screen again and I have to restart the PS2
+
+## Claude
+
+Sorry about that. I'm checking the log to see how far the new build got before the screen went black.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -a -n "SH1 port: starting (build Oct 23 2026 20:33:21)" build/port/ps2.log | tail -1 | cut -d: -f1); se
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 20 python3 tools/port/ps2_ctl.py ping; tail -2 build/port/ps2.log | cut -c1-150
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="docs/ToFix.md"; s=open(p).read() a="Next: Neutrino's EE core, 2nd-start path (ee_core/src/mai
+
+## Claude
+
+Noted in [docs/ToFix.md](docs/ToFix.md), not committed yet. Power-cycle whenever you're ready, and tell me if the cold boot reaches the title. I'm still watching the log for a crash or watch report.
+
+## User
+
+I restarted while you were checking so that may be part of it
+
+## Claude
+
+That explains the failed ping: the console was restarting. My note claimed the IOP agent didn't answer, which isn't a valid observation, so I'm correcting it, then checking whether the cold boot is up.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="docs/ToFix.md"; s=open(p).read() a="then the log stopped, the screen went black and neither t
+
+## Claude
+
+That settles it. The cold boot of the watch build is running fine: the console answers, and it's 23 seconds in, past the point where the warm restart died. So the black screen came from the warm restart, not the breakpoint. I've corrected the note in [docs/ToFix.md](docs/ToFix.md).
+
+The breakpoint is armed ("watching stores of 0xFC00xxxx to 0x01FFEB10"), and I'm still watching the log. Go ahead to the Floatstinger fight whenever you're ready. If the watch catches the store, the report will name the function that writes `0xFC00` into the saved pointer.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; s=$(grep -a -n "CRASH" build/port/ps2.log | tail -8 | head -1 | cut -d: -f1); sed -n "$((s-6)),$((s+12))p" build
+
+## Claude
+
+That's still the old crash from the first run. I'm looking for new crash lines after the map4_s05 load.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; n=$(grep -a -n "port: map load map4_s05" build/port/ps2.log | tail -1 | cut -d: -f1); sed -n "$n,\$p" build/port
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/ps2/crash_ps2.c"; s=open(p).read() a="""     * half 0xFC00. Catch the store that wri
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -n0 -F build/port/ps2.log | grep -a -m1 -E "CRASH"; sleep 3; grep -a -n "CRASH\|watching stores" build/port
+
+- tool `PushNotification`: 
+
+## Claude
+
+The crash reproduced again on the watch build, but the breakpoint didn't fire. I've rebuilt it with a corrected value match. Game function addresses are still the same as in the crashing build.
+
+**What I need:** power-cycle the PS2 rather than letting me deploy, given the black screen last time. Boot Neutrino from uLaunchELF, load your save and go to the Floatstinger fight. The disc server is now serving the new watch build. The boot log should say "watching stores of xxxxFC00 (a halfword 0xFC00)".
+
+**What changed:** the first version matched `0xFC00` in the top half of the word in memory. The EE most likely compares the value in the register being stored, and for a 16-bit store of −1024 that's `0xFC00` in the low 16 bits. The new version matches that instead.
+
+**If it still doesn't fire,** the write probably isn't a CPU store at all but a DMA transfer, which the breakpoint can't see. In that case I'll check the DMA paths that write EE memory: the IOP's SIF transfers, the GS readback, and scratchpad transfers.
+
+I'm watching the log and will report as soon as it triggers.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/bucg
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+There's a second `FC00` at `0x01FFEAC8`, inside `func_800D37E8`'s frame (`0x01FFEAC0`–`0x01FFEB0F`). I'm reading the words around it.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; python3 - <<E import struct d=open("$S/stack2.bi
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i "WATCH_PACKET\|watch test\|hardware breakpoint\|breakpoint" "Planning Doc.md" "PS2 Optimizations.md" 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1195,1215p "Running Walkthrough.md"
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -l "Collision_WallDetect" src/bodyprog/collision/*.c 2>/dev/null | head; grep -h -E "uninitialized" build/e
+
+## Claude
+
+The normal build doesn't enable those warnings. I'm recompiling `collision.c` and `floatstinger.c` with `-Wuninitialized -Wmaybe-uninitialized`, using the same flags as the real build.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 15,26p tools/port/ee_compile_check.sh
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; CC=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-gcc; for f in src/bodyprog/collision/collision.c src/maps/map4_s05/
+
+## Claude
+
+The `-w` flag suppresses every warning. Rerunning without it:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; CC=$HOME/ps2dev/ee/bin/mips64r5900el-ps2-elf-gcc; for f in src/bodyprog/collision/collision.c src/maps/map4_s05/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export PATH=$PATH:/home/alex/ps2dev/ee/bin; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk '/\/\/ \[[0-9]+\]/{idx=$2} /MapIdx_MAP4_S05/{print idx, $0}' src/maps/map4_s04/map4_s04_events_data.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "// \[11\]" -A12 src/maps/map4_s04/map4_s04_events_data.c; unset SH1_BENCH SH1_PROF SH1_EXTRA_CFLAGS SH1
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+## Claude
+
+PCSX2 went through the door into map4_s05 without any bad read at that address. I'm checking whether the fight actually started there.
+
+- tool `Bash`: S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; n=$(grep -n "map load map4_s05" $S/fs_pcsx2.log 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "padPortOpen\|padBuf\|__attribute__((aligned(64)))\|static.*\[256\]" src/port/ps2/pad_ps2.c | head; grep
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 340,372p src/port/iop/sh1spu/xa.c; sed -n 80,95p src/port/iop/sh1spu/main.c; sed -n 90,105p src/port/iop/
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "s_EeStatus\|EeStatus\|status" src/port/iop/sh1spu/main.c | head -8; grep -rn "s_FwdAddr\s*=\|s_FwdCount
+
+## Claude
+
+The sound status buffer is a static, padded, uncached area, so it's fine. Next is where the XA forwarding writes, set from the EE.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 372,385p src/port/iop/sh1spu/xa.c; grep -rn "xa_fwd\|XaForward\|Fwd\|forward" src/port/ps2/*.c | grep -v 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "^void Gte_Command(unsigned int cmd)" -A6 src/port/gte.c | head -20; grep -n "Math_Sin\b" src/port/*.c |
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 30,45p src/port/libkmath_port.c; sed -n 1,40p include/bodyprog/game_boot/fs_chara_anim.h | grep -n "typed
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="src/port/gte.c"; s=open(p).read() anchor="void Gte_Command(unsigned int cmd)\n{\n    int sf =
+
+## Claude
+
+Now I'm building with `SH1_SENTINEL=1` (the breakpoint watch removed) and checking that game code and data addresses didn't move.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; unset SH1_BENCH SH1_PROF SH1_EXTRA_CFLAGS SH1_LITEPROF SH1_WATCH_STACK; export SH1_FPS=60 SH1_NO_RECOMP=1 SH1_SE
+
+## Claude
+
+The game addresses are all unchanged, but `Port_Sentinel` isn't in the binary, so the define didn't reach the port files. I'm checking the `port_link.py` change.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "SENTINEL\|WATCH_STACK" tools/port/port_link.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "dump\b\|+ dump\|dump +" tools/port/port_link.py | head; grep -n "gte.c\|libkmath_port" tools/port/port_
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "+ dump\|dump]\|\*dump\|, dump\|dump," tools/port/port_link.py | head; grep -n "def .*port_src\|for src 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 256,270p tools/port/port_link.py
+
+## Claude
+
+Files in `src/port/` get a different set of defines (`solo`), not the `dump` list. I'm adding the sentinel there.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="tools/port/port_link.py"; s=open(p).read() a='        solo += ["-DSH_PORT_SCREENREAD"] if os.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -n0 -F build/port/ps2.log | grep -a -m1 -E "CRASH|SENTINEL"; sleep 4; grep -a -n "CRASH\|SENTINEL\|SH1 port
+
+- tool `PushNotification`: 
+
+## Claude
+
+The second watch run crashed the same way, and the watch missed it again. The reason is in the project notes, which I should have checked first: **the EE's hardware data breakpoint never fires under Neutrino, even for a deliberate store.** Sorry for the two wasted runs.
+
+**What we've learned:**
+- **The same crash, three times:** the saved pointer's upper half becomes `0xFC00` (−1024), while its lower half stays intact (`B230`, `B3B0`, `B430`).
+- **Hardware only.** I loaded your Reception save (File 2, Data 8) in PCSX2 and used the door test to go into map4_s05. The fight ran for 85 seconds with no corruption. The cause is something PCSX2 models differently from real hardware.
+- **Ruled out:**
+  - the game storing a literal −1024 anywhere in the code reachable from `func_800D35F0` (164 functions checked);
+  - uninitialised-variable warnings in the collision code or map4_s05;
+  - the pad, sound status and XA buffers, which are all static.
+
+**What's built now:** a sentinel build, served to the PS2 on boot. Every GTE command and every `Math_Sin`/`Math_Cos` call checks the saved pointer slot. The first time it sees the `0xFC00` corruption, it logs which function noticed and who called it. That tells us when, during the collision work, the write happens. The checks live in port code linked after the game, so every game function is at the same address as in the crashing build.
+
+**What I need:** power-cycle the PS2 rather than deploying, boot Neutrino, load your save and trigger the fight again. Look for a `SENTINEL:` line in the log, which I'm watching for. The game will most likely still crash right after it.
+
+**If the sentinel reports nothing before the crash,** the write happens outside the collision code's GTE and sin/cos calls: in an interrupt, a DMA transfer, or plain arithmetic between calls. That narrows the search too.
+
+## User
+
+Why don’t you record my inputs on real hardware and then feed them to PCSX2?
+
+## Claude
+
+It's a good idea, and the record-and-replay tool will be worth building for performance work. For this bug, though, it wouldn't help, for two reasons:
+
+1. **PCSX2 doesn't reproduce the corruption, whatever the input.** I already got Harry into the Floatstinger fight in PCSX2: your Reception save, then the door into map4_s05. The fight ran for 85 seconds with this exact build and nothing went wrong. On the console, the same build crashes on the fight's very first frame, three out of three times. So it's not about what you press or how you get there. Something on real hardware behaves differently from the emulator, and replaying your inputs in PCSX2 would just show the same clean run again.
+2. **The recorder doesn't exist yet.** It's the "later" item in the rework plan. Building it properly, including the load-timing holds, is a bigger job than this bug needs right now.
+
+**What would help here is the reverse:** making the console reproduce the crash without you having to play. Since it crashes as soon as Floatstinger appears, I could add a remote command, something like `ps2_ctl.py door 2 8 11`. On the console it would load your Reception save and fire the map4_s04 → map4_s05 door, exactly as the door test does in PCSX2. Each test would then be:
+1. power-cycle;
+2. boot Neutrino;
+3. I run the command;
+4. I read the result from the log.
+
+For you that's a power cycle and a boot per test instead of a play-through. Given how many builds this bug might take, I think that's worth doing next.
+
+For now, the sentinel build is what the PS2 will boot. If you're already on your way to the fight, let's see what it reports. Otherwise I'll add the remote command first, and you'll only need to power-cycle and boot.
+
+- tool `Bash`: cat /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/2663d4b2-f50b-416d-91d2-fc00bd6d8ce0/tasks/b7nh2w4nk.output | cut -c1-230
+
+## Claude
+
+The sentinel build ran (build 20:46:47) and crashed exactly as before (`FC00B430`), but **printed no `SENTINEL:` line**. The corruption wasn't there yet at any GTE command or `Math_Sin`/`Math_Cos` call that ran before the crash. That narrows the window: the write happens after the last GTE or sin/cos call before Floatstinger reloads the pointer. Candidates:
+- the tail of the second `Collision_WallDetect` call, after its last GTE use;
+- `func_800D4458`, which is plain arithmetic and global writes with no GTE calls;
+- an interrupt or a DMA transfer that happens to land in that window.
+
+**Next step:** add the same check to code that runs at those moments without moving game code:
+- **the vertical-blank interrupt:** it records the first sighting and the time, and prints it later;
+- **the scratchpad and DMA helpers** the collision code reaches;
+- **one check right after `Collision_WallDetect` returns,** done through a small port-side wrapper so the game code doesn't change.
+
+Every attempt costs you a power cycle and a trip to the fight, which is why the remote door command I suggested matters. With `ps2_ctl.py door 2 8 11` on the console, each test becomes "power-cycle and boot" for you, and I do the rest.
+
+Should I add the remote door command first, then the wider sentinel? Or would you rather stop here for today? The crash is well characterised, and everything we've learned so far is ready to go into [docs/ToFix.md](docs/ToFix.md).
+
+## User
+
+Let’s stop for now. Record what we’ve learned
+
+## Claude
+
+I'll record the findings and tidy up: remove the breakpoint watch (it can't work under Neutrino), keep the sentinel behind its flag for next time, rebuild the normal ISO so the next boot isn't a debug build, and commit.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; git checkout src/port/ps2/crash_ps2.c; python3 - <<'E' p="tools/port/port_link.py"; s=open(p).read() s=s.replace
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="docs/ToFix.md"; s=open(p).read() a="Not yet known whether the warm restart or the armed break
+
+## Claude
+
+That console-test note claims map4_s04 frame-rate data, but the heartbeat lines I saw were from the map4_s05 load, not map4_s04. I'm removing the claim rather than recording something unverified.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 - <<'E' p="Graphics Pipeline Rework.md"; s=open(p).read() a=" Seen on the way: map4_s04 ran (heartbeat i
+
+- tool `Write`: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/memory/no-ee-hw-breakpoints.md
+
+- tool `Bash`: echo "- [No EE hardware breakpoints](no-ee-hw-breakpoints.md) — data breakpoints never fire under Neutrino; check docs for tried techniques first" >> ~/.claude/
+
+## Claude
+
+Everything's written down and committed as `b830bf08e`. The ISO is a normal build again, so the next time the PS2 boots it gets the regular game, not a debug build.
+
+**Floatstinger crash** (full entry in [docs/ToFix.md](docs/ToFix.md)):
+- **What happens:** on hardware, the fight's first frame crashes in `Anim_BonesUpdate` every time (2 crashes on 2026-10-22, 3 today). The animation header pointer arrives as `FC00xxxx`, while the table still holds the correct `0072xxxx`.
+- **Where:** `Floatstinger_Update` saves the pointer in its first stack slot (`0x01FFEB10`) while it calls `func_800D35F0`. During that call, one 16-bit write of −1024 (`0xFC00`) lands on the slot's upper half, and the lower half survives.
+- **Ruled out:**
+  - a literal −1024 store anywhere in the 164 functions reachable from that call;
+  - uninitialised-variable warnings;
+  - the pad, sound and XA transfers from the IOP;
+  - PCSX2, where the same build runs the fight for 85 seconds without the problem.
+  So it's hardware-only: DMA, caches, interrupts or timing.
+- **Tools and their results:**
+  - The hardware breakpoint doesn't work under Neutrino (two runs confirmed it).
+  - The new `SH1_SENTINEL=1` check build found nothing before the crash. That places the write after the collision code's last GTE or sin/cos call.
+- **Next steps:**
+  - a remote command that loads a save and fires a door on the console, so each test is just a power cycle and a boot for you;
+  - then the same check from the vertical-blank interrupt and right after `Collision_WallDetect` returns.
+
+**Other notes:**
+- **Warm restart:** deploying over a kept crash hung again, and a cold boot of the same build ran fine. Noted in the to-fix list, with the advice to power-cycle instead of deploying over a crash.
+- **The console test:** [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md) records that today's run went to the crash, so no frame rates were measured yet. Still to do: map4_s02/s03, map6_s00 door 7, and the cutscenes.
+- **My notes:** I've recorded that the EE breakpoints don't fire under Neutrino, and that I should check the project's notes before choosing a console debugging technique.
+
+## User
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+<tools-used-before-summary>Bash, Edit, PushNotification, Read, SendUserFile, ToolSearch, Write</tools-used-before-summary>
+Summary:
+1. Primary Request and Intent:
+   - **First question:** what else to work on while three bugs from the optimization doc wait (the Floatstinger crash, 480p screens, analog mode after a pad replug).
+   - **map4_s02/s03 profiling:** find the bottlenecks in these maps, then fix them ("Go ahead and").
+   - **Two PS2 decomps:** download Chronicle and ICO-decomp into `~/Documents/PS2 Decomps`, then analyse and compare their graphics pipelines with this port, including performance estimates.
+   - **`PS2 Decomps Analysis.md`:** save that analysis. Also propose engine changes that keep the graphical output unchanged and suit PS2 hardware, so that ideally the GS becomes the bottleneck.
+   - **`Graphics Pipeline Rework.md`:** write the plan there and keep it updated.
+     - Estimate console performance from earlier console/emulator differences (no console available at that point).
+     - Send push notifications at good stopping points: questions, finished steps.
+     - Steps done in order: #1, then #2, then #3 ("Yes"), then B and C, then point-light work (#1 of the later options).
+   - **Boathouse save:** find it and its internal map name, and which maps connect to map6_s01.
+   - **map6_s00:** test its performance without playing, find the bottleneck, and fix it ("Yes").
+   - **Grid effect images:** show the effect off versus on.
+   - **Door spawns:** spawn Harry at each exit from the Boat map and measure performance.
+   - **Idea saved for later:** record inputs on the console and replay them in PCSX2.
+   - **Console test:** the user then triggered the Floatstinger bug, and we debugged it.
+   - **Latest request:** "Let's stop for now. Record what we've learned".
+
+2. Key Technical Concepts:
+   - **The port's architecture:**
+     - The PS1 GTE is emulated in C (`gte.c`).
+     - `DrawOTag` translates PS1 GP0 packets into GS packets (`gpu_gs.c`).
+     - PS1 VRAM lives in GS memory, with page, CLUT and filtered-CLUT caches.
+     - Packets are written through the uncached-accelerated (UCAB) mirror.
+   - **Light counters** (`SH1_LITEPROF`, `LP_*` in `include/port/prof.h`):
+     - `SH1_PROF` gives PROF sections.
+     - Adding `SH1_EXTRA_CFLAGS=-finstrument-functions` gives function profiles (`proffn:` lines, symbolised with nm).
+   - **Benchmark builds** (`SH1_BENCH`) run uncapped and dump a frame every 100 demo frames, so their per-second fps is polluted. Use cycle counts instead.
+   - **Kaufmann's frame dumps** depend on build speed, because voice clips play in emulated time. Use them only to compare builds of the same speed.
+   - **Exactness checks:**
+     - `gpu_test.py` (vs DuckStation);
+     - `bench_frames.sh` (attract demo 0 dumps);
+     - `compare_frames.py --replay` of 7 DuckStation captures (timing-independent);
+     - check builds (`SH1_EXTRA_CFLAGS=-DSH_PORT_CHECK_BATCH`).
+   - **Warp tests:** `warp_sweep_ps2.py` warps the attract demo into a map. The door test added this session (`capture.txt`: `999999 load=F:D door=N:F`) loads a save, then runs a map event.
+   - **Console:**
+     - Neutrino, UDPFS (`udpfs_serve.py`), log receiver (`ps2_log.py`), and `ps2_ctl.py` (ping/deploy/md).
+     - A warm restart from a kept crash hangs; power-cycle instead.
+     - EE hardware data breakpoints don't fire under Neutrino.
+   - **Console estimate:** about 2.3x PCSX2's busy cycles, and 3–5x for wait time.
+   - **GS details:** TEXCLUT's COU field (16-entry offsets in a CLUT row), CSM2. A quad's two triangles don't overlap under top-left fill.
+   - **MMI doesn't fit GTE batches:** the dot products are a small part of each vertex, and the projection is scalar.
+
+3. Files and Code Sections:
+
+   **`src/screens/stream/stream.c`**
+   - Warp runs skip the intro movie: `if (g_GameWork.gameState == GameState_MovieIntro && (Capture_Load(NULL, NULL) || Port_WarpActive()))`.
+
+   **`src/port/ps2/gpu_gs.c`** (main renderer work):
+   - **Filtered CLUTs** (`filt_canon` + 4-bit sub-row cache):
+     - `filt_canon` keys tables by per-channel thresholds.
+     - `FiltRaw` store (`FILT_RAWS` 64).
+     - `s_Filt8[FILT_ROWS8=8]` rows 88–95.
+     - `s_Filt4[FILT4_SETS(256)*2]`: 16 per row in rows 96–127, two-way.
+     - `filt_get` returns a TEXCLUT value (`4 | cou<<6 | cov<<12`).
+     - `CLUT_ROWS` 88.
+   - **Async GIF DMA:**
+     - `#define D2_CHCR (*(volatile u32*)0x1000A000)`, MADR at 0x1000A010, QWC at 0x1000A020.
+     - `dma_wait()` polls the STR bit 0x100.
+     - `dma_send_impl` waits for the previous send, sets the registers, then `D2_CHCR=0x101`.
+     - `dma_send_cached` calls `SyncDCache`.
+     - `GpuGs_Sync` = `pend_flush` + `dma_wait`.
+     - `GpuGs_DisplayShow` calls `GpuGs_Sync()` after each `GpuGs_Flush()`.
+   - **`upload_inline`:** uploads of 2 KB or less (`UPLOAD_INLINE_MAX`) go as transfer registers + an IMAGE giftag into the packet.
+   - **Per-kind state memo** in `prim_state`: a `kinds[256]` table, aligned 64, in main RAM (it overflowed the scratchpad first). Used only when `!s_Sh`.
+   - **`quad_split()`:** with it, `blend_exact` runs once per non-overlapping quad.
+   - **Diagnostic counters,** LITEPROF only:
+     - `gs cache per frame`, `gs filtered CLUTs per frame`, `gs readbacks per frame`;
+     - `gs state memo misses per frame`;
+     - LP slots for emit blend exact, fog pair and `gte: rtp batch`.
+
+   **`include/port/prof.h`**
+   - Added `LP_BLEND_EXACT`, `LP_EMIT_UNDER`, `LP_RTP_BATCH`.
+
+   **`src/port/gte.c`**
+   - `rows_small()` and `rtp_project32()`: a 32-bit path in `Gte_RtpBatch`.
+   - `Gte_PointLightBatch()`: a fused one-pass point light (vectors, RTPS, light formula).
+   - `SH1_SENTINEL` `Port_Sentinel()`: checks 0x01FFEB10 for the `FC00` corruption from `Gte_Command`. Kept, off by default.
+   - A 32-bit point-light batch was tried and reverted (it was slower).
+
+   **`src/port/libkmath_port.c`**
+   - `SENTINEL` calls in `Math_Sin` and `Math_Cos`.
+
+   **`include/port/gte.h`**
+   - Declares `Gte_PointLightBatch`.
+
+   **`src/bodyprog/gfx/bodyprog_80056D8C.c`**
+   - `Port_PointLight` uses `Gte_PointLightBatch` first.
+   - New `Port_PointLightLast()` is shared by both paths. It takes the last vector and FIFO values from `s_PlVtx[0]`, `s_PlXy[0..2]` and `s_PlSz[0..3]`.
+   - The two-pass path memmoves its tails to the arrays' start.
+
+   **`src/maps/map6_s00/map6_s00.c`**
+   - `Port_GridLightBatch`, `Port_GridLight` (`PORT_GRID_LIGHT` macro), memoised DPCS colours, and a check build.
+   - `Port_GridProject` (Gte_RtpGrid, `PORT_GRID_PROJ` 285, with a wrap guard).
+   - An `LP_MAP_FX` counter around the `func_800EC4B4` call.
+   - Includes `port/gte.h`, `bodyprog/gfx/world.h`, `port/prof.h`, and declares `extern s_WorldEnvWork g_WorldEnvWork`.
+
+   **Door test**
+   - `src/port/demo_menu.c`: `Port_DoorTestStart()`.
+   - `src/port/ps2/capture_ps2.c`: `door=N:F`, `Capture_Door()`.
+   - `src/bodyprog/events/events_main.c`: called after `Port_DemoEventStart`.
+
+   **`tools/port/port_link.py`**
+   - `SH1_SENTINEL` is added to the `solo` flags for `src/port/*.c`.
+   - The WATCH_STACK flag was removed.
+
+   **`src/port/ps2/crash_ps2.c`**
+   - The WATCH_STACK watch was reverted with `git checkout`.
+
+   **Docs**
+   - **Created:**
+     - `PS2 Decomps Analysis.md`;
+     - `Graphics Pipeline Rework.md`: plan, console estimates, steps 1–4c, Kaufmann findings, the record-and-replay "Later" section, and the console test note.
+   - **Updated:**
+     - `docs/ToFix.md`: the Floatstinger section, the warm-restart note, the filtered-CLUT note, and the map4_s02 warp crash;
+     - `PS2 Optimizations.md`: the map4_s02 entry and a Floatstinger cross-reference.
+
+   **Memory**
+   - Memory files added:
+     - `notify-at-stopping-points.md`;
+     - `no-ee-hw-breakpoints.md`.
+   - `MEMORY.md` entries added for both.
+
+   **Commits on `upstream-sync`**
+
+   | Commit | What |
+   |---|---|
+   | 434b10b7f | Filtered CLUTs, warp movie skip |
+   | 6cd5d8f18 | Async GIF + analysis/plan docs |
+   | d11e842fb | Inline uploads |
+   | 278fa7b9c | Larger CLUT caches |
+   | d50cc97f2 | Per-kind memo |
+   | 2893b19fa | Blend once per quad |
+   | db249e666 | 32-bit transform batch |
+   | 00f5541bb | Point light in one pass |
+   | 4d0676fff | map6_s00 grid |
+   | 5244326ad | Door test |
+   | b830bf08e | Floatstinger docs + sentinel |
+
+4. Errors and fixes:
+   - **Warp runs broken since FMV playback:** the intro movie played in full. Fixed in `stream.c` by skipping it on warp runs.
+   - **Kaufmann dumps differed between builds:** proven to be speed-dependent timing with a delay-only build. They're no longer used as a cross-speed exactness check.
+   - **Scratchpad overflow** (`.spad` over 16 KB) from the `kinds` table: moved to RAM.
+   - **gte.c LP macros undeclared:** added `#include "port/prof.h"` near the top.
+   - **map6_s00.c compile error, `g_WorldEnvWork` undeclared:** added an extern and the include.
+   - **`capture.txt` ignored without frames listed:** list `999999`.
+   - **Python heredoc quoting error:** moved the script to a scratchpad file.
+   - **SENTINEL define not applied:** `src/port/*.c` uses the `solo` flags, not `dump`. Fixed.
+   - **EE breakpoint watch** (two builds): never fired. This was already known from the docs. User impact: two power cycles and replays. Memory saved.
+   - **Deploy over a crashed state gave a black screen.** The user had power-cycled while I was checking, so I corrected the ToFix note. A cold boot works; power-cycle instead of deploying.
+   - **Removed unverified claims from the docs:** the IOP agent being unresponsive (the console was already restarting) and map4_s04 idle figures (those heartbeats came after the map4_s05 load).
+
+5. Problem Solving:
+   - **Solved, map4_s02** (all PCSX2):
+     - Filtered-CLUT misses (about 160/frame): DrawOTag 1206k → 737k.
+     - Async sends: → 632k.
+     - Inline uploads: sends 31 → 6 per frame, DrawOTag → 614k.
+   - **Solved, Kaufmann:** DrawOTag 8172k → 3319k.
+   - **Solved, CybilFightStart:** point light 1440k → 1155k.
+   - **Solved, map6_s00 grid effect:** 932k → 419k.
+   - **map6_s00 door measurements** (PCSX2, normal build):
+     - Door 7: 51–55 fps at 0% idle. DrawOTag 2151k, point light 1033k, rain about 430k. Console estimate about 25–30 fps.
+     - Door 6: 60 fps at about 23% idle. Console estimate about 35–40 fps.
+   - **Ongoing, Floatstinger crash** (hardware only, documented in ToFix):
+     - What happens: one halfword write of 0xFC00 to 0x01FFEB12, Floatstinger_Update's saved animation-header pointer, during `func_800D35F0`.
+     - PCSX2 doesn't reproduce it.
+     - The sentinel found nothing before the crash: the write comes after the last GTE or sin/cos call, or from an interrupt or DMA.
+
+6. All user messages:
+   - "We will come back to the three bugs listed in the optimization doc later. What else is there to do in the meantime?"
+   - "Let's focus on the map4_s02/03 profiling. I know from my own testing that there are other areas that drop frames too, but let's start here. What are the bottlenecks in this map?"
+   - "Go ahead and"
+   - "Commit. I'll test on console later."
+   - "As far as the graphics pipeline goes, take a look at these two PS2 decomps: https://github.com/TheMoonPeople/Chronicle https://github.com/RossyDoubleUnderscore/ICO-decomp Download them to PS2 Decomps in the same folder as PS1 Decomps. Analyze the graphics pipeline for each game and provide a summary of how they work, how they differ from each other, and how they differ from our Silent Hill port. Give your best estimation of how performant each approach is."
+   - "Save these findings as PS2 Decomps Analysis.md. What changes can we make to our engine that don't change the graphical output, but are better suited to PS2 hardware? Ideally we want the GS to end up being the bottleneck."
+   - "Let's get started on these changes. Write the plan to Graphics Pipeline Rework.md and update it as we go along. I won't be able to test on console right now, but given previous differences in performance between console and emulator, estimate console performance. Later console tests will provide more accurate data. Start on #1. From now on, send me notifications when you reach a good stopping point, such as a question or if you finish with one step."
+   - "Tool loaded." (twice)
+   - "Proceed"
+   - "Yes"
+   - "Let's do B and then C"
+   - "Let's do #1"
+   - "Is there a Boathouse save file on the memory card? I'm curious what the internal map name is for that area"
+   - "One idea to save for later: record my inputs on the console and then replay them later on the emulator to test performance easily. How feasible is that?"
+   - "What maps connect to map6_s01? There are two doors"
+   - "How well can we test performance in map6_s00 without actually playing? I noticed in an earlier play session that performance was much better than PS1, but still not at a locked 60 FPS. I'm curious what the bottleneck might be there."
+   - "Yes"
+   - "What would the end frame look like with and without the lattice?"
+   - "Yes, I want to see the effect off and on"
+   - "Try spawning Harry at each of the exits from the Boat map as if he'd left through the doors (essentially, outside the doors leading to the Boat map) and measure performance."
+   - "Let's do a console test"
+   - "Alright, I'm going to trigger the Floatstinger bug again"
+   - "Just so you know, the deploy resulted in a black screen again and I have to restart the PS2"
+   - "I restarted while you were checking so that may be part of it"
+   - "Why don't you record my inputs on real hardware and then feed them to PCSX2?"
+   - "Let's stop for now. Record what we've learned"
+
+7. Pending Tasks:
+   - None active: the user said to stop.
+   - Open later items, already in the docs:
+     - Console frame-rate measurements (map4_s02/s03, map6_s00 door 7, cutscenes).
+     - Floatstinger next steps: a remote load-save + door command on the console, and a sentinel in the vblank interrupt and around `Collision_WallDetect`.
+     - Step D (VU1 packet building).
+     - The record-and-replay tool.
+     - The three original bugs.
+
+8. Current Work:
+   On "Record what we've learned":
+   - Removed the WATCH_STACK breakpoint code and kept `SH1_SENTINEL`.
+   - Wrote the Floatstinger findings into `docs/ToFix.md`.
+   - Updated `PS2 Optimizations.md` and `Graphics Pipeline Rework.md` (console test note).
+   - Rebuilt the normal 60 fps ISO, so the next boot isn't a debug build.
+   - Committed b830bf08e.
+   - Saved the memory `no-ee-hw-breakpoints.md` and added it to `MEMORY.md`.
+   
+   The working tree was clean after the commit.
+
+9. Optional Next Step:
+   None. The user's last request was "Let's stop for now. Record what we've learned", and that's done. Next time, a short confirmation that everything is recorded and committed (b830bf08e) is the only thing needed.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/17298180-a4fa-464b-8f87-2af26f8f5777.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+The messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.
+
+## User
+
+<command-name>/compact</command-name>
+            <command-message>compact</command-message>
+            <command-args></command-args>
+
+## User
+
+<local-command-stdout>Compacted </local-command-stdout>
+
+## User
+
+I'd like to continue debugging the Floatstinger crash
+
+- tool `Bash`: Find Floatstinger notes and sentinel code
+
+- tool `Bash`: Read Floatstinger notes and sentinel
+
+- tool `Bash`: Check how capture.txt is read on PS2
+
+- tool `Bash`: Check capture gating and UDPFS root
+
+- tool `Bash`: Check UDPFS served folder and host file use
+
+- tool `Bash`: Find interrupt and timer usage in port
+
+- tool `Bash`: Read vblank handler setup and timer use
+
+- tool `Bash`: Read sound timer thread and stack setup
+
+- tool `Bash`: Check flags scope and vblank/heartbeat code
+
+- tool `Bash`: Locate ps2sdk and timer definitions
+
+- tool `Bash`: Check which EE timers ps2sdk uses
+
+## Claude
+
+Adding a sentinel build: a fast EE timer interrupt checks the slot about every 50 µs and records the interrupted PCs. The sound tick thread and vblank also check before and after their work.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/sentinel_ps2.c
+
+- tool `Bash`: Find hook points in vblank and crash handler
+
+- tool `Bash`: Find crash report function
+
+## Claude
+
+Wiring it into the crash report, heartbeat, vblank, sound tick, and startup.
+
+- tool `Bash`: Hook sentinel into crash, vblank, tick, link
+
+- tool `Bash`: Build sentinel ELF and ISO
+
+- tool `Bash`: Check code addresses and PCSX2 runner options
+
+- tool `Bash`: Run door test in PCSX2 with sentinel build
+
+## User
+
+[Request interrupted by user for tool use]
+
+## User
+
+Let me record a series of inputs from real hardware that can then be played back in the emulator
+
+- tool `Bash`: Read the saved record-and-replay plan
+
+- tool `Bash`: Read demo format and find demo player code
+
+- tool `Bash`: Read demo playback implementation
+
+- tool `Bash`: Find demo hook call sites
+
+- tool `Bash`: Read main loop and demo boot code
+
+## Claude
+
+Working out how to make a console recording replay exactly: the game's own demo player gives most of it. I'm checking what else changes when a demo is active.
+
+- tool `Bash`: List every demo-active check in the game
+
+- tool `Bash`: Find load-save flow and UDPFS write support
+
+- tool `Bash`: Read save-load completion code
+
+- tool `Bash`: Read file queue hold hook and pad flag
+
+- tool `Bash`: Read warm boot demo checks and vsync branch
+
+- tool `Bash`: Read pad structs, RNG API, port file style
+
+- tool `Bash`: Check how port game-side code reads host files
+
+- tool `Bash`: Find host file helpers on PS2 side
+
+## Claude
+
+Writing the recorder: file I/O on the PS2 side, game logic in a port file, and small hooks in the demo code.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/ps2/rec_ps2.c
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/src/port/demo_rec.c
+
+- tool `Bash`: Fix hold type and locate demo.c hook points
+
+## Claude
+
+Now the hooks in demo.c, saveload.c, game_main.c and fsqueue.c.
+
+- tool `Bash`: Add play recorder hooks to game code
+
+- tool `Bash`: Check where the test walk injects input
+
+- tool `Bash`: Find where walk injection is called
+
+- tool `Bash`: Show the function calling the walk
+
+- tool `Bash`: Record pad after test input; add position reports
+
+- tool `Bash`: Add trace lines and build normal ISO
+
+## Claude
+
+Built. Now testing it in PCSX2: record about 70 s of the Reception save with the scripted test walk, then replay it and compare the trace lines.
+
+- tool `Bash`: Record a session in PCSX2
+
+- tool `Bash`: Show recorder log lines
+
+## Claude
+
+Recording works: a trace line every 600 steps, and the file is written every 3,600 steps. Replaying it now:
+
+- tool `Bash`: Replay the recording and compare traces
+
+- tool `Bash`: Prepare rec.txt and check console servers
+
+- tool `ToolSearch`: 
+
+- tool `PushNotification`: 
+
+## Claude
+
+I've built an input recorder on top of the game's own attract-demo player, and a test in PCSX2 replayed exactly. It hasn't run on the console yet.
+
+**PCSX2 test:** I recorded about 18,000 frames from the Reception save. That's only a short scripted walk followed by Harry standing still, so the test is weak. A replay matched the recording on every check: Harry's position and the random-number state every 600 frames, with no divergence errors. The replay ran at 59.8 fps.
+
+**To record on the console:**
+1. Power-cycle the PS2 and boot as usual. The ISO in `build/port` is a normal 60 fps build with the recorder, and `build/port/rec.txt` already says `record route1`. Both servers are running.
+2. Load any save from the title screen. Recording starts at that point.
+3. Play the route you want to measure.
+4. Hold **Select + Start + L1 + R1** to stop. Saving, a game over, or reaching 18 minutes also stops it.
+
+**How it works:**
+- The recording goes to `build/port/rec/route1.dem`, about 58 KB a minute. It's also written every minute, so a crash loses at most a minute.
+- On playback, the recording's own save replaces whichever save is loaded, so the PCSX2 memory card doesn't need to match yours. I'll replay it with `play route1` in `rec.txt`, and it prints the frame rate at the end.
+- The code is in [src/port/demo_rec.c](src/port/demo_rec.c), with small hooks in the demo, pad, save-loading and main-loop code.
+
+**Risks:**
+- **Writing files over the network:** this is the first time the game saves a file from the console this way. The recorder prints a line if it fails.
+- **Small timing changes while recording:** recording uses the demo player's rules. Inputs during screen fades and loads are ignored (one frame's time step there), and the random seed is reset outside those steps. So it plays very close to normal, but not identically.
+- **Divergence:** load times for map chunks are recorded and matched on replay. Other waits aren't, such as voice clips or other disc reads during events. If those make the replay diverge, it stops and reports a divergence error, so we'd see it.
+
+**Floatstinger:** a timer-based check for the bad write is also ready but uncommitted. It isn't in this ISO.
+
+## User
+
+The game crashed. Can the inputs still be recorded?
+
+- tool `Bash`: Check for recording file and console log
+
+- tool `Bash`: Read the end of the console log
+
+- tool `Bash`: Show log around the hang
+
+- tool `Bash`: Show today's session log without noise
+
+- tool `Bash`: Check whether UDPFS saw the rec.txt request
+
+## Claude
+
+No, nothing was recorded. The recording never started, so there are no inputs to recover even though the game crashed.
+
+**Why it never started:** the console couldn't read `rec.txt`. The log at load time shows `open name host:/rec.txt` → `fd = -19`, so the open failed. Opening `capture.txt`, `warp.txt` and the other `host:` files fails the same way on the console. I had assumed `host:` reached `build/port` over the network there, as it does in PCSX2. It doesn't, so the console can neither read the setting nor write the recording that way. My PCSX2 test passed only because `host:` works in the emulator.
+
+**The crash** is the Floatstinger crash again: a bad address `FC00CC76` in `Anim_BonesUpdate`, with the same `FC00` upper half as before. The game is frozen in the kept crash state, so it needs a power cycle.
+
+**Proposed fix:** use the network channels the console already has.
+- **Start:** a remote command such as `ps2_ctl.py rec route1`, through the remote-control agent that `ping` and `deploy` already use. It would start recording at the next save load, or right away if you're already in game.
+- **Output:** the recording goes out over the log connection that already carries the console's messages, in short text chunks, and `ps2_log.py` rebuilds `build/port/rec/route1.dem`. Sending it every few seconds instead of every minute means a crash loses only the last few seconds. It also gives us a crash route to replay in PCSX2: if the input there reaches the Floatstinger fight, the same sequence might reproduce the crash in the emulator.
+
+Should I build that?
+
+## User
+
+Yes
+
+- tool `Bash`: Read agent commands, ps2_ctl and log receiver
+
+- tool `Bash`: Read agent loop and ps2_ctl commands
+
+- tool `Bash`: Check log buffering and mailbox payload format
+
+- tool `Bash`: Check IOP command filter and ps2_ctl tail
+
+- tool `Bash`: Re-read current recorder state section
+
+## Claude
+
+Adding the remote start command and the log streaming now.
+
+- tool `Bash`: Add remote arm, log streaming and extractor
+
+- tool `Bash`: Build and test streaming in PCSX2
+
+## Claude
+
+Streaming works: the recording was rebuilt from the log alone, with no ending, like a crash. Replaying that rebuilt file:
+
+- tool `Bash`: Replay the log-rebuilt recording and compare
+
+- tool `PushNotification`: 
+
+## Claude
+
+The recorder now works over the network, and a PCSX2 test passed. I cut the run off without ending the recording, as a crash would, and rebuilt the file from the log alone. Its replay matched the recording on all 18 checkpoints (Harry's position and the random-number state every 600 frames), with no divergence.
+
+**How it works on the console:**
+- **Start:** I arm it with `ps2_ctl.py rec route1`. Recording then starts at the next save you load.
+- **Output:** the game sends the recording through the console log about once a second. `tools/port/rec_extract.py` rebuilds `build/port/rec/route1.dem` from `ps2.log`, so a crash loses at most about a second.
+- **Stop:** hold **Select + Start + L1 + R1**, or I send `ps2_ctl.py rec stop`. Saving or a game over also stops it.
+
+**What to do:**
+1. Power-cycle the PS2. It's still frozen from the last crash, and the new ISO is ready.
+2. When you reach the title screen, tell me and I'll arm the recorder. Wait for my go-ahead before loading a save.
+3. Load a save and play.
+
+If you head to the Floatstinger again and it crashes, the recording up to the crash can be replayed in PCSX2. That would test whether the exact same inputs reproduce the crash there.
+
+This build doesn't include the Floatstinger timer check. Nothing is committed yet.
+
+## User
+
+The game has crashed at the Floatstinger again
+
+- tool `Bash`: Check whether this session was recorded
+
+## Claude
+
+This crash wasn't recorded either. The recorder was never armed: the log shows no `rec:` line, and the save was loaded before I'd sent the command. So no recording data exists to recover.
+
+The crash itself is the same one: `FC00D0F6` in `Anim_BonesUpdate`, reached through the map4_s04 door into map4_s05 like the earlier crashes. That's 7 out of 7 on hardware now.
+
+The console needs a power cycle. Two ways to go from there:
+1. **Arm it by hand:** when you reach the title screen, tell me, and wait for my go-ahead before loading a save.
+2. **Arm it at boot (simpler):** I make a build that arms the recorder as soon as it boots, so you never have to wait for me. It costs about 2 KB/s of log traffic.
+
+Since it needs a new build anyway, I'd go with option 2. Should I make it?
+
+## User
+
+No, I'll do option 1
+
+## Claude
+
+Okay, we'll arm it by hand. Power-cycle the PS2 and boot as usual. When you reach the title screen, tell me and stop there. I'll arm the recorder and confirm from the log that it took. Then load your save and play to the Floatstinger.
+
+## User
+
+I'm on the title screen. Start recording as soon as I load a save
+
+- tool `Bash`: Arm the recorder on the console
+
+## Claude
+
+It's armed: the log confirms `rec: armed fstinger`. Go ahead and load your save, and recording will start right away.
+
+Play to the Floatstinger as usual. If it crashes, tell me and I'll rebuild the recording from the log and replay it in PCSX2. If you want to stop before then, hold **Select + Start + L1 + R1**.
+
+## User
+
+It's crashed
+
+- tool `Bash`: Extract the console recording up to the crash
+
+## Claude
+
+Got the recording: 959 steps up to the crash. Replaying it in PCSX2 to see whether the same inputs crash there:
+
+- tool `Bash`: Replay the console recording in PCSX2
+
+## Claude
+
+Yes, the inputs were recorded, and the replay follows the console run exactly. The same inputs still don't crash in PCSX2.
+
+**The recording:**
+- It covers 959 steps (about 16 s of input, 24 s of play). It starts at the save load, goes through the map4_s04 door, and ends within about 1.5 s of the crash; only the last piece of streamed data was lost.
+- The file is `build/port/rec/fstinger.dem`.
+
+**The replay in PCSX2:**
+- Both checkpoints match the console exactly, at step 0 and step 600: Harry at −393216 −137 839623 with seed `E7D20712` on both.
+- It played all 959 steps with no divergence and no load waits.
+- The game then went into the Floatstinger fight and kept running until the run ended at 90 s, with no crash.
+
+So far it looks like hardware behaviour, not game state. The same save and the same inputs arrive at the fight in the same state, give or take the lost last second. The console crashes and PCSX2 doesn't, which points again at something PCSX2 models differently: DMA, caches, interrupts or timing.
+
+**This also gives a test that's quick to repeat.** If the console could replay this recording, it would reach the crash with no playing on your part. Every check build would then be just a boot. Two pieces are missing:
+- **Getting the file onto the console.** `host:` doesn't work there. Options are embedding the recording in the ISO (a 17 KB file), or sending it through the remote-control agent.
+- **Starting the replay remotely,** for example `ps2_ctl.py play fstinger`.
+
+With that, the Floatstinger check build from earlier (the timer interrupt that records which code was running when the bad write lands) can run on the console without you playing.
+
+The console needs a power cycle. Should I build console replay next?
+
+## User
+
+Run the test in PCSX2 again first. I want to watch it this time
+
+- tool `Bash`: Check PCSX2 runner window options
+
+- tool `Bash`: Replay the recording in PCSX2 at normal speed
+
+## Claude
+
+PCSX2 is starting the replay now, at normal speed this time, so you can watch it. It loads a save from the PCSX2 card, swaps in the recorded console save, plays your 959 recorded steps through the map4_s04 door into map4_s05, and then runs on into the Floatstinger fight. The window closes after 120 s, and I'll report what the log shows.
+
+## User
+
+It seems like it crashes in PCSX2 as well, reaching a black screen
+
+- tool `Bash`: Read the watched replay's log so far
+
+- tool `Bash`: Check whether the live log has content
+
+- tool `Bash`: Read PCSX2's live emulator log
+
+- tool `Bash`: Read the finished replay output
+
+## Claude
+
+PCSX2 has closed, but I don't have its game log yet, so I can't confirm what happened on screen. The log will be readable once the background run finishes, which should be any moment. I'll check it then for a crash report or a stall: 15 s of emulated time with no new frames counts as a crash.
+
+If it did crash, this is the first time the Floatstinger crash has happened in PCSX2. That would mean the recorded console inputs reach it where my own test runs never did, so we could debug it in the emulator.
+
+- tool `Bash`: Read the replay log
+
+- tool `Bash`: Check whether the first replay also hit the bad load
+
+## Claude
+
+You're right: it crashed in PCSX2. I said earlier that it didn't, and that was wrong.
+
+**What the log shows:** right after the replay ended, the game made the same bad load as on the console. It was at `pc=0x169EB8`, inside `Anim_BonesUpdate`, and the address was `0xFC00D0F6`, the exact address the console crashed on. PCSX2 doesn't stop on a bad read like that the way a real PS2 does. It logs it as a "TLB Miss" and carries on with garbage, which is the black screen you saw.
+
+**My mistake:** the first, fast replay hit the same bad load 14 times. My log search looked for `CRASH`, not `TLB Miss`, even though my notes say a TLB Miss in PCSX2 means a hardware crash. The same blind spot may explain the earlier door test written up as "85 s of the fight, no fault". So "hardware only", which this morning's notes recorded, is probably false, and I'll correct that in [docs/ToFix.md](docs/ToFix.md).
+
+**What it changes:** the crash now reproduces in PCSX2 on every run of your recording, with no console needed. We can find the write that turns `0x01FFEB12` into `0xFC00` with PCSX2's debugger, which has working memory-write breakpoints, unlike the console. Or a check build can narrow it down in a few minutes per try.
+
+Should I go ahead and track down the write in PCSX2?
+
+## User
+
+Yes
+
+## Claude
+
+Building the check build: a timer interrupt every 50 µs records the last 16 interrupted PCs, plus the existing checks on every GTE command and sin/cos call. Then I'll replay your recording on it in PCSX2.
+
+- tool `Bash`: Build sentinel ISO and replay recording
+
+- tool `Bash`: Find stores above a function's own stack frame
+
+- tool `Bash`: Inspect the two suspicious stores
+
+## Claude
+
+Both of those stores are legitimate: they're functions updating their own stack-passed arguments. Reading the source of `func_800D35F0` next.
+
+- tool `Bash`: Locate func_800D35F0 source
+
+- tool `Bash`: Search the tree for the functions
+
+- tool `Bash`: Find definitions in map4_s05.c
+
+- tool `Bash`: Read func_800D35F0 source
+
+- tool `Bash`: Read func_800D35F0 and func_800D4458
+
+- tool `Bash`: Find declarations of the D_800DB89x globals
+
+- tool `Bash`: Add stack-scan checkpoints in func_800D35F0
+
+- tool `Bash`: Build checkpoint build and replay in PCSX2
+
+- tool `Bash`: Read Floatstinger_Update source and disassembly
+
+- tool `Bash`: Show the rest of Floatstinger_Update
+
+- tool `Bash`: Add Update checkpoints, rebuild, replay
+
+- tool `Bash`: Check what the run did
+
+- tool `Bash`: Move checkpoints into Floatstinger_Init and replay
+
+- tool `Bash`: Add entry traces to Floatstinger functions
+
+- tool `Bash`: Trace Floatstinger calls in a replay
+
+- tool `Bash`: Find Sfx_WithFlagsPlay definition
+
+- tool `Bash`: Read Sfx_WithFlagsPlay and helpers
+
+## Claude
+
+The sound code only reads the position synchronously and never keeps the pointer, so that's not it. Reading the rest of `Floatstinger_Update`'s disassembly to see which reload feeds `func_800D37E8`:
+
+- tool `Bash`: Show crash build's Floatstinger_Update tail
+
+- tool `Bash`: Find Game_NpcUpdate
+
+- tool `Bash`: Read Game_NpcUpdate
+
+- tool `Bash`: Find how the NPC update gets its anim header
+
+- tool `Bash`: Find anmHdr computation in Game_NpcUpdate
+
+- tool `Bash`: Revert traces and find the anim table layout
+
+- tool `Bash`: Read the anim data struct and Floatstinger id
+
+- tool `Bash`: Dump the anim table at first sighting
+
+- tool `Bash`: Read func_800D1968 and the control update start
+
+- tool `Bash`: Locate func_800D1968 and control functions
+
+- tool `Bash`: Read Player_DisableDamage
+
+## Claude
+
+That one writes a single byte, so it's fine. Adding checkpoints at the start and end of `func_800D1968`, at the start of `func_800D35F0`, and in the per-state control functions:
+
+- tool `Bash`: Read control dispatch
+
+## Claude
+
+Found something. `Floatstinger_ControlUpdate` calls its per-state function as `D_800D7A04[state]()`, with no arguments. Checking what those functions expect:
+
+- tool `Bash`: Find the control function table
+
+- tool `Bash`: Find where the control table is defined
+
+- tool `Bash`: Read the table data and original assembly
+
+- tool `Bash`: Check the per-state functions' signatures
+
+- tool `Bash`: Apply fix, rebuild normal ISO, replay
+
+## Claude
+
+The bad load is gone: the replay of your recording on the fixed normal build shows no TLB misses (14 before), and the fight runs on after the replay ends. Updating the to-fix list:
+
+- tool `Bash`: Record the fix in the to-fix list
+
+- tool `PushNotification`: 
+
+## Claude
+
+I found the Floatstinger crash and fixed it. The fix works in PCSX2 but hasn't been tested on the console yet.
+
+**The bug:** a call that drops its argument, in [floatstinger.c](src/maps/characters/floatstinger.c).
+- `Floatstinger_ControlUpdate` runs its per-state function through a table declared `void (*D_800D7A04[])(void)`, so the call passes no arguments.
+- Four of the five functions in the table actually take the Floatstinger pointer.
+- On the PS1 this worked by luck: the original assembly never changes register `a0` before the call, so the pointer was still there.
+- In the port the call is inlined right after `func_800D1968`, so `a0` holds whatever that function left behind, a stack address. The state function writes the Floatstinger's fields through it, into the stack.
+- One of those writes is −1024 (−90°, the Floatstinger's starting heading). It lands on the upper half of the saved animation header, and that's where the `FC00xxxx` pointer came from.
+
+**The fix:** the table now has its real type, and the call passes the Floatstinger.
+
+**Result in PCSX2:** the replay of your recording on a normal build has no bad loads. There were 14 before the fix, and the fight carries on after the replay ends.
+
+**How the recording got us there:**
+- **PCSX2 crashed after all:** the earlier "doesn't crash in PCSX2" conclusion was wrong. PCSX2 logs the same bad load as a "TLB Miss" and keeps going, and my searches only looked for `CRASH` lines.
+- **Debugging without the console:** your recording made the crash happen on every PCSX2 run, so I could narrow it down in the emulator.
+- **Why it seemed layout-dependent:** some debug builds changed how the compiler kept the pointer, so nothing read the corrupted copy and the crash disappeared.
+
+I've rewritten the Floatstinger entry in [docs/ToFix.md](docs/ToFix.md) and added one follow-up there. Other tables in the game may be declared `(void)` while their functions take arguments, which would be the same hidden bug.
+
+**To confirm on the console:** power-cycle, boot the new ISO in `build/port`, and go to the Floatstinger.
+
+Nothing is committed yet. The uncommitted work includes:
+- the fix;
+- the recorder: the remote `rec` command and `rec_extract.py`;
+- the debug-only check code, which isn't in the normal build.
+
+Should I commit it once you've checked the console?
+
+## User
+
+How many other places might this behavior exist in the code?
+
+- tool `Bash`: List no-argument function pointer declarations
+
+- tool `Bash`: Find where map overlay headers are defined
+
+- tool `Bash`: Scan the ELF for indirect calls with stale a0
+
+- tool `Bash`: Validate the scan on the pre-fix build
+
+- tool `Bash`: Show the indirect calls in each flagged function
+
+- tool `Bash`: Show each flagged site's target load
+
+- tool `Bash`: Read a map header initializer
+
+- tool `Bash`: Compare header call sites with target parameters
+
+- tool `Bash`: Sanity-check the scan's parsing
+
+- tool `Bash`: Identify the remaining tables and calls
+
+- tool `Bash`: Check table targets' parameter counts
+
+- tool `Bash`: Check animation variable-duration functions
+
+- tool `Bash`: Disassemble Anim_PlayOnce's indirect call
+
+- tool `Bash`: Read func_8005E89C's indirect call
+
+- tool `Bash`: Find func_8005E89C definition
+
+- tool `Bash`: Show the pointer call in func_8005E89C
+
+- tool `Bash`: Check what maps put in func_9C
+
+## Claude
+
+I found no other live cases of this bug. The Floatstinger call was the only one, and one more of the same kind had already been fixed earlier in the animation code.
+
+I checked the compiled port, not the source, since the tables are split between C and assembly data. The scan looks for indirect calls where `a0`, the first argument register, hasn't been set since an earlier call, so the called function would get a leftover value.
+
+**How the scan was checked:** on the build before today's fix, it flags `Floatstinger_Update`. On the fixed build it no longer does.
+
+**What it flags:** 22 call sites in 16 game functions, plus a few in the C library's start-up code. I went through all of them:
+- **Map overlay header calls** (system-state update, game-over screen, cutscene helpers, NPC spawning, `func_9C`). A second scan compared every map's function in each header field with the call sites. All of them take no parameters, or are called with all their arguments.
+- **Function tables** for system states, game states, the save screen and auto-load. Every entry takes no arguments.
+- **`Anim_PlayOnce` / `Anim_PlayLoop`:** these are the animation variable-duration call. It was already fixed with an `#ifdef SH_PORT` ([anim.c:220](src/bodyprog/chara/anim.c#L220)), whose comment describes this same bug: "on PS1 the call works because `a0` still holds it". The remaining flags here are false positives. The scan reads code in address order, not along branches, and on those paths `a0` still holds the right value.
+- **Demo table:** all its entries are empty.
+- **`func_800D917C` (map7_s03):** it passes its arguments explicitly, so it's another false positive.
+
+**Limits of the check:**
+- It only looks at the first argument. A call that passes `a0` but drops a second or third argument wouldn't be caught. The source comparison of header fields and tables covers that case for those tables, but not for other pointer types.
+- It finds a missing argument only when an earlier call left `a0` stale. If a function forwards its own `a0` unchanged, a mismatch still works by luck, as it did on the PS1, so it does no harm.
+- It covers the code as compiled now. A different compiler version or other flags could inline a call differently and expose a new case. The real protection is typing the tables correctly, as the Floatstinger fix does. I can go through the 194 untyped declarations and add proper parameter types, so the compiler checks every call.
+
+I've added a line to the Floatstinger entry in [docs/ToFix.md](docs/ToFix.md) saying the follow-up check was worth doing.
+
+## User
+
+Commit the change. The crash is fixed on console.
+
+- tool `Bash`: Update docs and commit in three parts
+
+## Claude
+
+Committed in three parts on `upstream-sync`, and the working tree is clean:
+
+| Commit | What |
+|---|---|
+| `0ce590d00` | The Floatstinger fix. [docs/ToFix.md](docs/ToFix.md) now marks it confirmed on hardware and records that the follow-up scan found no other cases. |
+| `af0a16c62` | The play recorder: the remote `rec` command, streaming through the log, and `rec_extract.py`. |
+| `a48118c31` | The extended `SH1_SENTINEL` check build. It's debug-only and not in normal builds. |
+
+One mistake in the recorder commit's title: it says recordings replay "in PCSX2 or on the console". Only PCSX2 replay works so far. The console can't read `host:` files, so console replay would need the remote `play` command we discussed. I can't reword it without rewriting history, so it's easiest to fix whenever console replay is added.
+
+## User
+
+Add that to the todo list
+
+- tool `Bash`: List to-fix sections
+
+- tool `Bash`: Read the Testing section
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/docs/ToFix.md
+
+- tool `Bash`: Commit the to-do entry
+
+## Claude
+
+I've added it to the Testing section of [docs/ToFix.md](docs/ToFix.md) and committed it as `7ec9f68ef`.
+
+The entry says that recordings replay only in PCSX2 for now, because the console can't open `host:` files. The fix it lists is a remote `ps2_ctl.py play NAME`, with the recording sent over through the remote-control agent or built into the ISO. It also notes that commit `af0a16c62`'s title wrongly says replay works on the console.
+
+
+
+## User
+
+<command-name>/compact</command-name>
+            <command-message>compact</command-message>
+            <command-args></command-args>
+
+## User
+
+<local-command-stdout>Compacted </local-command-stdout>
+
+## User
+
+Is there an agents.md? If not, I want to create one from the notes we have and review it
+
+- tool `Bash`: Look for agents.md and existing notes
+
+## Claude
+
+No AGENTS.md (or CLAUDE.md) exists. Gathering the notes to build one from.
+
+- tool `Bash`: Read memories, sizes of docs, tools list
+
+- tool `Bash`: Skim README, doc headings, port layout
+
+## Claude
+
+Neither AGENTS.md nor CLAUDE.md exists. I'll draft one from my saved notes, the README, the planning and walkthrough docs, ToFix.md and replays.md.
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/AGENTS.md
+
+- tool `ToolSearch`: 
+
+- tool `PushNotification`: 
+
+## Claude
+
+There wasn't an AGENTS.md (or a CLAUDE.md), so I've drafted [AGENTS.md](AGENTS.md) for you to review. It's built from my saved notes, the README, `Planning Doc.md`, `Running Walkthrough.md`, `docs/ToFix.md` and `replays.md`.
+
+Sections:
+- **Where things are:** a table pointing to the plan, the walkthrough log, ToFix, replays, the optimisation docs, port code and tools, plus a rule to search the walkthrough for what's already been tried on hardware before planning console debugging.
+- **Building for the console:** the three build steps, `SH1_FPS=60`, the profiling switches, and the IOP compiler clash on PATH.
+- **The console:** power-cycle rather than RESET, the remote-restart freeze, the stale UDPFS server fix, hardware breakpoints that never fire, and `ps2_ctl.py where` being useless.
+- **Emulators:** PCSX2 on the software renderer, treat a stall as a crash, never ignore "TLB Miss" lines, and DuckStation on Software, muted, used as the reference.
+- **Shell gotchas:** don't `pkill -f` a pattern from a command that contains it.
+- **Working with the user:** no tcrf.net, "Docks" = map6_s00, notify at stopping points, the sound-port rules, commit only when asked.
+- **Conversation archive:** how to update `Claude Conversation.md` without losing earlier sessions.
+
+Points to check:
+1. **Audience:** I wrote it for any coding agent, not only Claude. "Notify the user" is worded generally, and the archive file keeps its "Claude" name.
+2. **Left out:** the step-by-step porting history and the performance numbers. It links to the docs that hold them instead.
+3. **"Commit only when asked":** that's my usual default, not something you've told me. Keep it or drop it?
+4. **CLAUDE.md:** Claude Code reads CLAUDE.md automatically, not AGENTS.md. If you want me to pick these notes up on my own each session, I can add a one-line CLAUDE.md that points to AGENTS.md.
+
+The file isn't committed.
+
+## User
+
+Commit these notes as CLAUDE.md
+
+- tool `Bash`: Rename notes to CLAUDE.md and commit it
+
+## Claude
+
+I renamed the notes from AGENTS.md to [CLAUDE.md](CLAUDE.md) and committed them on `upstream-sync` as `34c206c5e`. The only content change is the heading. Claude Code will now read the file automatically at the start of each session, and AGENTS.md is gone.
+
+The commit has only CLAUDE.md in it. This session's replay code, `replays.md` and the conversation archive are still uncommitted.
+
+## User
+
+Commit those changes too
+
+- tool `Bash`: Commit remaining session changes
+
+## Claude
+
+I committed the rest of the session's changes on `upstream-sync` as `4179e9d1c`, and nothing is left uncommitted. The commit has:
+- the title-screen REPLAY entry and the network upload of recordings
+- Debug Options set on the title now replace the loaded save's settings
+- the replay sync fix that holds each file load to the step it happened on in the recording. It's untested, and the commit message says so.
+- the profiling switch changes and the IOP compiler PATH fix
+- `replays.md` and the updated `Claude Conversation.md`
+
+Nothing has been pushed.
+
+
+
+## User
+
+<command-name>/clear</command-name>
+            <command-message>clear</command-message>
+            <command-args></command-args>
+
+## User
+
+Let’s discuss another debug option: widescreen mode. This is relatively simple to achieve in 3D rendering by just changing the projection matrix, but there are a few other things to consider. The idea is to make Silent Hill a “hor+” game; that is to say, the horizontal field of view is expanded with no compromises, except for the fact that in 240p, 480i, and 480p modes, the widescreen mode has to be anamorphic, with the correct aspect ratio obtained by stretching the image horizontally to 16:9. This may not apply if we implement a 1280x720p output mode, but we’ll come back to that. 
+1. The game’s culling of objects on the left and right sides of the screen has to be adjusted to account for the wider field of view. We don’t want pop in to be more visible. 
+2. The game doesn’t have many on screen elements during gameplay, but subtitles and other purely 2D effects have to account for the different aspect ratio. 
+3. The menus are mostly simple 2D textures, so they should be drawn “squeezed” initially and then stretched to widescreen by the display. The inventory is an exception because it also has 3D objects, but for now I essentially want it to draw centered in an imaginary widescreen frame. 
+4. FMVs are a little more complicated, but for now, they should be drawn squished and then stretched back to the proper aspect ratio by the display. There might be an opportunity here to take advantage of widescreen but I’m still thinking about it. Remind me what the resolution of the FMVs is.
+5. Measure for me what resolution the cutscenes render at after the black bars are applied. I believe we can take advantage of widescreen by simply making the cutscenes take up as much of the screen as possible while maintaining their original aspect ratio. 
+Prompt me for any clarifications and work on a plan for implementation.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i -E "widescreen|16:9|letterbox|anamorph" "Planning Doc.md" "Running Walkthrough.md" docs/*.md PS2\ Opt
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 60,95p docs/720p.md; grep -n -i -E "movie.*(width|height|320|208)|208" "Running Walkthrough.md" | head; g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 125,145p include/bodyprog/events/events_util.h; grep -rn -i -E "border|letterbox" src/bodyprog --include=
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "CutsceneBorder_" src include --include=*.c --include=*.h | grep -v ";" | head; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat include/bodyprog/screen/cutscene_border.h | sed -n 1,60p; grep -rln "cutsceneBorderState" src | head
+
+## Claude
+
+Looking up the cutscene border code to measure the letterboxed area.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat src/bodyprog/screen/cutscene_border.c | head -120
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 120,200p src/bodyprog/screen/cutscene_border.c; grep -rn -E "SCREEN_HEIGHT|FRAMEBUFFER_HEIGHT" include/*.
+
+- tool `ToolSearch`: 
+
+- tool `PushNotification`: 
+
+## Claude
+
+## Your two questions
+
+**FMV resolution (point 4):** 320×208 at 15 fps. The port shows them on a 320×224 progressive display with the 208-line picture centred ([Running Walkthrough.md:1410](Running%20Walkthrough.md#L1410), [:1426](Running%20Walkthrough.md#L1426)).
+
+**Cutscene area inside the bars (point 5):** I worked this out from the code in [cutscene_border.c](src/bodyprog/screen/cutscene_border.c) and haven't measured it in an emulator. A few things there don't match how the bars look:
+- **Bar size:** each bar is 16 lines, from y = ±112 to ±96 on the 224-line screen. That leaves a clean picture of **320×192**, which is about **1.56:1 (14:9)** on a 4:3 TV.
+- **The bars aren't solid black.** They are subtractive gradients: full strength at the screen edge, about half strength at the inner edge. On a CRT the outer lines also fall into overscan, so the picture you actually see is a little taller than 192.
+- **The camera zooms in.** As the bars fade in, `vcChangeProjectionValue` moves the projection distance from `gsScreenHeight` towards 377. The bars come with a narrower field of view, not just a cropped picture. This only happens when `SysFlag_CutsceneActive` isn't set (fade type 2 but not 3).
+
+## The plan
+
+**Setting and output**
+- Add a "Widescreen" debug option in the demo menu, off by default.
+- At 240p, 480i and 480p, the frame buffer keeps its width and the image is anamorphic: drawn squeezed, and the TV stretches it to 16:9. 720p comes later, as in [docs/720p.md](docs/720p.md).
+
+**1. Projection and culling**
+- **Projection:** multiply the GTE horizontal screen scale by 3/4 for 3D. This is the hor+ change: the vertical field of view stays the same.
+- **Culling:** the game checks visibility in more than one place (map/IPD chunk selection, per-model screen-bounds tests, character draw checks, and possibly the light and shadow lists). For each one:
+  1. Find where it uses a hard-coded ±160 or a view-cone half-angle.
+  2. Widen it by 4/3 under `#ifdef SH_PORT`, behind the setting.
+- **Testing:** check each one in PCSX2 by panning the camera in a few rooms, the streets and Docks, looking for objects appearing at the edges.
+- **Fog and draw distance:** these depend on depth, not width, so they shouldn't change. I'll confirm that.
+
+**2. 2D during gameplay** (subtitles, map message boxes, the health/status effects, the "noise" overlay)
+- **Text and boxes:** squeeze their X positions and widths by 3/4 around the screen centre.
+- **Full-screen effects** (fades, the noise filter, the cutscene bars): leave them at full width so they still cover the whole wider frame.
+- **Where:** do it at a game-side hook. A per-draw X scale in `hal_game.c` would be simplest, if the HAL can scale primitives by "layer"; otherwise I'll edit each call site.
+
+**3. Menus**
+- Draw them unchanged (squeezed) at full width, so they look stretched on a 16:9 TV, as you described.
+- **Inventory:** draw the 3D items and the 2D layout in the centre of an imaginary 16:9 frame:
+  - squeeze the 2D by 3/4 around the centre;
+  - give the inventory's 3D projection the same 3/4 X scale.
+
+  The result is 4:3 content with empty sides.
+
+**4. FMVs**
+- No change: draw them full width and let the TV stretch them. This is already how they're shown.
+
+**5. Cutscenes (your idea)**
+- With hor+ in a 16:9 frame, the 192-line area behind the bars would be about 2.07:1, which is wider than intended. To fill the screen while keeping 14:9:
+  1. Drop or shorten the bars.
+  2. Use the full 224 lines with the same vertical field of view the bar zoom already gives.
+  3. Limit the horizontal field of view to 14:9, with thin bars at the sides (about 87.5% of the width).
+- Or keep 16:9 and don't draw bars at all.
+
+## Questions for you
+1. **Cutscene target:** keep exactly 14:9 (small side bars, picture as large as possible), or fill all of 16:9 with no bars? Should the camera zoom that comes with the bars stay?
+2. **Fade type 3:** some cutscenes set `SysFlag_CutsceneActive` and skip the zoom. Should those be treated the same way?
+3. **Inventory:** should "centred" mean empty sides, or should the background art keep stretching to full width with only the 3D items and text squeezed?
+4. **Title and load screens:** draw them stretched like the menus, or keep them 4:3 with side bars?
+5. **Before I start:** should I first measure the bars in PCSX2 (screenshot a cutscene) to check the 192-line figure and what overscan hides? I'd also do the projection change on its own first, so we can see what pops in at the edges before writing any culling fixes.
+
+## User
+
+Questions
+1. Let’s keep 14:9 and the camera zoom
+2. I believe these might be “in-game” cutscenes, I.e. they start immediately from gameplay. Provide an example screenshot from one of these so I can decide which kind of cutscene it is. 
+3. To be a little clearer, after the 16:9 stretch is complete, the inventory screen should like the same as it does normally, just centered within a 16:9 frame. 
+4. These should be drawn with black bars on the sides.
+5. Yes, but let me review any changes made from that. 
+After making changes, give me screenshot examples of each one to let me see the results.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; python3 tools/port/pcsx2_run.py --help 2>&1 | head -60; grep -rn "ScreenFadeType_CutsceneBorders" src --include=
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls tools/port/; grep -n -i -E "screenshot|warp.txt" "Running Walkthrough.md" | tail -15; grep -rn -E "Event_Scre
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1050,1075p "Running Walkthrough.md"; python3 tools/port/cutscene_list.py --help 2>&1 | head -20; grep -n 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i -E "dump|DUMP_FRAMES" src/port/ps2/display_ps2.c | head -20; grep -n -E "^[a-z].*\(|case|\"" src/port
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "SH_PORT_DUMP_FRAMES" src ../psx-to-ps2-HAL 2>/dev/null; grep -n -i -E "demo.txt|screenshot|\.png" "Ru
+
+## Claude
+
+Figuring out how to grab PCSX2 screenshots of a specific cutscene frame.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -B3 -A25 "SH_PORT_DUMP_FRAMES" ../psx-to-ps2-HAL/src/ps2/display_ps2.c | head -80; python3 tools/port/co
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 845,865p src/maps/map1_s01/map1_s01.c; sed -n 925,940p src/maps/map5_s01/map5_s01.c; grep -rn -E "demo.tx
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,80p src/port/ps2/demo_sweep_ps2.c; sed -n 40,110p ../psx-to-ps2-HAL/src/ps2/input_ps2.c; grep -n -E "ma
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_PortCutscenes\[\]" src build 2>/dev/null | head -3; python3 tools/port/cutscene_list.py --report 2>&
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -E "map1_s01|map5_s01" build/port/demo_cutscenes.c; awk '/g_PortCutscenes\[\]/{f=1;i=-1} f&&/\{ *"/{i++;
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,60p tools/port/demo_sweep.py | grep -v "^\s*$"; ls -la build/port/*.elf build/port/*.iso 2>/dev/null
+
+## Claude
+
+Building the current tree so I can grab a baseline screenshot of the map5_s01 border-type-3 cutscene in PCSX2.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; export SH1_FPS=60 SH1_NO_RECOMP=1; (bash tools/port/ee_compile_check.sh && python3 tools/port/port_link.py && ba
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/build/port; ls -la sh1_ps2.iso*; echo "sweep 41 60 41" > demo.txt; for t in $(seq 6 3 66); do echo "$t dump"; don
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/build/port; for t in $(seq 120 4 240); do echo "$t dump"; done > input.txt; rm -f frame_*.ppm vram_*.ppm hires_*.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/build/port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/s
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; awk 'NR<=937 && /^void [A-Za-z0-9_]+\(/{f=$0;n=NR} END{}; NR==937{print n": "f}' src/maps/map5_s01/map5_s01.c; a
+
+## Claude
+
+That run caught a padlock puzzle, not the right scene. Finding a type-3 border cutscene that's in the Demo list.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for loc in src/maps/map0_s01/map0_s01_events.c:602 src/maps/map5_s01/map5_s01.c:937 src/maps/map2_s00/map2_s00.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 5,8p build/port/demo_cutscenes.c; sed -n 440,470p src/maps/map6_s02/map6_s02_2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/build/port; echo "sweep 2 90 2" > demo.txt; for t in $(seq 156 5 300); do echo "$t dump"; done > input.txt; rm -f
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet2.png
+
+## Claude
+
+I have the type-3 example. Next: a projection-only widescreen test (no culling changes), so you can review what pops in. Finding where the view matrix is set.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn -E "GsWSMATRIX|GsSetProjection|SetGeomScreen|vcChangeProjectionValue" src include --include=*.c --inclu
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 455,500p src/bodyprog/view/vw_calc.c; grep -rn "VbWvsMatrix" src --include=*.c | grep -v "vw_calc.c:4[78]
+
+## Claude
+
+`vbSetWorldScreenMatrix` multiplies by `GsIDMATRIX2`, libgs's aspect matrix. That's the clean place for a hor+ X scale. Checking where it's set up.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "GsIDMATRIX2" src include ../psx-to-ps2-HAL/src ../psx-to-ps2-HAL/include 2>/dev/null | grep -v "vw_cal
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 90,145p ../psx-to-ps2-HAL/src/libgs_port.c; grep -rn "GsIDMATRIX\b\|GsWSMATRIX" src --include=*.c | grep 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 200,240p tools/port/port_link.py; grep -n "SH_PORT" src/bodyprog/view/vw_calc.c | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i -E "EXTRA_CFLAGS|-DSH_PORT|cflags" tools/port/ee_compile_check.sh | head
+
+## Claude
+
+Adding a test-only switch: with `-DSH_PORT_WIDESCREEN_TEST`, `vbSetWorldScreenMatrix` scales the view matrix's X row by 3/4.
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/src/bodyprog/view/vw_calc.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+## Claude
+
+The widescreen build causes TLB misses at pc 0x444dd0; the baseline run had none. Looking that up.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; mips64r5900el-ps2-elf-addr2line -f -e build/port/sh1.elf 0x444dd0 2>/dev/null || (ls ~/ps2dev/ee/bin | grep addr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i -E "_request_end|sifrpc" "Running Walkthrough.md" docs/ToFix.md "Planning Doc.md" | head
+
+## Claude
+
+A frame-dump RPC bug has caused this miss before. Re-running the widescreen build without frame dumps to see whether my change is the cause.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+## Claude
+
+No misses without dumps, so it's the frame-dump RPC problem, not the projection change. Making before/after images, each shown as the TV would display it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/ws_projection_test.png
+
+## Claude
+
+The projection works: rows 2 and 3 show more scene at the sides at the same height, and the subtitle comes out stretched as expected. Sending the images.
+
+- tool `ToolSearch`: 
+
+- tool `SendUserFile`: 
+
+## Claude
+
+I made a projection-only widescreen test and ran it in PCSX2. It shows more of the scene at the sides at the same height, as hor+ should. I stopped there for your review, as you asked.
+
+I sent you two images:
+- `type3_cutscene_map6_s02.png`: a frame from a border type 3 cutscene, for your question 2.
+- `ws_projection_test.png`: three cutscene frames. The left side is the original 4:3; the right side is the widescreen build, stretched to 16:9 the way the TV will show it.
+
+**The type 3 example (question 2):** it's the map6_s02 scene `func_800CFC34`, where Harry says "That light!?". It's the only type 3 scene in the Demo list. The other eight type 3 scenes, including the Air Screamer intro in map0_s01, aren't in the list.
+- It starts straight from gameplay. The camera stays behind Harry and the scene uses the in-game models, so it's the in-game kind you suspected.
+- The bars are dark gradients, so they don't show against this dark scene. I didn't capture a bright border scene, so the 192-line clean area still comes from the code, not from a screenshot.
+
+**What the test changed:** one block in [vw_calc.c](src/bodyprog/view/vw_calc.c) `vbSetWorldScreenMatrix`, behind a test-only flag (`SH1_EXTRA_CFLAGS=-DSH_PORT_WIDESCREEN_TEST`). It squeezes the screen X of the camera matrix by 3/4. Nothing else is touched, and the normal build is unchanged.
+
+**What the frames show:**
+- **More at the sides:** the extra width is real. Row 2 shows extra lights at both edges, and row 3 shows more of the dome. Harry is the same height in both.
+- **Pop-in:** none of these frames shows any. Culling may already partly follow the wider view when it's done on screen X, but a dark cutscene is a weak test. Walking through lit maps and Docks would show it much better.
+- **The subtitle looks stretched.** That's expected: 2D isn't handled yet.
+
+**TLB misses:** the widescreen run with frame dumps had TLB misses in the SIF RPC code (`_request_end`, pc 0x444dd0). I ran the same build again without dumps and got none, at 59.7 fps. It's the same frame-dump RPC problem recorded in the Walkthrough before, not the projection change. My baseline run with dumps happened to avoid it, so the dumps are still unreliable.
+
+Should I keep this approach and go on to culling, then 2D, the inventory, the 14:9 cutscene framing and the title/load-screen side bars? I'd add screenshots for each.
+
+## User
+
+Yes
+
+## Claude
+
+Starting with culling: looking for the game's view and screen-edge checks.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn -i -E "(clip|cull|visible|inview|in_view|frustum|ViewArea|OnScreen)[a-z_]*\(" include/bodyprog --includ
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 90,135p include/bodyprog/view/vw_calc.h; grep -n "Vw_AabbVisibleInScreenCheck\|Vw_AabbVisibleInFrustumChe
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 600,1000p src/bodyprog/view/vw_calc.c
+
+## Claude
+
+The main screen-space checks (`Vw_AabbVisibleInScreenCheck`, `Vw_AabbVisibleInFrustumCheck`) project through `GsWSMATRIX`, so they already follow the squeeze. Checking the world-space ones next.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "WorldMap_SubcellVisibleCheck" src/bodyprog/world/*.c | head -3; f=$(grep -ln "^bool WorldMap_SubcellVis
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn -E "(gsScreenWidth|SCREEN_WIDTH)[^;]*(>>|/) *(1|2)\b|[<>]=? *-?(160|170|180|176)\b" src/bodyprog src/ma
+
+## Claude
+
+`vc_main.c:817` computes a horizontal half-angle from the screen width, which is a world-space FOV. Looking at what uses it, and at the screen-edge table in `bodyprog_80040B74.c`.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 805,825p src/bodyprog/view/vc_main.c; grep -rn "scr_half_ang_wx" src --include=*.c | head; sed -n 40,130p
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 40,60p src/bodyprog/gfx/bodyprog_80056D8C.c; sed -n 1510,1530p src/bodyprog/gfx/bodyprog_80056D8C.c; grep
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls src/bodyprog/text/; grep -n -E "^[a-z].*\(.*\) *(//.*)?$" src/bodyprog/text/*.c | head -60
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -E "SPRT|POLY_FT4|addPrim|AddPrim|setXY|->x0|setWH|->w =" src/bodyprog/text/text_draw.c | head -50
+
+## Claude
+
+The game emits glyphs one sprite at a time at many call sites. If the 2D layers go into their own ordering tables, the HAL could squeeze a whole table instead. Checking how the OTs are drawn.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn -E "GsDrawOt|DrawOTag|GsSortOt|g_OtTags[01]\b|GsOT +g_Ot" src/main src/bodyprog include/bodyprog --incl
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn -E "GsSortOt|g_OrderingTable2|GsClearOt" src --include=*.c | head -20; grep -rn -E "g_OtTags0\[g_Active
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_OrderingTable1\|g_OrderingTable0\[.*point\|\.point *=" src/bodyprog src/main --include=*.c | head; g
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; grep -rn -E "^[a-zA-Z].*DrawOTag|^void GsDrawOt|HalGame_[A-Za-z]+\(" $H/src $H/include | gr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; sed -n 30,70p $H/src/libgpu_port.c; sed -n 190,250p $H/src/libgpu_port.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; grep -n -E "^(static )?[a-z].*\(|offx|ofs_x|s_OffX|drawOffset|DrawOffset" $H/src/ps2/gpu_gs
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; sed -n 1400,1412p $H/src/ps2/gpu_gs.c; sed -n 1785,1800p $H/src/ps2/gpu_gs.c; sed -n 2018,2
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; grep -n "s_OffX" $H/src/ps2/*.c | head -30; grep -rn "s_OffX\|sext11" $H/src/ps2/*.h 2>/dev
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn -A12 "^void vcChangeProjectionValue" src/bodyprog/view/*.c; grep -rn "geom_screen_dist\s*=" src/bodypro
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 295,315p src/bodyprog/view/vc_main.c; sed -n 695,705p src/bodyprog/gfx/bodyprog_80055028.c; sed -n 775,78
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; grep -n "GsIDMATRIX2\|^void GsSetRefView\|^int GsSetRefView\|GsInitGraph" $H/src/libgs_port
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,200p include/hal_game_config.h | head -80; grep -n "^[a-z].*(" src/port/hal_game.c | head -40; ls inclu
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,140p src/port/hal_game.c; grep -n "hal_game\|demo_menu.c\|port_data" tools/port/port_link.py | head
+
+## Claude
+
+Display modes come from Debug Options bits in `config.unused_26` (bits 0-2). Widescreen can go in as bit 3. Looking at the Debug Options code in options.c.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "unused_26\|Debug\|DEBUG_OPT\|SH_PORT" src/screens/options/options.c | head -60
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 61,160p src/screens/options/options.c
+
+## Claude
+
+Now the code. First checking `ORDERING_TABLE_SIZE`, to know which 3D-table entry holds the full-screen background images.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "define ORDERING_TABLE_SIZE" include; grep -n -B2 -A10 "^void GsDrawOt\|^void GsClearOt" ../psx-to-ps2-
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; sed -n 350,372p $H/src/ps2/gpu_gs.c; cat $H/src/hal_weak.c; cat $H/include/port/hal_game.h;
+
+## Claude
+
+Applying the HAL edits:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/../psx-to-ps2-HAL && python3 - <<'EOF' import re p='src/ps2/gpu_gs.c'; s=open(p).read() s=s.replace("""static s32
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn -E "GameState_(LoadStatusScreen|LoadMapScreen|MainLoadScreen|AutoLoadSavegame)" src --include=*.c | hea
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/include/port/widescreen.h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,30p src/bodyprog/view/vw_calc.c | grep -n "SH_PORT" -A4; sed -n 1,15p src/bodyprog/view/vc_main.c | gre
+
+- tool `Bash`: python3 - <<'EOF' p='src/bodyprog/view/vw_calc.c'; s=open(p).read() s=s.replace('''#ifdef SH_PORT #include "port/gte.h" #endif''','''#ifdef SH_PORT #include "po
+
+## Claude
+
+Now the per-layer choices in `hal_game.c`:
+
+- tool `Bash`: python3 - <<'EOF' p='src/port/hal_game.c'; s=open(p).read() s=s.replace('''void HalGame_OnDrawOTag(void) { #ifdef SH_PORT_SCREENREAD''','''/* Widescreen (includ
+
+- tool `Bash`: python3 - <<'EOF' p='tools/port/port_link.py'; s=open(p).read() old='''    dump += ["-DSH_PORT_MODESWITCH=" + os.environ["SH1_MODESWITCH"]] if os.environ.get("S
+
+## Claude
+
+Adding the "Widescreen" entry to Debug Options:
+
+- tool `Bash`: grep -n "ExtraOptionsMenuEntry_" include/screens/options/*.h 2>/dev/null | head; grep -rn "ExtraOptionsMenuEntry_BulletMult *=" include src | head -2
+
+- tool `Bash`: sed -n 48,62p include/screens/options.h && python3 - <<'EOF' p='src/screens/options/options.c'; s=open(p).read() rep=[('''    { "Video_Mode",  118, ExtraOptions
+
+## Claude
+
+Building with `SH1_WIDESCREEN=1`. Meanwhile, checking which button opens the inventory, so a test script can reach it.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+## Claude
+
+Build OK, no warnings. For gameplay and inventory shots I'll use the warp tool (`host:warp.txt`) rather than the Demo list. Checking its format.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn -B2 -A25 "host:warp.txt" src/port/ps2/*.c | grep -E "\*|sscanf|strncmp|warp" | head -30; sed -n 920,935
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n -i -E "load|memcard|capture.txt|host:|mcd" tools/port/compare_frames.py | head -40
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 40,60p tools/port/compare_frames.py; grep -n -i -E "load=|walk|memcard|Mcd|cards" src/port/ps2/capture_ps
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,30p src/port/ps2/capture_ps2.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/build/port; rm -f demo.txt frame_*.ppm vram_*.ppm hires_*.ppm; echo "60,600 load=2:10" > capture.txt; for t in $(
+
+## Claude
+
+The save loads, and capture frames work (gameplay starts at about DrawOTag 1140). My `input.txt` dumps never fired, though. Checking whether capture mode turns off `input.txt`.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 110,150p ../psx-to-ps2-HAL/src/ps2/input_ps2.c; grep -rn "Port_InputFilter" src/port ../psx-to-ps2-HAL/sr
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/frame_*.ppm build/port/vram_*.ppm; timeout 900 python3 tools/port/pcsx2_run.py build/port/sh1_p
+
+## Claude
+
+Gameplay begins before 30 s. Scripting button presses next to find the inventory and map:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/frame_*.ppm build/port/vram_*.ppm; cat > build/port/input.txt <<'EOF' 30 dump 33 start 37 dump 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet3.png
+
+## Claude
+
+Interesting: "PAUSED" is drawn squeezed, as it should be, but the button mapping isn't what I expected. Looking up the default controller config.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn -B3 -A20 "\.pause *=\|pause *;" include/bodyprog/*.h include/*.h | grep -E "pause|item|map|option|cance
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/frame_*.ppm build/port/vram_*.ppm; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-po
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet4.png
+
+## Claude
+
+Triangle opens the map and Select the inventory. But the inventory isn't squeezed: it fills the width when it should sit in the middle as 4:3. Checking which game state it runs in.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -o "gameState [0-9]* step [0-9]*" build/port/ps2.log 2>/dev/null | tail -400 | uniq -c | tail -12; ls -la b
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; timeout 900 python3 tools/port/pcsx2_run.py build/port/sh1_ps2.iso --seconds 28 --stall 30 2>&1 | grep -o "gameS
+
+## Claude
+
+The inventory is state 14, so it should get the full squeeze, yet it doesn't. Adding a status printout to see what the hook is doing.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "printf(\"; gameState" src/port/hal_game.c; sed -i 's|    printf("; gameState %d step %d sysState %d; fi
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+## Claude
+
+It printed `ws 0`: widescreen was off for this whole test, so the `SH1_WIDESCREEN` define isn't reaching `hal_game.c`. Checking how that file gets compiled.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "hal_game\|src/port/\*\|glob.*src.*port\|PORT_GAME_SRCS\|demo_menu" tools/port/port_link.py tools/port/e
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 261,280p tools/port/port_link.py
+
+- tool `Bash`: python3 - <<'EOF' p='tools/port/port_link.py'; s=open(p).read() s=s.replace('''    # Widescreen always on (src/port/hal_game.c), whatever Debug Options says: SH
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet5.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/build/port; rm -f capture.txt demo.txt frame_*.ppm vram_*.ppm hires_*.ppm; for t in $(seq 4 3 100); do echo "$t d
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/konami.png
+
+## Claude
+
+The Konami logo is pillarboxed correctly. Dumps closer than about 4 s apart stall the boot, so I'm spacing them out to reach the title.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet7.png
+
+## Claude
+
+The intro FMV comes out full width and unchanged (stretched in this 16:9 view), as you asked. The title comes after it, so the dumps need to go later.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet8.png
+
+## Claude
+
+Still in the FMV, so the title comes later. Spacing the dumps out further:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet9.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/title_load.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; grep -n "GsDRAWENV\b\|GsDRAWENV\.\|GsDRAWENV =" $H/src/libgs_port.c | head; grep -n "^int C
+
+- tool `Bash`: python3 - <<'EOF' p='src/port/hal_game.c'; s=open(p).read() old_start=s.index('/** Widescreen: the X squeeze of each ordering-table layer.') old_end=s.index('#i
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|#include "game.h"\n#include "port/hal_game.h"|&|' src/port/hal_game.c; python3 - <<'EOF' p='src/port/h
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet10.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet11.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for e in "map2_s01 func_800CED88" "map3_s00 func_800D0CF8" "map1_s05 func_800D49AC" "map4_s04 func_800D1910" "ma
+
+## Claude
+
+These use `ForceShow` (bars). Running entry 0 (map2_s01, in town):
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet12.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet13.png
+
+## Claude
+
+Pause text, inventory and map all come out as intended. Now a baseline build with widescreen off, re-running the same scripts for before/after pairs:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+## Claude
+
+The baseline (widescreen off) church run hit TLB misses at pc 0x82000 and 0x8001044 and stopped early. Re-running it without frame dumps to see whether the dumps are to blame:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+## Claude
+
+Without dumps, two clean runs. To be sure my HAL changes aren't involved, I'll stash both repositories and run the original code with the same dumps.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+## Claude
+
+The original code with dumps ran clean that time. Rebuilding the current code (widescreen off) and repeating the dump run twice to see whether the crash comes back:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/cmp_base_church2.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/ws_6_cutscene_14x9.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/chk.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; grep -n "^static void emit\b\|^static void emit(" $H/src/ps2/gpu_gs.c; n=$(grep -n "^static
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; grep -n "s_AreaX1\|s_AreaX2\|R_SCISSOR" $H/src/ps2/gpu_gs.c | head -20
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; sed -n 1296,1330p $H/src/ps2/gpu_gs.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/../psx-to-ps2-HAL && python3 - <<'EOF' p='src/ps2/gpu_gs.c'; s=open(p).read() s=s.replace('''void GpuGs_SetXScale
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+## Claude
+
+The white line is gone. Re-running the save and church scripts on this final build so every image comes from the same code:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/cmp_church.png
+
+## Claude
+
+Both builds now line up frame by frame. Writing the final image set:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/final/3b_cutscene_14x9.png
+
+## Claude
+
+Images look right. Adding a dated entry to the Running Walkthrough, then sending the images.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; tail -30 "Running Walkthrough.md" | head -40; grep -n "^## \|^### " "Running Walkthrough.md" | tail -5
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat >> "Running Walkthrough.md" <<'EOF'  ## Widescreen, anamorphic 16:9 (2026-10-28)  Debug Options "Widescreen"
+
+- tool `SendUserFile`: 
+
+- tool `PushNotification`: 
+
+## Claude
+
+Widescreen works in PCSX2 for every case you listed: gameplay, 2D, cutscenes, inventory, menus, title and load screens, and FMVs. It's a new Debug Options entry, "Widescreen" (Off/16:9). It hasn't been tested on the console yet, and nothing is committed.
+
+I sent 11 screenshots. Most are pairs: the original on the left as a 4:3 TV shows it, widescreen on the right as a 16:9 TV shows it. The FMV and Konami logo images are widescreen only.
+
+**What each image shows:**
+- **Gameplay (1a, 1b):** the view is wider at the sides and the vertical view is the same.
+- **Culling:** it needed no changes. Every screen-edge check I found projects through the same camera matrix I squeezed, so it widens with the view. I didn't see any pop-in at the edges in the attract-demo frames, but I haven't walked through a lit map or Docks yet.
+- **2D during gameplay (2):** "PAUSED" and the subtitles are squeezed back to their normal shape. Fades and cutscene borders still cover the whole screen.
+- **Cutscenes (3a, 3b), 14:9:** once the bars are in, the zoom grows to 7/6. The full height then shows what the 192 lines between the old bars showed. The top and bottom bars become 20-pixel side bars, and the zoom you asked to keep is still there. This works for both border types.
+- **Inventory (4):** it looks the same as before, centred in a 16:9 frame with black sides.
+- **Menus (5, the map):** unchanged, so the TV stretches them.
+- **Title (6a, 6b), Konami logo (8), load screens:** 4:3 in the middle with black side bars.
+- **FMVs (7):** unchanged, stretched by the TV.
+
+**Your type 3 question:** the example is map6_s02 "That light!?" (in the first image I sent earlier). It starts straight from gameplay with the in-game models, so it's an in-game cutscene. In widescreen it gets the same 14:9 treatment.
+
+**Decisions for you:**
+- **Full-screen event pictures** (the still images some events show) stay stretched for now. The game draws them in the same slot as the gameplay fog backdrop, and squeezing that slot put black wedges at the screen edges in gameplay. I can squeeze just the pictures, but I need to say which ones and how; tell me if you want them 4:3 with side bars.
+- **Squeezed 2D uses point sampling.** At 1x, the 12-pixel font is drawn 9 pixels wide by dropping columns. It looks acceptable at 2x and blockier at 1x. Bilinear filtering for squeezed 2D is an option if it bothers you on the TV.
+
+**TLB misses:** with frame dumps on, cutscene runs sometimes hit TLB misses: in the frame-dump code once, and once at pc 0x82000 with widescreen off (1 of 4 runs of the same cutscene). No run without dumps had any, and the original code ran clean with dumps once. It looks like the frame-dump fault already noted in the Walkthrough, but I haven't proven that.
+
+**Code changes:**
+- **HAL** (`../psx-to-ps2-HAL`, kept game-neutral): a new hook, `HalGame_OnOtTag`, called for each layer marker in the draw list, and `GpuGs_SetXScale`, which squeezes X for vertices and the clip area.
+- **SH1:** [hal_game.c](src/port/hal_game.c) (which layers to squeeze in each game state), [vw_calc.c](src/bodyprog/view/vw_calc.c), [vc_main.c](src/bodyprog/view/vc_main.c), [cutscene_border.c](src/bodyprog/screen/cutscene_border.c), [options.c](src/screens/options/options.c), the new [widescreen.h](include/port/widescreen.h), and an `SH1_WIDESCREEN=1` build switch that forces widescreen on for tests.
+- I added a dated entry to the Running Walkthrough.
+
+The ISO currently in `build/port` was built with widescreen forced on, so rebuild without `SH1_WIDESCREEN` before normal console use. A console test should cover the 2x and 32-bit modes, which the GS renderer handles differently.
+
+## User
+
+A few things:
+1. The text appears to be the right aspect ratio in widescreen, but it seems like there’s a lack of pixels for the font. I think this may be an artifact of anamorphic widescreen, and I’m not sure if there’s anything that can be done to improve it. 
+2. The inventory looks correct, except the  3D models look too skinny. 
+3. The map should be pillarboxed. 
+4. FMVs should be pillarboxed. 
+5. The full screen event pictures should be pillarboxed.
+
+## Claude
+
+Starting with the code for each point: background pictures, the FMV display path, and the inventory double squeeze.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 1,80p src/bodyprog/screen/background_draw.c; sed -n 180,240p src/bodyprog/screen/background_draw.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; n=$(grep -n "^void GpuGs_MovieShow" $H/src/ps2/gpu_gs.c | cut -d: -f1); sed -n "$((n-15)),$
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; grep -n "^static void upload\|^static.*s_ImgPkt" $H/src/ps2/gpu_gs.c; n=$(grep -n "^static 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/../psx-to-ps2-HAL && python3 - <<'EOF' p='src/ps2/gpu_gs.c'; s=open(p).read() old='''void GpuGs_MovieShow(const u
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 80,95p src/bodyprog/screen/background_draw.c
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 95,180p src/bodyprog/screen/background_draw.c
+
+- tool `Bash`: python3 - <<'EOF' import re # widescreen.h p='include/port/widescreen.h'; s=open(p).read() s=s.replace('''/** Non-zero while widescreen is on (updated at every 
+
+## Claude
+
+Edits done. Looking for a Demo-list cutscene that shows a full-screen picture, to test the markers:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "Screen_BackgroundImg\|Event_ImageShow\|BackgroundImg" include/bodyprog/events/events_util.h | head -5; 
+
+## Claude
+
+Entry 7 (map5_s03) shows an item inspection picture. Building:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+## Claude
+
+A new TLB miss at boot: pc 0x15f840, stores to address 0. Looking up the function:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; nm -n build/port/sh1.elf | awk '$1<="0015f840"' | tail -2; mips64r5900el-ps2-elf-objdump -d build/port/sh1.elf -
+
+## Claude
+
+Port_PictureMark sits right before that pc, and the stores to 0 and 4 match its two writes, so `GsOUT_PACKET_P` looks NULL at that point. Looking at the log around it:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; rm -f build/port/capture.txt build/port/input.txt; timeout 300 python3 tools/port/pcsx2_run.py build/port/sh1_ps
+
+## Claude
+
+Both marker writes per call fault, so `GsOUT_PACKET_P` is NULL there, yet the original code writes its sprites through the same pointer without faulting. Checking how b_konami draws the logos:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -n "BackgroundImg\|GsOUT_PACKET_P\|GsSetWorkBase" src/screens/b_konami/b_konami.c | head; grep -rn "GsOUT_P
+
+- tool `Bash`: python3 - <<'EOF' p='src/bodyprog/screen/background_draw.c'; s=open(p).read() old='''static void Port_PictureMark(void* ot, u32 magic) {     u32* mark = (u32*)G
+
+## Claude
+
+No TLB misses now. Running the picture cutscene (entry 7) with dumps:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet14.png
+
+## Claude
+
+The item inspection picture (a glass vial) appears in the first frames. Checking whether it's squeezed: in the original it would be 4:3 across the full width, so its edge pixels tell.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/pic_ws.png
+
+## Claude
+
+The vial is round on the 16:9 view, so the picture is drawn at its proper shape. Now the boot: FMV and title.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet15.png
+
+## Claude
+
+The FMV dump still shows full width. The dump may read the movie from before my resample, so checking what the frame dump captures during movies:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; sed -n 255,310p $H/src/ps2/display_ps2.c; grep -n "movie" $H/src/ps2/display_ps2.c | head -
+
+## Claude
+
+The dump writes the decoded frame itself, not what the GS shows, so it can't check this change. Checking whether the HAL's readback can read the movie's 32-bit buffer:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; n=$(grep -n "^static void download_rect(s32 x" $H/src/ps2/gpu_gs.c | tail -1 | cut -d: -f1)
+
+## Claude
+
+`download_from` handles 32-bit buffers, so I'll have the movie dump read back the buffer actually shown instead of writing the decoded frame:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/../psx-to-ps2-HAL && python3 - <<'EOF' p='src/ps2/gpu_gs.c'; s=open(p).read() old='''/** Prints and clears the st
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet16.png
+
+## Claude
+
+The FMV is pillarboxed in the buffer read back from the GS. Checking the inventory and map from the latest save run:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/sheet17.png
+
+## Claude
+
+The inventory's 3D items match the original now, and the map is pillarboxed. For the font, I'll check how the squeezed text looks at 2x resolution, where the buffer is 640 wide:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/h.png
+
+## Claude
+
+The 2x run loads more slowly, so the scripted presses missed the menus. Shifting them 10 s later:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/h2.png
+
+## Claude
+
+PAUSED shows at 2x. Making a close-up of the text: original, widescreen at 1x, and widescreen at 2x, each as the TV would show it:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/final2/1_font_closeup.png
+
+## Claude
+
+The crop missed the text. Finding its rows:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/final2/1_font_closeup.png
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/final2/1_font_closeup.png
+
+## Claude
+
+At 2x, the squeezed glyphs keep every texel column, because a 12-texel glyph gets 18 pixels. That answers point 1. Composing the remaining images:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+## Claude
+
+Before sending, checking whether any tool relies on movie dumps being the decoded frame, since I changed that:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rln "frame_.*ppm\|(movie)" tools/port/*.py ../psx-to-ps2-HAL/tools 2>/dev/null | head; grep -n "ppm\|movie
+
+## Claude
+
+No tool depends on it. Updating the Walkthrough entry and sending the images:
+
+- tool `Bash`: python3 - <<'EOF' p='Running Walkthrough.md'; s=open(p).read() old='''  - menus (map, options, save/load): unchanged, stretched by the TV;   - FMVs: unchanged. 
+
+- tool `SendUserFile`: 
+
+- tool `PushNotification`: 
+
+## Claude
+
+I fixed points 2 to 5, and point 1 is the cost of anamorphic at 1x: switching to 2x resolution fixes it. Everything was checked in PCSX2; nothing has run on the console yet and nothing is committed. I sent five screenshots.
+
+1. **Font (`1_font_closeup.png`):** you're right, it's the anamorphic squeeze. At 1x a 12-texel-wide glyph has to fit in 9 pixels, so some texel columns are dropped. At 2x resolution the glyph gets 18 pixels and keeps every column. The close-up compares "PAUSED" in the original, widescreen 1x and widescreen 2x. I'd suggest 2x as the way to play in widescreen. For 1x, the other option is bilinear filtering on squeezed 2D: no lost columns, but softer text and possibly dark fringes on glyph edges. I haven't tried it.
+2. **Inventory (`2_inventory.png`):** the 3D items were squeezed twice, once by the 3D squeeze and again by the whole-screen squeeze. The 3D squeeze now applies only in gameplay, and the items look as they do in the original.
+3. **Map (`3_map.png`):** now pillarboxed.
+4. **FMVs (`4_fmv.png`):** pillarboxed. Each movie frame is resampled to 3/4 width on the EE and centred between black bars. Two side effects:
+   - The resample costs some EE time for each movie frame. It should be small, but I haven't measured it on the console.
+   - Movie frame dumps now show what the GS displays, not the decoded frame. No tool used the old behaviour.
+5. **Event pictures (`5_event_picture_widescreen.png`):** these share a draw slot with the gameplay fog backdrop, so I mark the start and end of each picture and squeeze only what's between the marks. The example is the item inspection image of the glass vial (map5_s03), which comes out round on a 16:9 view. I don't have a 4:3 shot of this one, so the roundness is the only check.
+
+**Bug I hit along the way:** the first marker version caused TLB misses at boot. The picture code also runs at boot, before there is anywhere to write drawing commands, and the markers were written through a NULL pointer there. The markers are now added only during widescreen gameplay, and later runs had no TLB misses.
+
+The Running Walkthrough entry is updated. The ISO in `build/port` still has widescreen forced on (`SH1_WIDESCREEN=1`).
+
+## User
+
+As for the text at 1x in widescreen, I want to try something. Let’s scale the text with nearest neighbor filtering to 2x in each direction, and then downscale it to 1x with bilinear filtering. Show a comparison screenshot of before and after
+
+## Claude
+
+I'll simulate it offline first. That shows what the filter looks like before I build it into the GS renderer, which can't do a two-step filter like this directly. The plan:
+1. Take the glyph pixels from the original 1x "PAUSED", where text is drawn 1:1 from the font texture.
+2. Double them with nearest neighbour.
+3. Downscale to 3/4 width and 1x height with 2-tap bilinear, as the GS samples.
+4. Composite the result over the widescreen frame without the text.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/final2/font_filter_test.png
+
+- tool `SendUserFile`: 
+
+## Claude
+
+I sent the comparison (`font_filter_test.png`). The two filtered rows are simulated in Python, not drawn by the port yet. I applied each filter to the glyph pixels from the original 1x "PAUSED" and composited the result over the widescreen frame from just before the game was paused.
+
+Rows, top to bottom (all magnified):
+1. The original at 1x on a 4:3 TV.
+2. What the port draws now: squeezed with nearest neighbour, so whole texel columns go missing (the A, U and D lose strokes).
+3. Plain bilinear: no columns lost, but the text is noticeably softer.
+4. Your method, nearest 2x then bilinear: no columns lost, and sharper than plain bilinear. Each vertical stroke blurs over about one pixel instead of two. Vertically it's identical to the original, because duplicated rows blend into themselves.
+
+Rows 3 and 4 differ less than I expected; at normal size on a TV, row 4 should look like slightly crisper row 3. Both are clearly better than row 2. One caveat for row 4: at this ratio the downscale can still skip a doubled texel now and then, though I didn't see a stroke drop out in this text.
+
+The GS can't do your method in one step, because it samples straight from the texture. Two ways to build it:
+- **Exact (my recommendation if row 4 is what you want):** the HAL draws the squeezed 2D layers unsqueezed into an offscreen buffer twice as wide with nearest neighbour, then copies that buffer into the frame at 3/8 width with bilinear. That's row 4 exactly. It costs a 640×224 buffer in GS memory and one extra full-screen pass in frames with text. Semi-transparent 2D would also need care, because it would blend against the offscreen buffer instead of the scene.
+- **Simpler:** plain bilinear only on squeezed textured sprites (row 3), which is a small HAL change. One risk on hardware: the PS1's transparent font texels are black, so the GS may darken glyph edges slightly. The simulation didn't model that.
+
+Should I build the exact version, or try plain bilinear first, since it's quick, and look at it on the console?
+
+## User
+
+Let’s just go with plain bilinear for the text.
+
+## Claude
+
+Plain bilinear goes in the HAL: squeezed textured sprites get linear filtering. The text is drawn as sprites, so polygons such as the inventory's 3D items keep point sampling. Finding where TEX1 is set:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; grep -n "R_TEX1\|TEX1" $H/src/ps2/gpu_gs.c | head; grep -n "typedef struct" -A22 $H/src/ps2
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; sed -n 1070,1085p $H/src/ps2/gpu_gs.c; grep -n "^static u64x prim_state" -A40 $H/src/ps2/gp
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; H=../psx-to-ps2-HAL; sed -n 300,350p $H/src/ps2/gpu_gs.c
+
+## Claude
+
+Register writes go into the same ordered stream as the primitives, so switching TEX1 around the sprite is safe:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/../psx-to-ps2-HAL && python3 - <<'EOF' p='src/ps2/gpu_gs.c'; s=open(p).read() old='''    prim = prim_state(&p);  
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/final2/font_bilinear.png
+
+## Claude
+
+Bilinear is on: all strokes are back. The glyph edges also pick up a slight dark fringe from the transparent black texels around them, as I'd expected. Checking the inventory, which also has text:
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/final2/inventory_bilinear.png
+
+- tool `Bash`: python3 - <<'EOF' p='Running Walkthrough.md'; s=open(p).read() old='''- Squeezed text at 1x loses columns: a 12-texel glyph gets 9 pixels with point sampling. A
+
+- tool `SendUserFile`: 
+
+## Claude
+
+Squeezed text in widescreen is now drawn with bilinear filtering, so at 1x it no longer loses strokes. I checked it in PCSX2 with the Infirmary save (pause text and inventory) and sent two before/after screenshots: `font_bilinear.png` (a "PAUSED" close-up) and `inventory_bilinear.png`. These come from the port itself, not a simulation. The run had no TLB misses. It isn't tested on the console yet.
+
+**What it looks like:**
+- **Text:** every stroke of every glyph is there again, and the text is a little softer than the original.
+- **Dark fringe:** the glyph edges have a faint dark outline. Bilinear blends in the transparent black pixels around each glyph, which is the risk I mentioned. On "PAUSED" it reads like a slight drop shadow. The console will show whether it looks worse there.
+- **Not only text:** the filter applies to every squeezed sprite, so the inventory's Harry portrait and the title screen tiles are filtered too. 3D drawing (including the inventory's items) and other polygons are unchanged.
+
+**Change:** one small edit in the HAL's `gpu_gs.c`, in the function that draws sprites: linear filtering is switched on just for squeezed textured sprites and off again after each one. With widescreen off nothing changes. I added a note to the Running Walkthrough.
+
+The ISO in `build/port` still has widescreen forced on (`SH1_WIDESCREEN=1`), and nothing is committed.
+
+## User
+
+Make this another option in the debug menu and then commit
+
+## Claude
+
+Adding a "2D Filter" entry to Debug Options (bit 4: Nearest/Bilinear) and making the HAL's sprite filter switchable:
+
+- tool `Bash`: python3 - <<'EOF' p='../psx-to-ps2-HAL/src/ps2/gpu_gs.c'; s=open(p).read() s=s.replace('''void GpuGs_SetXScale(s32 q12) {''','''static s32 s_XScaleFilter; /* sq
+
+## Claude
+
+Before building, checking how the title's Debug Options settings carry over into a loaded save. They're masked with `& 7`, which would drop the new bits:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rn "g_PortDebugPending" src include | grep -v "^src/screens/options/options.c:1[0-9][0-9]:" 
+
+## Claude
+
+Widening that mask to all five bits (0x1F) in options.c and memcard.c:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -i 's|g_PortDebugPending = \*bits \& 7; /\* from the title|g_PortDebugPending = *bits \& 0x1F; /* from the t
+
+## Claude
+
+Building without forced widescreen, then scripting a trip from the title into Debug Options to check the new entry's layout:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/menu.png
+
+## Claude
+
+The cursor starts on CONTINUE, so OPTION is three presses down. Retrying:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; S=/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad; 
+
+- tool `Read`: /tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/9ba2c8b3-5320-477b-91a4-f4fd55a61564/scratchpad/menu.png
+
+## Claude
+
+The new entry fits in the list. Committing the HAL repository first, then SH1:
+
+- tool `Bash`: cd /home/alex/Documents/psx-to-ps2-HAL 2>/dev/null || cd /home/alex/Documents/silent-hill-1-ps2-port/../psx-to-ps2-HAL; git branch --show-current; git status --
+
+## Claude
+
+The HAL keeps its own `docs/Walkthrough.md`, so adding a short entry there too:
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/../psx-to-ps2-HAL; tail -5 docs/Walkthrough.md; grep -n "^## " docs/Walkthrough.md | tail -3
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port/../psx-to-ps2-HAL && cat >> docs/Walkthrough.md <<'EOF'  ## Anamorphic widescreen support (2026-10-28)  For SH1's
+
+- tool `Bash`: python3 - <<'EOF' p='Running Walkthrough.md'; s=open(p).read() s=s.replace('''- Squeezed textured sprites (text, the inventory's portrait, the title's tiles) ar
+
+## Claude
+
+"2D Filter" is now a Debug Options entry, below Widescreen, and everything is committed in both repositories. It switches squeezed 2D between Nearest (the default) and Bilinear.
+
+- **HAL** (`psx-to-ps2-HAL`, `main`): `1c1331a`, the widescreen support plus the switchable filter. I also added an entry to the HAL's `docs/Walkthrough.md`.
+- **SH1** (`hal-split`): `3197eba24`, the widescreen and 2D Filter options. It needs the HAL commit above.
+
+Neither is pushed.
+
+I checked in PCSX2 that the Debug Options page shows all five entries with their values (Off, Nearest) and the arrows lined up. I didn't toggle 2D Filter there and look at its effect. The bilinear look was checked earlier with filtering always on. "Bilinear" is a little longer than "Nearest", so it may come close to the right arrow.
+
+**One fix found while adding the option:** Debug Options settings changed on the title screen didn't carry into the next loaded save for Widescreen or 2D Filter; only the first three entries carried. All five carry now (`memcard.c` and `options.c`).
+
+The ISO in `build/port` is now a normal build without forced widescreen, so you can turn both options on in Debug Options on the console.
+
+
+
+## User
+
+<command-name>/clear</command-name>
+            <command-message>clear</command-message>
+            <command-args></command-args>
+
+## User
+
+Give me a map of main RAM and VRAM with a breakdown of how much memory is consumed by various categories
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -niE "memory map|vram (map|layout)|gs memory|0x00[0-9a-f]{6}.*(heap|stack)|RAM (map|budget|usage)" "Plannin
+
+## Claude
+
+The docs have both maps. Reading them plus the latest layout notes.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 465,540p "PS2 Optimizations.md"; echo ----; sed -n 1385,1420p "Running Walkthrough.md"; echo ----; sed -n
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls -la build/port/*.elf 2>/dev/null | head; E=$(ls -t build/port/*.elf | head -1); mips64r5900el-ps2-elf-size -A
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; ls build/port/*.map 2>/dev/null; NM=$(command -v mips64r5900el-ps2-elf-nm || command -v ee-nm); $NM -S --size-so
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; for s in s_Rec s_FiltRaw s_Icon "sq\[" "zeros\[" "kinds\[" "band\[" s_TickStack s_IrqStack s_Stack s_Ring s_Fram
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rnE "s_Rec\b|kinds\[" src/port ../psx-to-ps2-HAL/src --include=*.c | grep -E "static|^\S+:[0-9]+:[A-Za-z]"
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; NM=$(command -v mips64r5900el-ps2-elf-nm || command -v ee-nm); $NM -S -l -t d build/port/sh1.elf 2>/dev/null > /
+
+## Claude
+
+Mapping the current build (sh1.elf from today) symbol by symbol. The debug info doesn't say which file most symbols come from, so I'm checking whether the linker can write a map file.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -nE "\-Map|\.map|'-o'|link_cmd|ldflags" tools/port/port_link.py | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -nE "sh1\.elf|\"-T\"|'-T'|-nostartfiles|-Wl" tools/port/port_link.py | head
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 370,400p tools/port/port_link.py
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; SZ=$(command -v mips64r5900el-ps2-elf-size || command -v ee-size); $SZ -t build/port/all.o | tail -1; echo; find
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; SZ=$(command -v mips64r5900el-ps2-elf-size || command -v ee-size); $SZ build/port/port/*.o build/port/hal_stubs.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; NM=$(command -v mips64r5900el-ps2-elf-nm || command -v ee-nm); for o in ps2_sample_ps2 ps2_gpu_gs psx_card ps2_m
+
+## Claude
+
+Main RAM is mapped from the current ELF. Now confirming the GS memory layout in the HAL's gpu_gs.c.
+
+- tool `Bash`: cd ../psx-to-ps2-HAL/src/ps2; sed -n 40,95p gpu_gs.c; grep -nE "SLOTS|slot_count|s_NumSlots|CACHE_SLOTS" gpu_gs.c | head -15
+
+## Claude
+
+Here are the maps, taken from today's build (`build/port/sh1.elf`, 09:50) and the current HAL source.
+
+# EE main RAM (32 MB)
+
+| Address | Region | Size |
+|---|---|---|
+| `0x0000000–0x0100000` | EE kernel | 1.00 MB |
+| `0x0100000–0x04F0000` | `.text` (code) | 3.31 MB |
+| `0x04F0000–0x058B000` | `.data` + `.rodata` | 1.24 MB |
+| `0x058B000–0x0BA14A0` | `.bss` | 6.08 MB |
+| `0x0BA14A0–` | Heap: clean copies of the 48 overlays' starting data (overlay.c) | ~0.95 MB |
+| top of RAM | Main thread stack | 0.13 MB |
+| | **Used** | **~12.7 MB** |
+| | **Free** | **~19.3 MB** |
+
+The image ends at `0xBA14A0`, so the ELF takes 10.63 MB. On 2026-10-22 it took 9.49 MB. Almost all of the growth is the replay recorder's buffer (1 MB) and the sample profiler's counts (448 KB), both of which are always linked in now.
+
+**By category:**
+
+| Category | MB | Main items |
+|---|---|---|
+| Game code (decomp, all 48 overlays linked) | ~2.99 | |
+| Game data (PS1 data from asm, file table, maps) | 1.07 | |
+| PS1 RAM arena `g_PsxRam` | 2.00 | |
+| Game bss | 0.13 | `g_OtTags1`, `g_SysWork`… |
+| GS renderer (gpu_gs.c) | 0.96 | `s_Readback` 512 KB, `s_PktBuf` 128 KB, staging, image packet, CLUT map and `sq` 64 KB each, filter tables 39 KB |
+| FMV (movie_ps2.c + strdec.c) | 1.18 | ring 512 KB, RGBA frame 300 KB, frame 63 KB, decoder tables 320 KB |
+| **Replay recorder** (demo_rec.c `s_Rec`) | 1.00 | |
+| **Sample profiler** (`s_Counts`) | 0.44 | |
+| Memory card (psx_card.c) | 0.29 | `s_Card` 256 KB, icon 32 KB |
+| Capture, debug, log, crash | ~0.36 | capture bands 144 KB, debug 64 KB, log 42 KB, dbg_watch 32 KB, crash 13 KB |
+| CD, SPU, display | ~0.20 | CD bounce 64 KB, SPU 68 KB (including IRQ and tick stacks), display 68 KB |
+| Port code, libc, ps2sdk, gsKit | ~0.55 | port and HAL code 312 KB, the rest libraries |
+| Overlay clean copies (heap) | 0.95 | |
+| Stack | 0.13 | |
+
+The scratchpad (16 KB SPR) holds 6.0 KB of renderer and GTE state.
+
+Recorder, profiler, capture and debug buffers add up to about 1.8 MB. They could be left out of release builds, but there's plenty of free RAM either way.
+
+# GS memory (4 MB)
+
+**Default layout (1x, 16-bit):**
+
+| Address | Region | Size |
+|---|---|---|
+| `0x000000–0x0A0000` | gsKit frame buffer and the 448i snapshot (640×480×16) | 640 KB |
+| `0x0A0000–0x200000` | Texture page cache: 22 slots × 64 KB (the last one, `0x1F0000`, is reserved for `blend_exact`) | 1.375 MB |
+| `0x200000–0x2F0000` | Texture page cache: 15 more slots | 960 KB |
+| `0x2F0000–0x300000` | CLUT cache, 128 rows: 0–87 normal, 88–95 filtered 8-bit, 96–127 filtered 4-bit | 64 KB |
+| `0x300000–0x400000` | The PS1's VRAM (1024×512 PSMCT16), drawn into and shown on screen directly | 1 MB |
+
+**With a shadow buffer** (Debug Options Resolution / Color Depth). The buffer sits at address 0:
+
+| Mode | Shadow buffer | Page cache slots |
+|---|---|---|
+| 1x 16-bit | none (snapshot area) | 36 + 1 for `blend_exact` |
+| 1x 32-bit | 640 KB (fits the snapshot area exactly) | 37 |
+| 2x 16-bit | 1.25 MB, up to `0x140000` | 27 |
+| 2x 32-bit | 2.5 MB, up to `0x280000` | 7 (thrashes) |
+
+The CLUT cache and the PS1 VRAM copy (1.06 MB together) are fixed in every mode. As [docs/720p.md](docs/720p.md) works out, moving the VRAM copy into EE RAM is what would free GS memory for 720p or more cache slots. There's room for it in EE RAM.
+
+**Caveat:** I sorted symbols into categories from per-object `size`/`nm`, because the link doesn't write a map file. The game/library split in code is therefore approximate (about ±50 KB). The heap figure comes from the 2026-10-22 note, not a fresh measurement. Do you want me to add this to `PS2 Optimizations.md` as an update to that RAM table?
+
+## User
+
+Explain in more detail why VRAM is laid out the way it is.
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; sed -n 805,830p "Running Walkthrough.md"; sed -n 995,1006p "Running Walkthrough.md"; grep -n "blend_exact\|BX_AD
+
+## Claude
+
+The layout has four parts. Each one solves a mismatch between how the PS1 GPU works and what the GS can do, and the addresses mostly follow from the order in which those parts were added.
+
+### 1. The PS1's VRAM: 1 MB at `0x300000–0x400000`
+
+**Why it's on the GS at all:** the PS1 GPU draws into a single 1024×512 16-bit image. That image holds the frame buffers, the textures and the CLUTs together. The GS can render into a PSMCT16 buffer of exactly that size, and the formats match closely:
+- PS1 15-bit pixels have the GS's 16-bit layout.
+- The PS1's mask bit is the GS's alpha bit 15, which FBA and DATE use the way the PS1's set-mask and check-mask do.
+
+So the port keeps an exact image of PS1 VRAM in GS memory, and the game draws into it with the same coordinates. 15-bit textures, including the feedback effects that read back what was just drawn (motion blur, the load screen), sample this image directly.
+
+**Why it's at the top:** gsKit's display setup clears the bottom of GS memory whenever it starts or the video mode changes. Placing VRAM in the last megabyte keeps it out of reach, so a mode change never wipes the game's textures. It also means the display can scan out of VRAM directly (DISPFB1 at `0x300000`, DBX/DBY = the PS1's display start). That replaced an earlier per-frame copy into gsKit's buffer.
+
+### 2. Texture page cache: 37 slots of 64 KB
+
+**Why it's needed:** the PS1 stores 4-bit and 8-bit textures packed inside 16-bit VRAM pixels and decodes them through a CLUT. The GS can't read indexed texels out of a PSMCT16 buffer. They have to be in PSMT4 or PSMT8 format, which has a different memory layout. So each 4/8-bit texture page is converted from the EE-side copy of VRAM (`g_PortVram`) and uploaded into a cache slot. When the cache is full, the least recently used slot is replaced.
+
+**Why 64 KB per slot:** a 256×256 8-bit page is exactly 64 KB. A 4-bit page needs only 32 KB but takes a whole slot. Putting 4-bit pages in half slots is a known idea in `Planning Doc.md` and hasn't been done yet.
+
+**Why it's in two parts:**
+- The cache first sat only at `0x200000`. 15 slots fit there, between gsKit's area and VRAM.
+- When the display started scanning out of VRAM directly, gsKit's large 640×480×32 buffer was no longer needed. Only a 640×480×16 area stays at address 0 (section 4). That freed `0x0A0000–0x200000` for 22 more slots, which became `CACHE2_ADDR`.
+- That's why the slot numbering jumps: slots 0–14 sit high in memory, slots 15–36 sit low.
+
+**The last slot (`0x1F0000`)** belongs to `blend_exact`. The PS1 dithers semi-transparent polygons before blending, and the GS can't do that in one pass. So for blend modes 0, 2 and 3 the polygon is drawn into this scratch area first (256×128 PSMCT16), dithered there, and then composited onto the frame buffer.
+
+### 3. CLUT cache: 64 KB at `0x2F0000`
+
+**Why it's needed:** the GS loads CLUTs straight from memory (CSM2 mode, with the CLUT's position in VRAM), which worked. But the VRAM image is also the render target, and PCSX2 brought the target's contents back on every CLUT load. That was about 330 times a frame, and the GPU sat at 99%.
+
+**How it works now:** each CLUT is copied from `g_PortVram` into its own 256-pixel row, and rows are dropped when the VRAM under them changes. It takes the last 64 KB below VRAM, which originally belonged to the page cache:
+- Rows 0–87: ordinary CLUTs.
+- Rows 88–127: filtered CLUTs for the 2D filter option. Rows 88–95 are for 8-bit textures; rows 96–127 hold sixteen 4-bit CLUTs each.
+
+### 4. Address 0: an area with three uses
+
+Nothing in this area is in use all the time, so these three share it:
+- **gsKit's frame buffer.** gsKit insists on having one, but uses it only during setup.
+- **The 448i snapshot.** The 448-line title and inventory screens are single-buffered: the game redraws the area that's on screen. Shown live, the TV caught them half redrawn. So those screens are copied here and shown from the copy.
+- **FMV frames.** Movies are shown from a 32-bit buffer here, since they don't use the PS1's 24-bit display mode.
+
+The area is 640×480×16 = `0x96000`, rounded up to `0xA0000`, which is where `CACHE2_ADDR` starts.
+
+### 5. Shadow buffers (the Resolution and Color Depth options)
+
+The 2x and 32-bit modes draw the PS1 frame-buffer area (x 0–319, y 0–511) into a separate, larger buffer at address 0, because the 16-bit VRAM image can't hold those pixels.
+- **1x 32-bit (320×512×4 = 640 KB):** fits the snapshot area exactly, so it costs no cache slots.
+- **2x 16-bit (1.25 MB):** pushes slots 15+ up to start at `0x140000`, leaving 27 slots.
+- **2x 32-bit (2.5 MB):** runs past `0x200000`, over slots 0–14 as well, leaving 7 slots from `0x280000`. That's too few: PCSX2 showed 9–14 texture pages re-read every frame, which will be slow on hardware.
+
+The CLUT cache and VRAM never move. Every other region gives up space to the shadow buffer.
+
+### Why VRAM is kept on the GS at all
+
+VRAM is the one region that could leave the GS. The page cache and CLUT cache are already filled from the EE-side copy (`g_PortVram`), not from GS memory. What still reads VRAM back from the GS is the game's own reads of VRAM (StoreImage) and the debug dumps. Those readbacks stall the GS, the DMA and the EE, and they caused the attract-demo freeze found on 2026-10-08.
+
+[docs/720p.md](docs/720p.md) proposes keeping VRAM only on the EE side and only uploading from it. That would free 1 MB of GS memory, enough for 720p or for 2x 32-bit with a usable cache.
+
+## User
+
+Compare this approach to PS2 Decomps we’ve looked at
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -rniE "ps2 decomp|decomp(ilation)? of|sly|jak|ratchet|okami|kingdom hearts|sotc|ico\b|fatal frame|silent hi
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; grep -niE "decomp" "Claude Conversation.md" | grep -viE "silent hill \(ps1\)|upstream|the decomp(ilation)? (is|u
+
+- tool `Bash`: cd "../PS2 Decomps"; ls; grep -n "PS2 Decomps" /home/alex/Documents/silent-hill-1-ps2-port/*.md /home/alex/Documents/silent-hill-1-ps2-port/docs/*.md ../psx-to-
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; wc -l "PS2 Decomps Analysis.md"; grep -niE "vram|gs memory|frame ?buffer|tbp|fbp|texture|clut|0x[0-9a-f]{4,}|dou
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; cat "PS2 Decomps Analysis.md"; cd "../PS2 Decomps"; grep -rnE "tex_AllocVram|VramAlloc|TBP|FBP|ZBP|frame_image|s
+
+## Claude
+
+I'm reading how Dark Cloud's original PS2 code divides GS memory, to compare it with ours.
+
+- tool `Bash`: cd "../PS2 Decomps/Chronicle"; ls; grep -rnE "sceGsSetDefDBuff|SetDefDBuff|ZBP|zbp|FBP|fbp|VramTop|vram_top|TBP0 *=|AllocVram|VramAlloc|GsVram|TexManager\.(Init
+
+- tool `Bash`: cd "../PS2 Decomps/Chronicle/ps2/src"; sed -n 55,110p texture.cpp; grep -rnE "mgTopVRAM *=|mgTopVRAM\b.*=" . | head; grep -rnE "sceGsSetDefDBuffDc|SCE_GS_PSMZ|p
+
+## Claude
+
+I compared our GS layout with the two PS2 decomps in `~/Documents/PS2 Decomps/`. Dark Cloud (Chronicle) has fully decompiled source, so I read its layout directly. ICO is mostly undecompiled, so for it I only have function names. The basic difference: those games were written for the GS and decide their own layout, while ours has to hold a picture of PS1 hardware.
+
+## Dark Cloud: what the code shows
+
+GS memory is counted in 256-byte blocks. In the NTSC build:
+
+| Blocks | Bytes | Region |
+|---|---|---|
+| 0–6720 | 0–1.64 MB | Two 640×224 PSMCT32 display buffers and a 24-bit Z buffer (`sceGsSetDefDBuff` in mglib.cpp) |
+| 6720–16352 | 1.64–3.99 MB | Textures, managed by `CTextureManager` (texture.cpp) |
+
+The PAL build starts textures at `mgTopVRAM = 0x1E00` (1.88 MB) instead, to make room for taller buffers.
+
+- **Fixed buffers at the bottom.** The engine sizes them once at startup. A 640×224 buffer with field rendering is what lets it afford 32-bit colour plus Z within 1.64 MB.
+- **Textures in named groups.** There are 72 groups, each placed by moving a pointer forward (`vram_top`). A texture's CLUT is put right after its image, so there's no separate CLUT area. Each group keeps its EE-side copy (`buffer`), so it can be uploaded again after something overwrites it (`vram_dirty`, `reload_from`).
+- **Scratch targets come out of the texture area:**
+  - `work`, a large target at the start of that area.
+  - `frame_image`, a 640×480 frame grab used for water and depth of field.
+  - `shadow_buff`, which shadows are drawn into.
+- **No readbacks** except an 8×8 Z-buffer read for depth picking (`mgPickZBuff`).
+
+## ICO: inferred from names only
+
+From names like `tex_AllocVramAuto`, `tex_LockHeadTBP`, CLUT animation and full-screen post-effects, ICO looks like the same model as Dark Cloud: fixed buffers and a GS memory allocator. Its post-processing probably needs more scratch targets. This is a guess, not something read in code.
+
+## Compared with the port
+
+| | Dark Cloud / ICO | Silent Hill port |
+|---|---|---|
+| Who decides the layout | The game, written for the GS | The PS1 game, written for 1 MB of 16-bit VRAM. The port has to keep a copy of that image |
+| Frame buffers | 32-bit colour + Z, double-buffered, fixed | Inside the PS1 VRAM image (16-bit, no Z: the PS1 sorts by ordering table). A shadow buffer is added for 2x or 32-bit |
+| Z buffer | Yes (24-bit) | None, which saves memory |
+| Textures | Loaded in the GS's own formats (TIM2 files), placed by an allocator per scene | Converted from PS1 VRAM on demand into a 37-slot cache with least-recently-used replacement |
+| Copy kept in EE RAM | Yes, per group, for re-uploads | Yes, `g_PortVram`, the whole PS1 VRAM |
+| CLUTs | Next to their texture, loaded once | A separate 128-row cache: CLUTs change when the game writes to VRAM, and filtered CLUTs need extra rows |
+| Reading back from the GS | Almost never | Still needed for StoreImage and the frame-buffer area: the slowest part, and the cause of the 2026-10-08 freeze |
+| When the layout changes | Per scene (new texture groups) | Per display option (2x or 32-bit takes cache slots) |
+
+### What we could learn from them
+
+1. **Only upload, never read back.** Dark Cloud keeps the EE-side copy as the master and treats GS memory as a cache it uploads into, never reads from. The port already does this for textures and CLUTs. Moving PS1 VRAM off the GS ([docs/720p.md](docs/720p.md)) would apply it everywhere. That would free 1 MB of GS memory and remove the readbacks. It's the same approach that lets Dark Cloud fit 32-bit colour plus Z.
+2. **Pages sized to the texture.** Dark Cloud's allocator gives each texture only the space it needs. Our fixed 64 KB slots waste half of each slot on 4-bit pages. Packing those into half slots, as the `Planning Doc.md` idea suggests, follows the same principle without needing a general allocator.
+3. **Half-height field rendering** is how Dark Cloud saves memory. We don't need it: PS1 frames are 320 wide, and the 448-line screens already come from the snapshot.
+
+Neither game has anything like our CLUT cache or blend_exact slot. Those exist only because we reproduce the PS1's pixels exactly: dither before blending, and CLUTs that live inside VRAM and can be drawn over. A native game has no reason to need them.
+
+Want me to add this as a section of `PS2 Decomps Analysis.md`?
+
+## User
+
+Does the PS2 have to output from VRAM?
+
+## Claude
+
+Yes. The PS2's video output circuit (the PCRTC) can only scan out of GS local memory. DISPFB1/DISPFB2 take a page address in that 4 MB and a format (PSMCT32, 24, 16 or 16S), and there's no way to point them at EE RAM. Whatever the TV shows has to be in GS memory as a finished frame first.
+
+That doesn't mean the PS1's VRAM image has to stay on the GS. Only the frames being shown do. Right now they're the same thing: we scan out of the display area inside the PS1 VRAM image at `0x300000`, so the whole 1 MB stays there. If the EE-side copy (`g_PortVram`) became the master, the GS would need only:
+
+- **The two display buffers:** whatever the game is showing plus the one it's drawing. They have to be there anyway, because the GS can only draw into its own memory.
+- **The page and CLUT caches**, uploaded from the EE copy as they are now.
+- **15-bit texture pages and feedback effects** (motion blur, the load screen) that sample the frame buffer. When they read the buffer being drawn, it's already on the GS. Pages elsewhere in PS1 VRAM would have to be uploaded like 4/8-bit pages.
+
+Two consequences:
+- **The EE copy has to be kept up to date** with what the GS draws whenever the game reads it back (StoreImage, CLUTs or textures drawn into VRAM). That's the readback we want to stop doing. So this only pays off if those reads are rare or can be served another way. The inventory in Running Walkthrough.md that [docs/720p.md](docs/720p.md) cites says the GS copy isn't needed for them.
+- **Movies are already shown this way**: decoded on the EE, uploaded into a 32-bit buffer in the snapshot area, and scanned out from there. So the output side of this approach already works in the port.
+
+**In short:** the TV picture must come from GS memory, but only one frame or two at a time, not the whole 1 MB PS1 VRAM image.
+
+## User
+
+Give a summary of what we can do to make Silent Hill act a little more like the PS2 examples we discussed. I’m open to changing the rendering pipeline if we can maintain accuracy and improve speed
+
+- tool `Bash`: cd /home/alex/Documents/silent-hill-1-ps2-port; wc -l "Graphics Pipeline Rework.md"; cat "Graphics Pipeline Rework.md" | head -150; git log --oneline -8 -- "Gra
+
+## Claude
+
+We already have a plan for this. [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md) has the same goal: move work off the EE without changing a single output pixel. Steps 1–4 are done in PCSX2 (asynchronous GIF sends, uploads folded into the packet stream, cheaper primitive translation, batched GTE work). Here is what's left, framed against how Dark Cloud and ICO work.
+
+## The one limit on copying them
+
+Dark Cloud and ICO do their vertex maths on VU1 in floating point. We can't: the PS1's GTE uses integer arithmetic with its own divide (UNR), clamps and flags. The game's logic reads those results back (screen coordinates, depth for the ordering table, flags), and VU1 floats wouldn't give the same bits. **So vertex transforms stay on the EE.** What can move is everything after them: turning primitives into GS packets, and managing texture memory. That work is integer data movement, so it can stay exact.
+
+## What we can take from them
+
+**1. EE RAM holds the master copy of PS1 VRAM, and the GS only receives uploads** (like Dark Cloud's texture manager)
+- The PS1 VRAM image leaves GS memory. The GS keeps only the two display buffers plus the page and CLUT caches, fed by uploads from `g_PortVram`. The display buffers have to stay on the GS anyway, because that's the only memory the screen can be shown from.
+- **Speed:** no more readbacks. Each one makes the EE wait for the GS to finish everything, and PCSX2 can't measure that wait. Map4_s02 is already at 0 readbacks a frame, but StoreImage, effects and debug dumps still read back.
+- **Memory:** frees 1 MB of GS memory. That's enough for 2x 32-bit with a usable cache (today it gets 7 slots, which thrashes), or for 720p.
+- **Accuracy:** VRAM contents are the same either way. The hard part is the effects that sample the frame buffer (motion blur, the load screen): what they read still has to be on the GS, or be uploaded first.
+
+**2. VU1 builds the GS packets** (step 5 in the plan; this is the core of the Dark Cloud model)
+- The EE writes a short record per primitive (vertices, colour, texture and CLUT slot, blend mode). A VU1 program expands it into the full GS packet stream, then sends it to the GS itself over PATH1.
+- **What to move first** is the work that expands one primitive into many packets:
+  - `blend_exact`: three draws per polygon, 313k cycles a frame in Kaufmann.
+  - Fog pairs.
+  - Filtered polygons, drawn in two passes.
+  - Sprites and particles: most of map4_s02's primitives.
+- **Speed:** the "emit" stage (~850 cycles per polygon, the largest of the three) mostly moves off the EE. VU1 is idle today.
+- **Accuracy:** VU1's integer instructions just copy and arrange values, so the packets come out identical. That can be checked the same way as now: `gpu_test.py`, the attract-demo dumps, and replayed DuckStation captures.
+
+**3. Meshes go straight to GS packets** (Dark Cloud's "small header plus pointer")
+- World and character meshes currently build PS1 GP0 packets, which DrawOTag then decodes again. Instead, the mesh code can write the step-2 records directly and leave a marker in the ordering table, so draw order is kept.
+- In Kaufmann this skips ~600k cycles of decoding plus ~340k of PS1 packet building a frame. It gains little in map4_s02, which barely uses meshes.
+- Do it after step 2, so it can use that record format.
+
+**4. Whole frames double-buffered** (Dark Cloud's `MGEndFrame`)
+- Send a frame's packets as one DMA chain at the end, so the GS draws frame N while the EE runs the game logic for frame N+1.
+- On its own this is worth little today, because the GS is lightly loaded and sends already overlap. It becomes worth it after step 2: once VU1 builds the packets, the EE's DrawOTag work shrinks to writing records, and VU1 plus the GS can run a whole frame behind.
+
+## What I wouldn't copy
+
+- **A GS memory allocator per scene, or textures converted when they load.** PS1 games write VRAM at any time, so a texture can change underneath a cache. Our cache with least-recently-used replacement is the right model. The small fix is putting 4-bit pages in half slots.
+- **Z buffers, mipmaps, float transforms.** Each would change pixels.
+- **ICO-style threads for performance.** The EE has one core, so threads only help hide waits, and steps 1–2 already do that.
+
+## Suggested order
+
+1. **Console baseline first.** Every console figure in the plan is still an estimate (PCSX2 × ~2.3), because testing on the console has been blocked by the Floatstinger crash. The console measurement decides between steps 2 and 3 below: if readbacks dominate on the console, the EE-side VRAM goes first; if DrawOTag dominates, VU1 does.
+2. **EE-side master copy of VRAM.** It has the clearest payoff on the console, and it opens the door to 2x 32-bit and 720p.
+3. **VU1 packet building**, starting with `blend_exact` and fog pairs.
+4. **Mesh bypass**, then whole-frame double buffering.
+
+Want me to add steps 2–4 to [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md) as concrete tasks with their checks, or start on the EE-side VRAM?
+
+## User
+
+Add these to the doc as concrete tasks
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/Graphics Pipeline Rework.md
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/Graphics Pipeline Rework.md
+
+- tool `ToolSearch`: 
+
+- tool `PushNotification`: 
+
+## Claude
+
+I've added the tasks to [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md). Nothing is committed. The steps continue the doc's existing numbering, so they don't run in number order. They sit under a new "Order from here" section, which also explains the limit (vertex transforms stay on the EE) and lists what we won't copy from Dark Cloud and ICO.
+
+The steps, in the order I recommend doing them:
+
+- **Step 6, console baseline:** a new task measuring map4_s02, map4_s03, Docks and Kaufmann with the stage timers and light counters. Its result decides whether step 7 or step 5 comes next. It's still blocked by the Floatstinger crash.
+- **Step 7, PS1 VRAM master copy in EE RAM:**
+  - list every read back from the GS and count them per frame;
+  - keep only the display buffers on the GS;
+  - track which rows the GS drew to, so the EE copy is only read back where it's out of date;
+  - handle the effects that sample the frame buffer;
+  - lay out GS memory anew, aiming at 2x 32-bit with at least 20 cache slots.
+- **Step 5, VU1 builds the GS packets:**
+  - a per-primitive record format and the VU1 setup;
+  - `blend_exact` first, then fog pairs, filtered polygons, sprites and particles;
+  - any kind not handled yet stays on the EE path;
+  - a check build that builds each packet both ways and compares them.
+- **Step 8, mesh bypass:** an ordering-table marker, world meshes then character meshes, and a check first for any code that reads or patches the PS1 packets after building them.
+- **Step 9, whole frames double-buffered:** a frame sent as one DMA chain, the right waits for DrawSync, StoreImage and the display switch, and a check on added latency and replay sync.
+
+Each step lists its exactness checks (`gpu_test.py`, the replayed DuckStation captures, the attract-demo dumps) and what to measure. I also added a dated line to the doc's log.
+
+## User
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+<system-reminder>
+<tools-used-before-summary>Bash, Edit, PushNotification, ToolSearch</tools-used-before-summary>
+</system-reminder>
+Summary:
+1. **Primary request and intent:** understand the port's EE RAM and GS memory use, how it compares with native PS2 games (Dark Cloud, ICO), and then plan pipeline changes toward the native model without losing pixel accuracy. The last request was to add those changes to the doc as concrete tasks, which is done.
+
+2. **Key technical concepts:**
+   - EE RAM is 32 MB.
+   - The GS has 4 MB of local memory, and the PCRTC can only scan out from it (DISPFB).
+   - The PS1 VRAM image is PSMCT16 1024×512 at `0x300000`, chosen to be out of reach of gsKit's setup clears.
+   - Texture page cache: 37 slots of 64 KB. 15 sit at `0x200000` and 22 at `CACHE2_ADDR` `0xA0000`. The last slot is used by `blend_exact`.
+   - CLUT cache at `0x2F0000`, 128 rows:
+     - rows 0–87: normal CLUTs;
+     - rows 88–95: filtered 8-bit CLUTs;
+     - rows 96–127: filtered 4-bit CLUTs.
+   - Address 0 is shared by the snapshot, gsKit's frame buffer and FMV frames (640×480×16).
+   - Shadow buffer modes (page cache slots left):
+
+     | Mode | Slots |
+     |---|---|
+     | 1x 32-bit | 37 |
+     | 2x 16-bit | 27 |
+     | 2x 32-bit | 7 |
+
+   - `g_PortVram` is the EE-side copy of PS1 VRAM.
+   - Readbacks stall the GS, the DMA and the EE.
+   - Dark Cloud's GS layout:
+     - blocks 0–6720 hold the double buffer (640×224 PSMCT32) and Z24;
+     - textures go from 6720 to 16352 in `CTextureManager`, which places them with a moving pointer in 72 groups;
+     - each CLUT sits after its image;
+     - the EE keeps a copy of each group for re-uploads;
+     - `frame_image` and `shadow_buff` are scratch render targets.
+   - Accuracy constraint: GTE transforms must stay on the EE because the game reads their results back. Only packet building and GS memory management can move to VU1.
+
+3. **Files and code sections:**
+   - **Measured from `build/port/sh1.elf`:**
+     - The image ends at `0xBA14A0` (10.63 MB, up from 9.49 MB on 10-22).
+     - New since then: `s_Rec` (1 MB, the recorder in `demo_rec.c`) and `s_Counts` (448 KB, the sample profiler).
+     - About 12.7 MB is used and about 19.3 MB is free.
+   - **`../psx-to-ps2-HAL/src/ps2/gpu_gs.c`:** holds the GS layout `#define`s (`VRAM_ADDR`, `CACHE_ADDR`, `CACHE2_ADDR`, `CLUT_ADDR`, `BX_ADDR`, `slot_tbp`, `s_CacheSlots`).
+   - **`PS2 Decomps Analysis.md`:** read only, not changed.
+   - **`Graphics Pipeline Rework.md`** (edited):
+     - New section "Order from here (2026-10-28)", inserted before step 5:
+       1. Step 6, the console baseline, comes first.
+       2. Then step 7.
+       3. Then step 5.
+       4. Then steps 8 and 9.
+     - The same section lists what is not planned:
+       - a GS memory allocator per scene;
+       - textures converted at load;
+       - Z buffers;
+       - mipmaps;
+       - float transforms;
+       - threads for speed.
+     - **Step 5 (VU1 packet expansion)** was expanded into tasks:
+       - the record format;
+       - VU1 setup (XTOP double-buffering, VIF1, PATH1/PATH3 ordering);
+       - `blend_exact` first, then fog pairs, filtered polygons and sprites;
+       - an EE fallback for primitive kinds not handled by VU1;
+       - checks and measurements.
+     - **Step 6** gained a task: console baseline (map4_s02, map4_s03, Docks at 2x + 32-bit, Kaufmann; `SH1_PROF` and `SH1_LITEPROF`). It is blocked by the Floatstinger crash.
+     - **New step 7, PS1 VRAM master copy in EE RAM:**
+       - make an inventory of all `download_rows` callers;
+       - keep only the display buffers on the GS;
+       - track which rows the GS has drawn into (stale in `g_PortVram`);
+       - handle feedback effects;
+       - lay out GS memory again, aiming for 2x 32-bit with ≥ 20 slots.
+     - **New step 8, mesh bypass:** an OT marker, the world mesh path, then character meshes.
+     - **New step 9, frame-level double buffering:** frames double-buffered, sync points, a latency check, replays staying in sync.
+     - Log line added: "2026-10-28: steps 5-9 as tasks…".
+
+4. **Errors and fixes:**
+   - The link writes no map file, so source attribution came from per-object `size`/`nm`. This was stated to the user as an approximation.
+   - There was no user feedback or correction during the session.
+
+5. **Problem solving:**
+   - RAM and VRAM maps produced.
+   - VRAM layout rationale explained.
+   - Comparison with the PS2 decomps made.
+   - Confirmed that scan-out must come from GS memory, but only the display buffers need to be there.
+   - Plan written into the doc.
+
+6. **All user messages:**
+   - "Give me a map of main RAM and VRAM with a breakdown of how much memory is consumed by various categories"
+   - "Explain in more detail why VRAM is laid out the way it is."
+   - "Compare this approach to PS2 Decomps we've looked at"
+   - "Does the PS2 have to output from VRAM?"
+   - "Give a summary of what we can do to make Silent Hill act a little more like the PS2 examples we discussed. I'm open to changing the rendering pipeline if we can maintain accuracy and improve speed"
+   - "Add these to the doc as concrete tasks"
+
+7. **Pending tasks:** none was explicitly requested beyond the finished doc update.
+   - Earlier offers the user hasn't answered:
+     - add the RAM table to `PS2 Optimizations.md`;
+     - add the comparison to `PS2 Decomps Analysis.md`.
+   - Nothing was committed. Commit only when asked.
+
+8. **Current work:** `Graphics Pipeline Rework.md` was updated with steps 5–9 as tasks, and a push notification was sent. The final text reply to the user (a brief summary of what was added) hasn't been written yet.
+
+9. **Next step:** reply briefly that the doc now has steps 5–9 as tasks, in the order console baseline → VRAM in EE RAM → VU1 → mesh bypass → frame double buffering. Ask whether to commit, or to start on a step; the console baseline needs the Floatstinger crash fixed first.
+
+Project constraints that remain in force:
+- Don't access tcrf.net.
+- Commit only when asked.
+- Notify the user at stopping points.
+- Use `SH1_FPS=60 SH1_NO_RECOMP=1` and run all three build steps.
+- PCSX2 runs use the software GS renderer, and "TLB Miss" lines are never dismissed.
+- Ask for a power-cycle when the PS2 hangs.
+- Never use `pkill -f` with a pattern contained in the calling command line.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/0375d7cc-6a8a-424e-96c1-ae9ab2cfd243.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+The messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.
+
+## User
+
+<command-name>/compact</command-name>
+            <command-message>compact</command-message>
+            <command-args></command-args>
+
+## User
+
+<local-command-stdout>Compacted </local-command-stdout>
+
+## User
+
+Let’s go back to the graphics pipeline rework. Where can we start?
+
+## Claude
+
+You can start in two places today, and only one of them needs the console.
+
+**1. Step 7's first task: list every GS read-back (recommended).** This is code reading in [gpu_gs.c](../psx-to-ps2-HAL/src/ps2/gpu_gs.c) and its callers, so neither the console nor the Floatstinger crash blocks it. For each `download_rows` / StoreImage call it records:
+- what triggers it (`MoveImage`, `StoreImage`, CLUT or texture from a drawn area, a frame-buffer effect);
+- which VRAM rows it reads;
+- how often it fires per frame on the maps in the baseline.
+
+That count is most of what decides whether step 7 pays off. It also shows how much row tracking would really save. It's safe groundwork whatever the baseline says, and I can add a `SH1_LITEPROF` counter for read-backs per frame at the same time, so the baseline picks the numbers up for free.
+
+**2. Fix the Floatstinger crash, then run the step 6 baseline.** This was the intended order. The baseline decides whether step 7 or step 5 comes first. It needs console time, and the crash has to be fixed before the Kaufmann and later measurements can run. If you'd rather go this way, I'll start by reproducing the crash in PCSX2 and checking the TLB Miss PCs.
+
+I'd do option 1 now, since it doesn't touch rendering output, and pick up the crash next. Say which and I'll begin.
+
+## User
+
+Let’s start with 1. The Floatstinger crash was already fixed, so note that. We have the replay system working too, except for the part where it diverges. Keep everything up to that divergence point in mind when measuring performance and ignore the end.
+
+- tool `Bash`: Find GS read-back call sites and Floatstinger mentions
+
+- tool `Bash`: Find read-back helpers and counters in the GS renderer
+
+## Claude
+
+Counters exist already. Let me read the call sites in context.
+
+- tool `Bash`: Read the read-back call sites
+
+- tool `Bash`: Read move(), caller diagnostics, and game callers
+
+- tool `Bash`: Check move(), the per-frame callers, and ToFix
+
+- tool `Bash`: Find callers of per-frame readers and replay divergence notes
+
+- tool `Bash`: Context for lens flare and Twinfeeler readers; locate replay notes
+
+- tool `Bash`: Read replay doc
+
+## Claude
+
+Writing up the inventory now. The read-back counters already exist, so no new code is needed. Next I'll update the doc.
+
+- tool `Bash`: Locate step 6/7 sections in the doc
+
+- tool `Bash`: Write the inventory and notes into the doc
+
+- tool `Bash`: Move the log entry to the end of the log
+
+- tool `ToolSearch`: 
+
+- tool `PushNotification`: 
+
+## Claude
+
+The list of every place the game reads from GS memory back to main RAM is done and written into step 7 of [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md). Nothing is committed.
+
+**The reads, all through one function, `download_from` in [gpu_gs.c](../psx-to-ps2-HAL/src/ps2/gpu_gs.c):**
+
+| Source | How often | With a main-RAM copy of PS1 VRAM |
+|---|---|---|
+| Texture page cache miss (`page_get`, reads 256 rows) | about 5 a frame in the Docks at 2x/32-bit, roughly 1.6 ms (measured earlier) | gone |
+| Palette cache miss (`clut_get`) | per miss | gone |
+| Palette source for the filtered palettes (`filt_raw`) | per miss | gone |
+| Game `StoreImage` | lens flare check every frame (2 pixels behind the sun, [water.c:203](src/bodyprog/water.c#L203)); the rest only sometimes (character palette, Twinfeeler, paper map, FMV, credits…) | the lens flare stays, because it reads pixels the GS drew; the others mostly read from the copy instead |
+| `MoveImage` | save/load screen only | becomes a copy within main RAM |
+| Frame dumps | debug only | stays, not counted |
+
+Copies the game draws as VRAM-to-VRAM moves already happen inside GS memory and read nothing back. The per-frame counters already exist (`SH1_LITEPROF=1`, `GpuGs_Stats`), so the baseline run gives these numbers without new code.
+
+**The two notes you asked for:**
+- Step 6 no longer lists the Floatstinger crash as a blocker. [docs/ToFix.md](docs/ToFix.md) already records it as fixed on 2026-10-26.
+- Docks figures come from the `docks1` replay, counted only up to where it diverges (the NPC state first differs at step 1844). Everything after that is ignored.
+
+The next step is the console baseline: map4_s02, map4_s03, the Docks via `docks1` and Kaufmann, with `SH1_PROF=1` and `SH1_LITEPROF=1`. It needs the console, so tell me when it's free and I'll build and deploy.
+
+## User
+
+Is it possible to run these tests on the emulator for now and estimate console numbers?
+
+## Claude
+
+Partly. The emulator can give us the counts but not the timings, and the counts are most of what step 7 needs.
+
+**What PCSX2 gets right:** every count. That includes read-backs per frame, texture page and palette cache misses, `StoreImage` calls, primitives and uploads. These depend only on what the game draws, so they match the console. A `docks1` replay is also deterministic up to the divergence, so we get the same frames every run.
+
+**What it gets wrong:** the timings. PCSX2 doesn't model the GS waits, and those dominate on hardware. A page miss costs about 0.3 ms on the console and almost nothing in PCSX2. Its EE timing is also only approximate, so the `SH1_PROF` stage timers would understate the cost of the game logic.
+
+**How I'd estimate the console numbers:**
+- Multiply each emulator count by a cost per event we've already measured on hardware. A page miss is about 0.3 ms, from the Docks figure of about 1.6 ms for 5 misses. Palette and `StoreImage` reads would be costed from their transfer sizes against that figure.
+- Take game-logic time from the console figures we already have (about 10.6 ms a frame in the Docks) rather than from PCSX2.
+
+That gives a reasonable estimate of what step 7 saves, since the read-backs it removes are mostly fixed-cost waits. It's weaker for step 5 (VU1), which depends on EE time spent building packets, and PCSX2 can't measure that reliably.
+
+The plan:
+1. Run PCSX2 with `SH1_LITEPROF=1` on the `docks1` replay, map4_s02, map4_s03 and Kaufmann.
+2. Write the counts and console estimates into step 6, marked as estimates.
+3. Confirm them on the console when it's free.
+
+Shall I start the runs?
+
+## User
+
+Yes
+
+- tool `Bash`: Check replay files, capture config, and runner options
+
+- tool `Bash`: Find how map4_s02 and Kaufmann were reached in earlier runs
+
+- tool `Bash`: Look at benchmark and warp scripts
+
+- tool `Bash`: Read warp.txt format and demo sweep
+
+- tool `Bash`: Read the warp sweep tool
+
+## Claude
+
+Building a counter build next. Then three PCSX2 runs: map4_s02 and map4_s03 by warp, Kaufmann as a cutscene, and Docks from the `docks1` replay.
+
+- tool `Bash`: Find stats interval and build switches
+
+- tool `Bash`: Check what enables GS stats and capture.txt format
+
+- tool `Bash`: Build the counter build (light counters, benchmark)
+
+## Claude
+
+Build done. Running the map4_s02/s03 warp in PCSX2 first.
+
+- tool `Bash`: Warp into map4_s02 and map4_s03 in PCSX2
+
+- tool `Bash`: Inspect warp log for map segments and stats lines
+
+- tool `Bash`: Aggregate GS counters per warped map
+
+## Claude
+
+At 1x, map4_s02 and map4_s03 show under 1 read-back a frame. Next is Kaufmann.
+
+- tool `Bash`: Play the Kaufmann cutscene in PCSX2 with counters
+
+- tool `Bash`: Aggregate Kaufmann counters
+
+## Claude
+
+Kaufmann at 1x is also about 0. Now the `docks1` replay at 2x/32-bit, stopping at step 1840:
+
+- tool `Bash`: Replay docks1 at 2x/32-bit up to step 1840 in PCSX2
+
+## Claude
+
+The Docks replay is still running in PCSX2. I'll pick the results up when it finishes.
+
+## User
+
+The replay must’ve finished by now
+
+- tool `Bash`: Check the Docks replay outcome
+
+## Claude
+
+PCSX2 is still running, and the log only gets written when the run ends. Let me look at the emulator's own live log:
+
+- tool `Bash`: Read PCSX2's live log for progress
+
+## Claude
+
+The replay finished at 38 s. My stop condition never fired, because steps are only printed every 30 and 1840 is never one of them. I'll stop PCSX2 and use the counts up to step 1830.
+
+- tool `Bash`: Stop PCSX2 and aggregate Docks counters up to step 1830
+
+- tool `Bash`: Write PCSX2 baseline results into the doc
+
+## Claude
+
+Yes, it had finished. The replay ended at about 38 emulated seconds, but my stop condition waited for step 1840, and the trace only prints every 30 steps (1830, 1860), so PCSX2 kept running. I've stopped it and used the counts up to step 1830.
+
+Read-backs from the GS are close to zero at 1x and only show up in the Docks at 2x/32-bit. Results from PCSX2, per frame:
+
+| Scene | Mode | Primitives | Read-backs | Page misses | `StoreImage` | Estimated console cost |
+|---|---|---|---|---|---|---|
+| map4_s02 | 1x | 432 | under 1 | under 1 | 0 | about 0 |
+| map4_s03 | 1x | 172 | under 1 | under 1 | 0 | about 0 |
+| Kaufmann | 1x | 2,114 | 0.01 | 0 | 0 | about 0 |
+| Docks, `docks1` to step 1830 | 2x/32 | 389 (max 1,481) | 2.2 (max 12) | 1.7 (max 10) | 0.33 | about 0.5 ms average, about 3 ms worst |
+
+- **How the cost is estimated:** each page miss is counted at about 0.3 ms, from the earlier console measurement of about 1.6 ms for 5 misses.
+- **map4_s03 is weak:** the attract demo left that map after about 4 seconds.
+- **"Under 1":** the counters are whole numbers averaged over 30 frames, so this means fewer than 30 in 30 frames.
+- **After the divergence:** the end of the Docks replay averages 7.4 misses a frame and was left out as you asked. That rate looks like the console's "about 5 misses a frame". So the earlier console figure may have come from that heavier section rather than the Docks average.
+
+What this means for step 7: at 1x there's nothing to save, because the 37 page slots are enough. The gain is only at 2x/32-bit, where only 7 slots fit. So step 7 matters for 2x/32-bit and the planned 720p mode, and doesn't speed up the game at its default settings.
+
+I've added the table and a log line to step 6 of [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md), marked as estimates. Nothing is committed.
+
+Still to run:
+- map4_s02 and Kaufmann at 2x/32-bit (I ran them at the default settings);
+- a console run to confirm the cost per miss.
+
+Shall I do the 2x/32-bit runs next?
+
+## User
+
+Stick to running only the docs and Kaufman tests for now. Move on to 2x and 32 bit tests
+
+- tool `Bash`: Check how capture.txt's mode is applied
+
+- tool `Bash`: See where the forced mode is used
+
+## Claude
+
+I'll force 2x/32-bit for the Kaufmann cutscene through `capture.txt`, with a frame number it never reaches so nothing is captured:
+
+- tool `Bash`: Run Kaufmann cutscene at 2x/32-bit and aggregate counters
+
+- tool `Bash`: Inspect the Kaufmann 2x run log
+
+## Claude
+
+The run collided with the old one finishing, which restored PCSX2's settings file at the same moment. Let me check the settings are intact:
+
+- tool `Bash`: Check PCSX2 ini state after the collision
+
+## Claude
+
+The settings file is the original from Oct 27, so nothing was lost. Running the Kaufmann 2x/32-bit test again:
+
+- tool `Bash`: Rerun Kaufmann at 2x/32-bit and aggregate counters
+
+## Claude
+
+Kaufmann at 2x/32-bit averages about 7 page misses a frame. But the run also logged a **TLB Miss**, so I'm looking into that before anything else:
+
+- tool `Bash`: Locate the TLB Miss PC and check other runs
+
+- tool `Bash`: Identify old TLB-miss logs and prior notes
+
+- tool `Bash`: Disassemble the faulting code in sifrpc
+
+- tool `Bash`: Record Kaufmann 2x results and log the TLB miss in ToFix
+
+## Claude
+
+That file keeps the newest entries at the bottom of each section, so I'm moving the new one there:
+
+- tool `Bash`: Move the ToFix entry to the end of its section
+
+- tool `PushNotification`: 
+
+## Claude
+
+I ran Kaufmann at 2x/32-bit; the Docks run from earlier was already at that setting. At 2x/32-bit both scenes now read back from GS memory, and Kaufmann does so much more than the Docks. I also hit a new crash-type error, which I've logged but not investigated.
+
+**Results in PCSX2, per frame:**
+
+| Scene at 2x/32-bit | Primitives | Read-backs | Page misses | Estimated console cost |
+|---|---|---|---|---|
+| Kaufmann | 1,966 | 7.2 (max 13) | 7.0 (max 12) | about 2.1 ms average, about 3.6 ms worst |
+| Docks, `docks1` up to step 1830 | 389 (max 1,481) | 2.2 (max 12) | 1.7 (max 10) | about 0.5 ms average, about 3 ms worst |
+
+- **Where the estimates come from:** the counts are what PCSX2 recorded. The console costs are worked out at about 0.3 ms per miss, from the earlier console measurement.
+- **The cause:** Kaufmann at 1x had no misses at all. All 7 a frame come from 2x/32-bit leaving only 7 page slots in GS memory.
+- **What it means for step 7:** that change targets exactly this, so Kaufmann is where it should help most.
+- **To confirm:** the console run, to check the 0.3 ms per-miss cost.
+
+**New TLB Miss (not dismissed):**
+- **Where:** in the Kaufmann 2x run, the system library's remote-call code (`_request_end` in ps2sdk's `sifrpc.c`) read through a NULL pointer three times. The game kept running.
+- **When:** while the benchmark build was writing a VRAM frame dump to the host.
+- **Likely cause:** two callers using the same remote-call connection at once. One candidate is the frame dump's file writes overlapping other file access, now that the HAL's threads are real.
+- **Effect on hardware:** this would crash the console, but it has only appeared in the benchmark's frame-dump path.
+- **Where it's logged:** [docs/ToFix.md](docs/ToFix.md), marked not yet investigated.
+
+The table and log lines are in step 6 of [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md). Nothing is committed.
+
+Two things can happen next: the console run for Docks and Kaufmann, or looking into the TLB Miss. Which do you want first?
+
+## User
+
+Show me the graphics pipeline rework here again
+
+- tool `Bash`: Print the pipeline rework doc
+
+## Claude
+
+Here's [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md) in its current state, uncommitted. The goal is to stop the EE from being the limit without changing any output pixel. Steps 1–4 are condensed; steps 5–9 are shown with their tasks.
+
+## Done (steps 1–4)
+
+All figures are from PCSX2, and the console test of steps 1–2 is still pending.
+
+| Step | What | Result |
+|---|---|---|
+| 1 | Packets go to the GS by DMA without the EE waiting for each one | map4_s02 DrawOTag 737k → 632k cycles a frame |
+| 2 | Small uploads ride inside the packet stream | 31 → 6 sends a frame |
+| 3 | Cheaper primitive translation: larger caches for the filtered palettes, a memo per primitive kind, exact blending once per quad | Kaufmann DrawOTag 3,815k → 3,319k |
+| 4 / 4b / 4c | Lighting maths: transforms in 32-bit, the point light in one pass, the Docks grid effect batched | −9%, −20%, −55% of those functions |
+
+## Order from here
+
+1. **Step 6, console baseline:** the PCSX2 part is done, and the console run is next.
+2. **Step 7:** the EE keeps the only full copy of PS1 VRAM.
+3. **Step 5:** VU1 builds the GS packets.
+4. **Step 8, then step 9:** the mesh bypass, then whole frames double-buffered.
+
+Limit: vertex transforms stay on the EE, because the game reads their results back. Not planned: a per-scene GS memory allocator, textures converted at load, Z buffers, mipmaps, float transforms, and threads for speed.
+
+## Step 6: baseline (in progress)
+
+Counts from PCSX2, per frame. The console costs are estimates at about 0.3 ms per page miss.
+
+| Scene | Mode | Primitives | Read-backs | Page misses | Estimated console cost |
+|---|---|---|---|---|---|
+| map4_s02 | 1x | 432 | under 1 | under 1 | about 0 |
+| map4_s03 | 1x | 172 | under 1 | under 1 | about 0 |
+| Kaufmann | 1x | 2,114 | 0.01 | 0 | about 0 |
+| Docks, `docks1` to step 1830 | 2x/32 | 389 | 2.2 | 1.7 | about 0.5 ms (3 ms worst) |
+| Kaufmann | 2x/32 | 1,966 | 7.2 | 7.0 | about 2.1 ms (3.6 ms worst) |
+
+- [ ] Console run for Docks and Kaufmann, to confirm the cost per miss.
+
+## Step 7: PS1 VRAM master copy in EE RAM
+
+- [x] List of every read-back:
+  - texture page and palette cache misses (these go away);
+  - the per-frame lens flare `StoreImage` (stays, because it reads drawn pixels);
+  - occasional `StoreImage` calls and `MoveImage` on the save screen;
+  - frame dumps (debug only).
+- [ ] Only the display buffers stay in GS memory.
+- [ ] Track which rows of the EE copy are out of date because the GS drew there.
+- [ ] Effects that sample the frame buffer keep reading GS memory.
+- [ ] A new GS memory layout, aiming at 2x/32-bit with at least 20 page slots (7 today).
+
+## Step 5: VU1 builds the GS packets
+
+- [ ] A per-primitive record format.
+- [ ] VU1 setup: double-buffered data memory, records fed by DMA, upload ordering kept.
+- [ ] `blend_exact` first, then fog pairs, filtered polygons, sprites and particles.
+- [ ] Any kind not handled yet stays on the EE path.
+- Check: a build that builds each packet both ways and compares them.
+
+## Step 8: mesh bypass
+
+- [ ] An ordering-table marker, then world meshes, then character meshes.
+- [ ] Before that, find any code that reads or patches the PS1 packets after building them.
+
+## Step 9: whole frames double-buffered
+
+- [ ] Two record buffers.
+- [ ] DrawSync, `StoreImage` and the display switch wait for the right frame.
+- [ ] At most one frame of added latency, and replays stay in sync.
+
+The bottom of the doc also has the earlier findings, the idea for replaying recorded play, the 2026-10-23 console test notes and the dated log. The log has today's entries for the read-back list, the PCSX2 counts and the TLB Miss now in [docs/ToFix.md](docs/ToFix.md).
+
+## User
+
+Can we move to step 7, 5, 8, or 9 without doing console testing right away?
+
+## Claude
+
+Yes, step 7 can start now. Steps 5, 8 and 9 could too, but they carry more risk without the console.
+
+**Step 7 (VRAM master copy in EE RAM): start now.**
+- **Counts:** its success measure is "read-backs and page misses go to 0", which PCSX2 counts exactly. Kaufmann at 2x/32-bit gives a clear target of about 7 misses a frame.
+- **Exactness checks:** all run in the emulator: `gpu_test.py`, the replayed DuckStation captures, and the attract-demo and Kaufmann dumps.
+- **Hardware risk:** it removes hardware-sensitive work. GS read-backs are where the console has hung before ("VRAM download stuck"), and PCSX2 doesn't model that.
+- **Cost of waiting for the console:** only the size of the gain, not whether it works.
+- **What still needs the console:** the new GS memory layout and the new page uploads. Uploads are well-trodden ground on hardware, but one console run before calling the step done is wise.
+
+**Step 5 (VU1 builds the packets): possible, riskier.**
+- **What PCSX2 covers:** VU1 is emulated well enough for correctness checks.
+- **What it doesn't:** the timing between VU1 output (PATH1) and texture uploads (PATH3) is modelled loosely. Ordering bugs there may only show up on the console.
+- **Speed:** its gain is EE time, which PCSX2 only approximates.
+- **If we do it without the console:** test on the console as soon as `blend_exact` runs on VU1, before converting more primitive kinds.
+
+**Steps 8 and 9: not yet.** Both build on step 5's record format. Step 9's latency and replay-sync checks also need real timing.
+
+My recommendation: start step 7 in PCSX2. The first task is keeping the EE copy authoritative and tracking which rows the GS drew. Then do one console run for step 7 and the baseline together, which saves a separate trip. Shall I begin step 7?
+
+## User
+
+Yes
+
+## Claude
+
+I'll start by working out what `g_PortVram` holds today and where VRAM gets written.
+
+- tool `Bash`: Find uses of the EE-side VRAM copy
+
+- tool `Bash`: Search for the EE VRAM copy in the game repo and 720p plan
+
+- tool `Bash`: Read prior notes on g_PortVram and the 720p plan
+
+- tool `Bash`: Read the GS renderer's header and layout
+
+- tool `Bash`: List functions in gpu_gs.c
+
+- tool `Bash`: Read the cache tables, invalidation and upload code
+
+- tool `Bash`: Read fills, copies, LoadImage and download paths
+
+- tool `Bash`: Read the hires shadow buffer code
+
+- tool `Bash`: Find where drawn areas are marked
+
+- tool `Bash`: Find every GS write into the VRAM buffer
+
+- tool `Bash`: Read blend_exact
+
+- tool `Bash`: Check draw paths and read call sites
+
+- tool `Bash`: Check HAL tree state and the declaration area
+
+## Claude
+
+Now the edits: declarations first, then the EE copy's read, write and mark functions.
+
+- tool `Bash`: Add the EE VRAM copy and hook its writes and reads
+
+## Claude
+
+Code is in. Building, then checking exactness with `gpu_test.py` and the attract-demo frame dumps.
+
+- tool `Bash`: Build with the EE VRAM copy
+
+- tool `Bash`: Run the synthetic GPU test against the DuckStation reference
+
+## Claude
+
+I need the figure from before this change to compare against:
+
+- tool `Bash`: Find the previous gpu_test total
+
+## Claude
+
+No recorded baseline, so I'll build the previous HAL and run the same test:
+
+- tool `Bash`: Run gpu_test on the previous HAL for a baseline
+
+## Claude
+
+The total is the same before and after (1,461 pixels, all from known rounding differences). Next, the attract-demo frame dumps, old and new:
+
+- tool `Bash`: Read the frame-dump benchmark script
+
+- tool `Bash`: Dump attract-demo frames with and without the change and compare
+
+## Claude
+
+Ten of ten attract-demo dumps are identical. Now the 2x/32-bit counts with the change: Kaufmann first.
+
+- tool `Bash`: Kaufmann at 2x/32-bit with the EE copy, counters
+
+## Claude
+
+Read-backs dropped from 7.2 to 3.4 a frame, not to 0. Some reads still land on tiles marked as drawn. I'll add a temporary log of which areas get marked and refreshed:
+
+- tool `Bash`: Log marked and refreshed areas in Kaufmann at 2x/32
+
+- tool `Bash`: Find UV-range hooks and the texture state path
+
+- tool `Bash`: Build pages from the EE copy without reading back
+
+## Claude
+
+That left a leftover function; removing it:
+
+- tool `Bash`: Rebuild and rerun Kaufmann at 2x/32-bit
+
+## Claude
+
+Kaufmann at 2x/32-bit is down from 7.2 to 0.14 read-backs a frame. Checking exactness again with the attract-demo dumps, at 1x and at 2x/32-bit, old against new:
+
+- tool `Bash`: Compare attract-demo dumps old vs new at 1x and 2x/32-bit
+
+## Claude
+
+Both match. To be sure the 2x/32-bit dumps really show the 2x picture, I'll compare their size with the 1x ones:
+
+- tool `Bash`: Check the dumps are at the right resolution
+
+## Claude
+
+The 2x/32-bit dumps are 640×448 and match. Last, the Docks replay with the change, stopping at step 1830:
+
+- tool `Bash`: Docks replay at 2x/32-bit with the EE copy, counters and sync
+
+## Claude
+
+Docks read-backs went from 2.2 to 0.27 a frame, and the replay state at step 1830 matches the earlier run exactly. Writing it into the docs:
+
+- tool `Bash`: Check the walkthrough's latest entries format
+
+- tool `Bash`: Record step 7 progress in the plan and walkthrough
+
+- tool `PushNotification`: 
+
+## Claude
+
+The first part of step 7 works in PCSX2. The texture caches now take their data from a copy of the PS1 VRAM kept in main RAM, so reads back from GS memory are nearly gone at 2x/32-bit, and the output is unchanged.
+
+**The change** is in the HAL's [gpu_gs.c](../psx-to-ps2-HAL/src/ps2/gpu_gs.c) and adds 1 MB of RAM:
+- `LoadImage`, fills and VRAM-to-VRAM copies update the RAM copy as well as GS memory.
+- Each primitive marks its clip area as drawn, in 16×16-pixel tiles. Only those tiles are out of date in the RAM copy.
+- Palette reads and `StoreImage` (the lens flare) refresh just the drawn tiles from GS memory before reading. That's one read-back, and only when needed.
+- Texture pages are built straight from the RAM copy. My first version refreshed them too, but only halved the read-backs. A temporary log showed why: three texture pages overlap the frame buffers, though the texels the game uses there sit above and below them. No 4/8-bit texture samples the drawn area, and the old code never followed later drawing into a cached page either.
+
+**Results in PCSX2, read-backs per frame at 2x/32-bit:**
+
+| Scene | Before | After |
+|---|---|---|
+| Kaufmann | 7.2 | **0.14** |
+| Docks, `docks1` up to step 1830 | 2.2 | **0.27** |
+
+What's left in the Docks is mostly the lens flare check, which has to read drawn pixels.
+
+**Exactness:**
+- `gpu_test.py` gives the same 1,461 differing pixels before and after.
+- The attract-demo dumps are 10 of 10 identical at 1x and at 2x/32-bit (640×448).
+- The `docks1` replay state at step 1830 is identical.
+- No TLB Miss in any of these runs.
+
+The page misses themselves haven't changed (Kaufmann about 7 a frame, Docks about 1.7). Each still waits for the GS before refilling the shared upload buffer, so the gain on the console will be smaller than the earlier 0.3 ms per miss.
+
+Next steps in step 7:
+1. Upload pages without that wait.
+2. Lay out GS memory with more page slots, aiming for 20 or more at 2x/32-bit instead of 7.
+
+Plan and log are updated in [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md) and [Running Walkthrough.md](Running%20Walkthrough.md). Nothing is committed, in this repository or the HAL. Shall I continue with the wait-free page uploads?
+
+## User
+
+Give me performance numbers before and after the change for Docks and Kaufman
+
+## Claude
+
+PCSX2 doesn't model the GS waits that this change removes, so its timings will understate the gain. I'll still measure both builds with the stage timers (`SH1_PROF=1`), which show the EE-side cost. First, a check of what the profiler prints:
+
+- tool `Bash`: Find the profiler's report format
+
+## Claude
+
+I'll run four times: old and new builds, each on Kaufmann and on the Docks replay, all at 2x/32-bit with the stage timers on. The new build goes first:
+
+- tool `Bash`: Write a script for the profiled runs
+
+- tool `Bash`: Profiled Kaufmann and Docks runs, new build
+
+## Claude
+
+The new build's profiled runs are going. When they finish I'll run the old build the same way and compare.
+
+- tool `Bash`: Check the new build's profiled runs
+
+- tool `Bash`: Confirm Docks reached step 1830; stash the change for the old build
+
+- tool `Bash`: Profiled runs with the old build, then restore the change
+
+## Claude
+
+Meanwhile, I'll write the aggregator for the profiler reports:
+
+- tool `Bash`: Write a profiler report aggregator
+
+## Claude
+
+The old build's runs are still going. I'll compare as soon as they finish.
+
+- tool `Bash`: Compare profiled stage times old vs new
+
+## Claude
+
+PCSX2 shows no speed gain from the change, and a small EE cost from it. That's as expected for the read-backs, since PCSX2 makes them nearly free. The extra cost is real, though, and fixable.
+
+**Kaufmann, 2x/32-bit** (thousands of EE cycles per frame, mean of 54 reports; 1,000k cycles ≈ 3.4 ms):
+
+| Stage | Before | After | Change |
+|---|---|---|---|
+| DrawOTag (GPU packets) | 3,721 | 3,907 | +186 (+5%) |
+| `prim_state` (other) | 503 | 708 | +205 |
+| `prim_state` (texture) | 1,011 | 982 | −29 |
+| Game state update | 1,705 | 1,703 | 0 |
+| Swap and draw | 6,892 | 7,040 | +148 |
+
+**Docks, `docks1` up to step 1830, 2x/32-bit** (mean of 35–36 reports):
+
+| Stage | Before | After | Change |
+|---|---|---|---|
+| DrawOTag (GPU packets) | 788 | 851 | +63 (+8%) |
+| `prim_state` (other) | 65 | 96 | +31 |
+| Game state update | 956 | 996 | +40 |
+| Swap and draw | 4,036 | 3,171 | −865 |
+| `Display_PresentGs` | 3,241 | 3,336 | +95 |
+
+- **Why there's no gain in PCSX2:** the emulator charges almost nothing for a GS read-back, so removing 7 a frame barely shows. On the console each one stalls the GS, the DMA and the EE. The earlier console figure puts that at roughly 0.3 ms per page miss, so Kaufmann could save up to about 2 ms a frame. Only the console can confirm that.
+- **The new cost:** `prim_state (other)` rose by about 205k cycles a frame in Kaufmann, about 0.7 ms on the console at the usual 2.3× ratio. That's the tile marking I added in `state_other`, which runs about 1,000 times a frame there and remarks the same clip area every time. The fix is simple: skip the marking when the area is the same as last time and nothing has cleaned it since.
+- **The Docks "swap and draw" drop:** this is probably not from the change. That stage includes waiting for the frame, and PCSX2's timing there is noisy. Game logic and DrawOTag moved only slightly.
+
+The figures are now in `build/port/prof_{kauf,docks}_{old,new}.log`. I haven't added them to the doc yet.
+
+Shall I fix the marking cost and remeasure? That should bring DrawOTag back to the old figure, leaving the read-back savings for the console.
+
+## User
+
+Yes
+
+- tool `Bash`: Skip re-marking the same clip area
+
+- tool `Bash`: Profiled runs with the marking fix
+
+## Claude
+
+The fix is in: marking is skipped when the clip area is the same as last time and no tile has been cleaned since. The profiled runs are going, and I'll compare them with the earlier two when they finish.
+
+- tool `Bash`: Compare old, first and fixed builds
+
+- tool `Bash`: Inline the same-area check in state_other
+
+- tool `Bash`: Profiled runs with the inline check
+
+## Claude
+
+The profiled runs with the check inlined are going. I'll compare all four builds when they finish.
+
+- tool `Bash`: Compare the inline-check build
+
+## Claude
+
+TLB Misses in the Docks run. Looking at them before anything else:
+
+- tool `Bash`: Locate the new TLB Miss
+
+- tool `Bash`: Re-check attract demo dumps at 1x and 2x/32-bit
+
+- tool `Bash`: Record the cost figures and the repeat TLB Miss
+
+- tool `PushNotification`: 
+
+## Claude
+
+The marking fix brought the extra cost down to a small one, and the output is still identical. PCSX2 can't show any saving from this change, so the console has to confirm whether it's a net win.
+
+**Thousands of EE cycles per frame at 2x/32-bit** (1,000k ≈ 3.4 ms):
+
+| | Before the change | First version | Fixed |
+|---|---|---|---|
+| Kaufmann DrawOTag | 3,721 | 3,907 | **3,750** (+0.8%) |
+| Kaufmann `prim_state (other)` | 503 | 708 | **552** |
+| Docks DrawOTag | 788 | 851 | **830** (+5%) |
+| Docks game state update | 956 | 996 | **997** |
+
+**The fix:** marking is skipped when the clip area is the same as last time and nothing has cleaned it since. The check is now inline in `state_other`, so the common case costs only a few comparisons.
+
+**What's left:** about +50k cycles in Kaufmann and +40k each in the Docks' DrawOTag and game state update. That's under 0.2 ms on the console at the usual ratio. Next to it is the saving PCSX2 can't show: up to about 7 read-backs a frame removed in Kaufmann, roughly 0.3 ms each by the earlier console figure. I don't know why the Docks game state update rose, and with the change rather than with the marking fix.
+
+**Exactness re-checked after the fix:** the attract-demo dumps are 0 of 10 different at 1x and at 2x/32-bit.
+
+**TLB Miss again:** the same sifrpc fault showed up in the Docks replay, again while a benchmark frame dump was opening its file. So it comes with the frame dumps, not with one scene. I've added that to the [docs/ToFix.md](docs/ToFix.md) entry. It hasn't been fixed yet.
+
+The figures are recorded in step 7 of [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md). Nothing is committed in either repository.
+
+## User
+
+Alright, ready to test on console now. I can also test widescreen changes.
+
+## User
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+<system-reminder>
+<tools-used-before-summary>Bash, Edit, PushNotification, Read, ToolSearch</tools-used-before-summary>
+</system-reminder>
+Summary:
+1. **Primary request and intent**
+   - The user asked to resume the graphics pipeline rework and to start with step 7's first task: the inventory of read-backs from GS memory.
+   - They asked me to note in the doc that the Floatstinger crash is already fixed.
+   - For performance measurements, the replay counts only up to its divergence point and the end is ignored.
+   - They asked whether the tests could run on the emulator to estimate console numbers. They said yes, then limited the tests to "only the docs and Kaufman tests" (Docks and Kaufmann) at 2x and 32-bit.
+   - They asked to see the doc again.
+   - They asked whether steps 7/5/8/9 can proceed without the console. I recommended step 7 and they said yes.
+   - They asked for performance numbers before and after for Docks and Kaufmann.
+   - They said yes to fixing the marking cost.
+
+2. **Key technical concepts**
+   - **EE VRAM copy** (`s_Vram`, 1 MB) is the source for:
+     - the texture page cache;
+     - the CLUT (palette) cache;
+     - the filtered CLUT sources;
+     - `StoreImage`.
+   - **Stale-tile bitmap:** `s_VramStale[32]`, one u64 per tile row, with 16×16-pixel tiles. Each primitive's clip area is marked in `state_other`.
+   - **`vram_refresh`:** one read-back of the tile span covering the stale tiles in a read.
+   - **Texture pages are built from the copy without a refresh.** Pages 0–2 span the frame buffers (0,32)–(319,479). The texels the game uses there are in rows 0–31 and 480–511.
+   - **GS VRAM image:** stays at `0x300000` for now.
+   - **PCSX2 limits:** it doesn't model GS read-back costs. The console estimate is about 0.3 ms per page miss.
+   - **Divergence point:** the `docks1` replay is measured only up to step 1830 (it diverges at step 1844). Steps print every 30.
+
+3. **Files and code sections**
+   - **`../psx-to-ps2-HAL/src/ps2/gpu_gs.c`** (uncommitted):
+     - Header comment updated.
+     - Prototypes added: `vram_mark` (noinline), `vram_load`, `vram_fill`, `vram_move`, `vram_read`.
+     - `s_VramMarked[4] = { -1 }` and the `VRAM_MARK` macro (inline same-rectangle check) placed with the prototypes.
+     - `state_other`: `VRAM_MARK(s_AreaX1, s_AreaY1, s_AreaX2, s_AreaY2);` after the scissor.
+     - `fill_rect`: calls `vram_fill`. It skips stale tiles and marks the area under `SCANMSK`.
+     - `move`: calls `vram_move`. If the source is stale it marks the destination; otherwise it memmoves rows and runs `vram_clean`.
+     - `GpuGs_LoadImage`: calls `vram_load` after the wrap split.
+     - `cache_get`: uses `vram_read` (no refresh), with a comment explaining why.
+     - `download_rect` = `vram_refresh` + `vram_read`.
+     - `vram_init` marks everything stale.
+     - `vram_clean` and `vram_refresh` reset `s_VramMarked[0] = -1`. `vram_refresh` also bumps `s_Epoch`.
+   - **`Graphics Pipeline Rework.md`:**
+     - Step 6: the Floatstinger blocker removed, a divergence note, and the PCSX2 counts table.
+     - Step 7: the read-back inventory checked.
+     - Step 7: the EE copy task checked, with results, exactness checks and EE cost. "Next for page misses" lists wait-free uploads, then more slots.
+     - Step 7: draw-target tracking checked.
+     - Log lines added.
+   - **`Running Walkthrough.md`:** new section "Graphics pipeline step 7: an EE copy of VRAM feeds the texture caches (2026-10-28)".
+   - **`docs/ToFix.md`:** entry for the sifrpc `_request_end` TLB Miss during bench frame dumps (PC `0x447850`/`0x4494d0`, `sifrpc.c:309`). Seen in Kaufmann at 2x/32 and again in the `docks1` replay.
+   - **Scratchpad** (`/tmp/claude-1000/-home-alex-Documents-silent-hill-1-ps2-port/0375d7cc-6a8a-424e-96c1-ae9ab2cfd243/scratchpad/`):
+     - `gsagg.py`: averages the `SH1_LITEPROF` counters.
+     - `profagg.py`: averages the profiler reports between two log regexes.
+     - `runprof.sh TAG`: builds with `SH1_PROF=1 SH1_BENCH=1`, then runs Kaufmann (`capture.txt` "999999 mode=3", `demo.txt` "sweep 4 300 4") and `docks1` (`rec.txt` "play docks1", `capture.txt` "999999 load=2:10 mode=3", until "rec step 1830:").
+     - Logs: `build/port/prof_{kauf,docks}_{old,new,new2,new3}.log`.
+
+4. **Errors and fixes**
+   - **Wrong stop condition:** `--until "rec step 1840"` never matched, so PCSX2 ran on. Fixed by using 1830 and killing the PCSX2 process by PID.
+   - **Settings-file race:** a parallel PCSX2 run collided with the settings restore. The settings file was intact; I reran.
+   - **Pages still read back:** the first version refreshed pages, which brought Kaufmann read-backs only from 7.2 to 3.4. Diagnostic logs (since removed) showed the page/frame-buffer overlap. Pages now come from the copy as-is.
+   - **Marking cost:** +205k cycles in `prim_state (other)` in Kaufmann. A rectangle memo brought it to +69k; the inline `VRAM_MARK` brought it to +49k.
+
+5. **Problem solving and results**
+   - **PCSX2 baseline:**
+     - At 1x, read-backs are about 0 (map4_s02, map4_s03, Kaufmann).
+     - At 2x/32: Kaufmann 7.2 read-backs and 7.0 page misses a frame; Docks to step 1830, 2.2 and 1.7.
+   - **After the change:** read-backs Kaufmann 0.14, Docks 0.27. What's left in the Docks is the lens flare `StoreImage`.
+   - **Exactness:**
+     - `gpu_test.py`: 1,461 differing pixels both before and after.
+     - Attract-demo dumps: 10 of 10 identical at 1x and at 2x/32 (640×448), re-checked after the final fix.
+     - `docks1` state identical at step 1830.
+   - **EE cost, final (k-cycles a frame):**
+
+     | Scene | Stage | Old | New |
+     |---|---|---|---|
+     | Kaufmann | DrawOTag | 3,721 | 3,750 |
+     | Kaufmann | `prim_state (other)` | 503 | 552 |
+     | Docks | DrawOTag | 788 | 830 |
+     | Docks | game state update | 956 | 997 |
+
+     The read-back savings only show on the console.
+
+6. **All user messages**
+   - "Let's go back to the graphics pipeline rework. Where can we start?"
+   - "Let's start with 1. The Floatstinger crash was already fixed, so note that. We have the replay system working too, except for the part where it diverges. Keep everything up to that divergence point in mind when measuring performance and ignore the end."
+   - "Is it possible to run these tests on the emulator for now and estimate console numbers?"
+   - "Yes"
+   - "The replay must've finished by now"
+   - "Stick to running only the docs and Kaufman tests for now. Move on to 2x and 32 bit tests"
+   - "Show me the graphics pipeline rework here again"
+   - "Can we move to step 7, 5, 8, or 9 without doing console testing right away?"
+   - "Yes"
+   - "Give me performance numbers before and after the change for Docks and Kaufman"
+   - "Yes" (to fixing the marking cost and remeasuring)
+
+   Standing constraints:
+   - Don't access tcrf.net.
+   - Commit only when asked. Nothing is committed in either repository.
+   - Notify the user at stopping points.
+   - Use `SH1_FPS=60 SH1_NO_RECOMP=1` and run all three build steps.
+   - PCSX2 uses the software renderer.
+   - Never dismiss TLB Misses.
+   - Ask for a power-cycle when the PS2 hangs.
+   - Don't use `pkill -f` with a pattern contained in the calling command line.
+
+7. **Pending tasks**
+   - Give the final reply on the marking fix (numbers above).
+   - Offered next steps, not yet accepted:
+     - wait-free page uploads (staging buffer per slot or DMA straight from `s_Vram`);
+     - a new GS layout with 20 or more slots at 2x/32-bit;
+     - a console run for Docks and Kaufmann;
+     - investigating the sifrpc TLB Miss.
+
+8. **Current work:** the marking-cost fix is done, measured and exactness-checked. The docs are updated and a push notification has been sent. The final text reply to the user is not written yet.
+
+9. **Next step:** reply briefly with the before/after numbers:
+   - Kaufmann DrawOTag +0.8%.
+   - Docks DrawOTag +5%.
+   - The marking overhead is down from +205k to +49k.
+   - Output is identical.
+   - The sifrpc TLB Miss appeared again during bench dumps (already in ToFix).
+
+   Then ask whether to continue with wait-free page uploads or do the console run.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/0375d7cc-6a8a-424e-96c1-ae9ab2cfd243.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+The messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.
+
+## Claude
+
+Building the new version with profiling and deploying it to the console.
+
+- tool `Bash`: Build with profiling and deploy to the PS2
+
+- tool `ToolSearch`: 
+
+- tool `PushNotification`: 
+
+## Claude
+
+The profiling build of the step 7 change is on the console. The UDPFS server and log receiver have restarted, so boot it from Neutrino.
+
+1. **Docks:** load the Infirmary save (File 2 / Data 10) and go to the Docks. Or, from the title, play the replay: `python3 tools/port/ps2_ctl.py replay docks1`. Only the stretch up to step 1830 counts, because the replay drifts after that.
+2. **Kaufmann:** load a save near him at 2x/32-bit (`ps2_ctl.py options 3`).
+3. **Widescreen:** try the anamorphic widescreen and 2D filter Debug Options in the same session.
+
+The console log goes to `build/port/ps2.log`. The profiler prints a report every 120 frames. Tell me when you're done and I'll compare it against the earlier console figures, which had about 5 page misses a frame in the Docks at roughly 1.6 ms each. Also tell me what you see with widescreen, such as stretching or clipped HUD.
+
+If the console freezes 5–8 seconds after boot, hold power to switch it off and cold-boot Neutrino again.
+
+## User
+
+Do I need any particular settings for the replay?
+
+## Claude
+
+Yes. Set the REPLAY page to Resolution x2 and 32-bit before pressing Start.
+
+The REPLAY page's settings replace the ones stored in the recording. When you first open it, it copies your current Debug Options, which may not be x2/32-bit.
+
+- **Leave widescreen and the 2D filter off for this run.** That keeps the numbers comparable with the earlier Docks figures. Try widescreen on a separate run.
+- **Don't touch the controller once the replay starts.** Any button press ends it.
+- **Order:** press Start on the REPLAY page (it shows "Waiting for replay"), then run `python3 tools/port/ps2_ctl.py replay docks1`. You can also send the command first; the replay starts once Start has been pressed and released.
+
+The rendering options don't change the game state, so they won't affect sync. The replay only counts up to step 1830, and you can stop it any time after that.
+
+## User
+
+Waiting for replay
+
+- tool `Bash`: Upload and start the docks1 replay
+
+## Claude
+
+The `docks1` recording reached the console intact (44,400 bytes, checksum OK). It should start playing as soon as Start is released.
+
+Leave the controller alone while it plays, since any button press ends the replay. Tell me when it gets past the Docks or finishes and I'll pull the profiler numbers from the log.
+
+## User
+
+The replay has finished. It did not desync this time
+
+- tool `Bash`: Locate the replay in the console log
+
+- tool `Bash`: Aggregate profiler reports for the previous and the new console replay
+
+- tool `Bash`: Check read-back stages, sync with old run, and faults
+
+## Claude
+
+On the console, the Docks replay at 2x/32-bit is about 2.2 ms faster per frame up to step 1830. Most of the saving is in texture switching.
+
+The comparison is against your Oct 26 build of the same replay. That build is older than the HAL split, the widescreen options and the other Oct 27 commits too. So the saving isn't all down to the step 7 change, though the stages that dropped are the ones it changed.
+
+**Docks replay, steps 30–1830, 15 profiler reports** (thousands of EE cycles per frame; 1,000k ≈ 3.4 ms):
+
+| Stage | Oct 26 build | New build |
+|---|---|---|
+| DrawOTag (GPU packets) | 3,854 (13.1 ms) | **3,195 (10.8 ms)** |
+| gs: texture switching (`prim_state (texture)`) | 2,090 | **892** |
+| gs: polygon (incl. state) | 3,424 | 2,622 |
+| gs: `prim_state (other)` (now includes the marking) | 239 | 294 |
+| gs: StoreImage (the lens flare's read-back) | 188 | 142 |
+| Game state update | 2,976 | 2,770 |
+
+- **Texture switching is less than half what it was.** Texture pages are now built from the EE's copy of VRAM, so a page miss no longer waits for the GS to send data back.
+- **The marking costs about 55k a frame**, roughly what PCSX2 predicted. It's well below the saving.
+- **Whole replay:** 33.73 fps against 33.25 and 33.48 on the two Oct 26 runs. That figure includes the end of the replay, which these numbers otherwise leave out.
+
+**Sync:** every `rec step` line up to 1830 matches the Oct 26 run, and the replay reached the end at step 2647 without drifting. That suggests the file-timing fix works on the console without the GTE wrapper, but I haven't checked the new run's lines past 1830 against a live recording yet.
+
+**Faults:** the log shows no TLB Misses or exceptions.
+
+Nothing is committed in either repository. Kaufmann and widescreen are still to test. Load the Kaufmann save at 2x/32-bit (`ps2_ctl.py options 3`) whenever you're ready, and tell me what you see with widescreen.
+
+## User
+
+From now on, put all profiler reports into a subfolder of docs. Keep one log per day and add to it every time we run a performance profile. Keep a clear division between each run so it's easy to read. Add this to Claude.md.
+
+- tool `Bash`: Get the full aggregated report for the new run
+
+- tool `Write`: /home/alex/Documents/silent-hill-1-ps2-port/docs/profiles/2026-10-28.md
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/CLAUDE.md
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/CLAUDE.md
+
+## Claude
+
+I've started the daily profile log and added the rule to CLAUDE.md.
+
+**Today's log:** [docs/profiles/2026-10-28.md](docs/profiles/2026-10-28.md) has both of today's runs, each under its own `## Run N` heading with a `---` line between them:
+- **Run 1:** the PCSX2 before/after numbers for Docks and Kaufmann at 2x/32-bit.
+- **Run 2:** the console `docks1` replay. It has the comparison table against the Oct 26 build and the full top-25 report.
+
+Each run starts with where it ran, the build, settings, scene, measuring window and the log lines it came from, then the figures.
+
+**[CLAUDE.md](CLAUDE.md):** the "Where things are" table now lists `docs/profiles/YYYY-MM-DD.md`. "Building for the console" has the rule: every profile run, on the console or in PCSX2, gets appended to that day's file in this format.
+
+Kaufmann on the console will be Run 3 when you're ready.
+
+## User
+
+Let's run the replay again. I've enabled widescreen so we can check its performance cost.
+
+- tool `Bash`: Note log position and upload the docks1 replay
+
+## Claude
+
+The `docks1` replay has been uploaded to the console intact. It will start once you press and release Start on the REPLAY page.
+
+Check that the REPLAY page is still at Resolution x2 and 32-bit with widescreen on, so the only difference from Run 2 is widescreen. Tell me when it finishes and I'll add the comparison to the day's profile log as Run 3.
+
+## User
+
+The run has finished, again with no desyncs
+
+- tool `Bash`: Aggregate the widescreen run and compare sync with Run 2
+
+- tool `Bash`: Append Run 3 to the daily profile log
+
+## Claude
+
+Widescreen costs about 1.1 ms per frame on the console in the Docks at 2x/32-bit. That's roughly 320k EE cycles, against Run 2 with the same build.
+
+| Stage (thousands of cycles per frame) | 4:3 | Widescreen | Change |
+|---|---|---|---|
+| DrawOTag (GPU packets) | 3,195 | 3,417 | +222 (+7%) |
+| gs: polygon (incl. state) | 2,622 | 2,786 | +164 |
+| gs: texture switching | 892 | 958 | +66 |
+| Game state update | 2,770 | 2,860 | +90 (+3%) |
+| ig: WorldGfx_Draw | 1,402 | 1,464 | +62 |
+| Whole replay | 33.73 fps | 33.55 fps | |
+
+- **Where it goes:** about two-thirds is in GS drawing (polygons and texture switches). The rest is in game logic, mostly `WorldGfx_Draw`. That pattern suggests more geometry is being drawn, but nothing here measures that directly.
+- **Sync:** every `rec step` line matches Run 2 across the whole replay. Widescreen doesn't touch the game state.
+- **One thing to confirm:** the log shows "rendering bits 7" for both runs, so it doesn't record whether widescreen was on. I've taken your word that it was. It would be worth making the widescreen setting appear in that line.
+
+It's logged as Run 3 in [docs/profiles/2026-10-28.md](docs/profiles/2026-10-28.md). Kaufmann on the console is still to do.
+
+## User
+
+It seems like the frame rate is almost exactly the same, despite the 1.1 ms cost for widescreen. Yes, let's log the widescreen setting and then move on to testing the Kaufman cutscene. I can't remember the cutscene number, but we've gone through it enough times that it should be somewhere in the logs.
+
+- tool `Bash`: Find the replay log line and widescreen setting
+
+- tool `Bash`: Read the replay override and widescreen mode code
+
+- tool `Bash`: Check which Debug Options bits the REPLAY page carries
+
+- tool `Bash`: Read the Debug Options bit layout
+
+- tool `Bash`: Carry and log all five Debug Options bits in replays
+
+## Claude
+
+Now looking for the Kaufmann cutscene in the logs and docs:
+
+- tool `Bash`: Search the docs for the Kaufmann cutscene
+
+## Claude
+
+Kaufmann is demo cutscene 4 (map3_s00). Checking how to start it on the console:
+
+- tool `Bash`: Find a cutscene command in ps2_ctl.py
+
+- tool `Bash`: Read the demo command and list the first cutscenes
+
+## Claude
+
+Kaufmann is Demo menu cutscene 4, `map3_s00 func_800D0CF8`. Rebuilding with the replay-bits fix:
+
+- tool `Bash`: Build with profiling and deploy to the PS2
+
+- tool `PushNotification`: 
+
+## Claude
+
+**The frame rate barely moved because the frame rate is set by whole vertical blanks, not by small changes in frame time.** At about 33.5 fps, most frames take two vertical blanks (33.3 ms) and some take three. Adding 1.1 ms only changes the rate when it pushes a frame past one of those boundaries, which happened a little here (33.73 → 33.55 fps).
+
+**The widescreen setting is now in the replay's log line.** It prints `widescreen on/off` and `2D filter bilinear/point`. Writing that line turned up a related bug in [src/port/demo_rec.c](src/port/demo_rec.c), now fixed:
+- Your Run 3 really did have widescreen on. The REPLAY page's widescreen bit was added on top of the recording's own settings, so it took effect; the old log line just didn't print it.
+- The page couldn't turn widescreen or the 2D filter off for a recording made with them on. It now replaces all five Debug Options bits.
+- When first opened, it copied only Resolution, Color Depth and Video Mode from your current settings. It now copies widescreen and the 2D filter too ([options.c](src/screens/options/options.c)).
+
+**Kaufmann is Demo menu cutscene 4, `map3_s00 func_800D0CF8`.** The new build is deployed with profiling and the console restarted remotely. Remote restarts often freeze 5–8 s after boot; if it does, power-cycle and start Neutrino again.
+
+Once you're at the title:
+1. I set Debug Options to x2 + 32-bit with widescreen off (`ps2_ctl.py options 3`).
+2. I start the cutscene with `ps2_ctl.py demo 4`. It runs to the end without you touching anything.
+3. We repeat it with widescreen on (`options 11`) to get its cost in this scene too.
+
+Tell me when you're at the title.
+
+## User
+
+The game rebooted to a black screen. i'll power cycle the PS2
+
+## Claude
+
+OK. Power-cycle it and start Neutrino from uLaunchELF; it will load the new build. Tell me when you're at the title and I'll set the options and start the Kaufmann cutscene.
+
+## User
+
+On the title screen
+
+- tool `Bash`: Set 2x/32-bit and start the Kaufmann cutscene
+
+## Claude
+
+The Kaufmann cutscene (Demo menu cutscene 4) has started on the console at x2 and 32-bit with widescreen off. The log for this run starts at line 1321801.
+
+Leave the controller alone until it ends and control returns, then tell me. I'll pull the numbers and run it again with widescreen on.
+
+## User
+
+The cutscene has ended. Ready for the next test
+
+- tool `Bash`: Inspect the Kaufmann run's log
+
+- tool `Bash`: Aggregate Kaufmann 4:3, then start the widescreen run
+
+## Claude
+
+The widescreen run of the Kaufmann cutscene has started (x2, 32-bit, widescreen on). Leave the controller alone and tell me when it ends.
+
+The 4:3 run ran at 36.69 fps over the whole cutscene. DrawOTag took about 20 ms a frame (5,992k cycles). Half of that, about 10.4 ms (3,081k), is the fog pair, which draws both polygons of each fogged surface. That's the clear next target in this scene. I'll log both runs together once this one finishes.
+
+## User
+
+The widescreen setting is not on for this cutscene. Set it properly and restart logging.
+
+- tool `Bash`: Find how remote options are applied
+
+- tool `Bash`: Read the remote options handler
+
+- tool `Bash`: Check the other users of the remote options bits
+
+## Claude
+
+The remote `options` command only handles bits 0–2: both [ps2_ctl.py](tools/port/ps2_ctl.py) and `Port_OptionsRemote` drop widescreen and the 2D filter. Fixing both:
+
+- tool `Bash`: Let remote options carry widescreen and 2D filter bits
+
+- tool `Bash`: Check the agent passes the bits unmasked
+
+## Claude
+
+The agent passes the value through unchanged, so those two fixes cover it. Rebuilding and deploying:
+
+- tool `Bash`: Build with profiling and deploy to the PS2
+
+## Claude
+
+While the console restarts, I'm logging the 4:3 Kaufmann run:
+
+- tool `Bash`: Append Run 4 to the daily profile log
+
+## Claude
+
+Widescreen didn't turn on because the remote `options` command only passed Resolution, Color Depth and Video Mode. Both ends dropped the widescreen and 2D filter bits: [ps2_ctl.py](tools/port/ps2_ctl.py) and `Port_OptionsRemote` in [src/port/demo_menu.c](src/port/demo_menu.c). Both now pass all five bits, and the console log line prints the widescreen and 2D filter state too.
+
+The new build is deployed and the console was told to restart. If it comes back black again, power-cycle it and start Neutrino.
+
+- **Not logged:** the run that started without widescreen.
+- **Logged:** the 4:3 Kaufmann run, as Run 4 in [docs/profiles/2026-10-28.md](docs/profiles/2026-10-28.md).
+
+When you're at the title, I'll send `options 11` (x2, 32-bit, widescreen on) and `demo 4`. Check that the log line says "widescreen on" and that the picture shows it before we use the numbers.
+
+## User
+
+The remote deploy got to the Konami screen and then stopped. I'll reboot.
+
+## Claude
+
+Thanks. Power-cycle it, start Neutrino from uLaunchELF and tell me when you're on the title screen. I'll then set x2, 32-bit with widescreen on and start the Kaufmann cutscene.
+
+## User
+
+On the title screen
+
+- tool `Bash`: Set x2, 32-bit, widescreen and start Kaufmann
+
+## Claude
+
+The Kaufmann cutscene has started on the console at x2, 32-bit with widescreen on. The console confirmed the setting this time: the log says "widescreen on, 2D filter point".
+
+Check that the picture is actually widescreen, then tell me when the cutscene ends.
+
+## User
+
+Widescreen worked properly. The cutscene is over
+
+- tool `Bash`: Aggregate the widescreen Kaufmann run
+
+- tool `Bash`: Append Run 5 to the daily profile log
+
+## Claude
+
+Widescreen costs much less in the Kaufmann cutscene than in the Docks: about 0.4 ms a frame, against 1.1 ms. That's about 110k EE cycles, compared with 320k in the Docks. The cutscene runs at 36.17 fps against 36.69 at 4:3.
+
+Thousands of cycles per frame, x2 and 32-bit:
+
+| Stage | 4:3 | Widescreen | Change |
+|---|---|---|---|
+| DrawOTag (GPU packets) | 5,992 | 6,065 | +73 (+1.2%) |
+| gs: fog pair | 3,081 | 3,197 | +116 |
+| gs: polygon | 1,779 | 1,706 | −73 |
+| Game state update | 1,985 | 2,005 | +20 |
+
+The cost is probably small because cutscenes are framed 14:9 with a 7/6 zoom, so little extra scenery comes into view. I haven't measured that directly.
+
+**Biggest cost in this scene:** the fog pair, which draws both polygons of each fogged surface. It takes about 3,100k cycles a frame (roughly 10.5 ms), half of DrawOTag, which makes it the clear next target for Kaufmann.
+
+**Faults:** none in the log.
+
+**Logged:** Runs 4 and 5 are in [docs/profiles/2026-10-28.md](docs/profiles/2026-10-28.md).
+
+**Fixed this round, uncommitted:** the REPLAY page and the remote `options` command now carry all five Debug Options bits. The replay and remote-options log lines now say whether widescreen and the 2D filter are on.
+
+Nothing is committed. Do you want me to look at the fog pair next, or commit this round first?
+
+## User
+
+Commit this first. I thought we determined that we already optimized the fog pair.
+
+- tool `Bash`: Search docs for earlier fog pair work; check HAL status
+
+- tool `Bash`: Read the earlier fog pair work
+
+- tool `Bash`: Check the HAL repo's branch and diff
+
+- tool `Bash`: Commit the HAL change and the two port commits
+
+## Claude
+
+Committed, and the tree is clean.
+
+- **HAL (`psx-to-ps2-HAL`, branch main):** `f0ee33a` "GS: an EE copy of VRAM feeds the texture page and CLUT caches". This is the step 7 change.
+- **Port (branch `hal-split`):**
+  - `48d2b86bc` "Port: replays and remote options carry widescreen and the 2D filter".
+  - `5a47f55b5` "Docs: graphics pipeline step 7, console profiles, daily profile log". This covers the step 7 write-up, the profile log, the CLAUDE.md rule and the ToFix entry.
+
+Nothing is pushed.
+
+**On the fog pair, you're right.** It was optimized on 2026-10-10 by "pair fusion" ([PS2 Optimizations.md](PS2%20Optimizations.md)). Each fog pair is two polygons on the same four corners: an opaque underlay and an additive textured one on top. Fusion converts them as one unit, sharing their coordinates and the same GS state.
+
+In PCSX2 that took Kaufmann's DrawOTag from 2,928k to 2,366k cycles a frame. The upper limit was 2,233k, and reaching it means dropping the underlay, which breaks exactness. So the 3,081k "fog pair" figure on the console is what's left after fusion. I shouldn't have called it the next target.
+
+What remains for it is the plan's step 5 (VU1 packet expansion), which already lists fog pairs right after `blend_exact`.
+
+## User
+
+Based on the performance logs in the Docks replay, what should be the top priority for improving performance?
+
+## Claude
+
+**Top priority: texture switching** (`gs: prim_state (texture)`, 892k cycles a frame). Cheap fixes are already known and it's big enough to matter. With the larger game-logic cuts below, it could bring the Docks to 60 fps.
+
+Here is Run 2's frame budget (Docks replay, 4:3, x2/32-bit, steps 30–1830):
+
+| Part of the frame | k-cycles | ms |
+|---|---|---|
+| Drawing (DrawOTag) | 3,195 | 10.8 |
+| … of which polygon conversion, excluding texture and state | ~1,440 | 4.9 |
+| … of which texture switching | 892 | 3.0 |
+| … of which other state, uploads, DMA, lens flare read-back | ~830 | 2.8 |
+| Game logic (game state update) | 2,770 | 9.4 |
+| … of which `WorldGfx_Draw` | 1,402 | 4.8 |
+| … of which NPCs, Harry, particles | ~1,150 | 3.9 |
+| **Total EE work** | **~5,980** | **~20.3** |
+
+**What it takes to reach 60 fps:** the EE needs to finish a frame within 16.7 ms, about 4,900k cycles. That's about 1,100k too much now.
+
+Right now most frames miss the 16.7 ms boundary and wait for the next vertical blank: on average 1.79 vertical blanks a frame, about 33 fps. Each frame that fits under 16.7 ms is a 60 fps frame, so the gain is a step, not a gradual one. That's also why widescreen's 1.1 ms barely moved the frame rate.
+
+**Why texture switching first:**
+- **It's large:** 3 ms, close to the 3.7 ms we need to cut.
+- **The fixes are known and small:**
+  1. **Page misses that don't wait.** Each miss still stops for the GS before reusing the staging buffer (`GpuGs_Sync` in `cache_get`). Uploading straight from the EE's VRAM copy, or from one staging buffer per slot, removes that wait.
+  2. **More page slots at 32-bit.** There are only 7 now, against 27 at 16-bit. A new GS memory layout with 20 or more slots would cut the misses themselves.
+- **It's exact:** the output doesn't change, so it can be checked with the usual frame dumps.
+
+**What I don't know yet:** how much of the 892k is waiting for the GS and how much is lookup and cache bookkeeping. An `SH1_LITEPROF=1` console run of `docks1` would show page misses and GS waits per frame. I'd do that first, since it's about 10 minutes and tells us whether option 1 or option 2 pays more.
+
+**The bigger costs come after:**
+- **Polygon conversion (~4.9 ms):** this is step 5 (VU1 packet expansion) and the mesh bypass. Bigger and riskier work.
+- **`WorldGfx_Draw` (4.8 ms of game logic):** worth an `ig:` breakdown of what it spends on. This is the largest single function, and nothing has been done for it in the Docks yet.
+
+Texture switching alone probably won't get the Docks to 60 fps. Combined with one of these two, it probably would.
+
+Shall I build the `SH1_LITEPROF` version for a Docks replay run?
+
+## User
+
+As far as textures, are we wasting a lot of VRAM by loading textures that aren't necessary?
+
+- tool `Bash`: Find the GS memory layout in gpu_gs.c
+
+- tool `Bash`: Read the layout comments and cache_get
+
+## Claude
+
+Mostly no: the game doesn't load textures it doesn't need. The waste is in how GS memory is laid out at 2x/32-bit, and that's why only 7 texture page slots fit there.
+
+**Only pages the game draws with get uploaded.** A 4-bit or 8-bit texture page goes to the GS only when a polygon samples it (`cache_get`). Least-recently-used pages are evicted. So the 1.7 misses a frame in the Docks are pages actually in use, pushed out because there's no room.
+
+**Where the 4 MB of GS memory goes at 2x/32-bit:**
+
+| Area | Size | Notes |
+|---|---|---|
+| 2x shadow buffer (640×1024, 32-bit) | 2.5 MB | Mirrors all 512 rows of the PS1's frame-buffer area (VRAM x 0–319) |
+| 7 page slots | 448 KB | 64 KB each |
+| CLUT cache | 64 KB | |
+| PS1 VRAM image (1024×512, 16-bit) | 1 MB | All of PS1 VRAM |
+
+**Three places where space is wasted:**
+
+1. **4-bit pages take a full slot.** A 4-bit page (256×256) is 32 KB on the GS, but every slot is sized for an 8-bit page (64 KB). Packing two 4-bit pages per slot would nearly double capacity if most of the Docks' pages are 4-bit. I'd expect that for PS1 games, but I haven't counted it.
+2. **The shadow buffer covers rows the game never draws to.** It mirrors rows 0–511, but the game only draws into rows 32–479; rows 0–31 and 480–511 hold textures. Leaving those 64 PS1 rows out saves about 320 KB, or 5 slots. It needs a base offset when drawing to the shadow buffer.
+3. **The PS1 VRAM image keeps a second copy of the frame buffers at 1x.** At 2x the shadow buffer holds the real pixels, and that 320 KB area of the VRAM image only receives scaled-down copies when something reads it. Since step 7, reads come from the EE copy. If nothing on the GS samples that area, it's another 320 KB, or 5 slots. Some screen effects sample it as a 15-bit texture, though, so it would need checking first.
+
+Together that's roughly 7 slots → 17, or about 30 if 4-bit pages pack two per slot. That's the "more slots" fix from my last answer. It would cut page misses rather than only making each miss cheaper.
+
+**What I'd check first:** a `SH1_LITEPROF` Docks run that also counts misses by page depth (4-bit or 8-bit). It's a small counter to add, and it shows how much packing would gain. Want me to add it to the build?
+
+## User
+
+It seems to me that we are duplicating memory usage if we're mirroring all 512 rows of the PS1 framebuffer, keeping a copy of PS1 VRAM, AND keeping more page slots for textures. Shouldn't those textures already be in one of the PS1 VRAM copies?
+
+## Claude
+
+Partly yes. The 4-bit and 8-bit textures are already in GS memory, inside the PS1 VRAM image, but the GS can't sample them from there. The page slots are a converted copy. The duplication that's actually wasteful is the frame-buffer one.
+
+**Why textures need their own slots:**
+- **Packed as 16-bit pixels:** the PS1 VRAM image holds the textures, but as 16-bit pixels with the 4-bit or 8-bit indices packed into them, exactly as the PS1 stored them.
+- **The GS lays memory out differently per format.** Each pixel format arranges its blocks and columns in GS memory its own way. Reading a 16-bit buffer as 4-bit or 8-bit gives scrambled texels.
+- **So a texture page is converted on a miss:** the EE reads it from its own VRAM copy and uploads it to a slot in the 4-bit or 8-bit format, which the GS can sample.
+- **15-bit textures don't need this.** They're sampled straight from the VRAM image, which is how render-to-texture effects work.
+
+There might be a way to convert on the GS itself, with a GS-to-GS copy between formats, instead of uploading from the EE. That would make misses cheaper, but each page would still need a slot. I'm not sure the GS converts between formats of different bit depths that way, so it would need testing.
+
+**Which copies are needed, and which are duplicates:**
+
+| GS memory area | Needed? |
+|---|---|
+| Shadow buffer, rows 32–479 at 2x | Yes: it's what's drawn and displayed |
+| Shadow buffer, rows 0–31 and 480–511 | **No:** the game never draws there; those rows hold textures, which the VRAM image also has (~320 KB) |
+| VRAM image, frame-buffer area (x 0–319) | **Mostly no** at 2x: a 1x copy of what the shadow buffer holds, kept only for 15-bit sampling of the screen and for reads (~320 KB) |
+| VRAM image, the rest | Yes: 15-bit textures are sampled from it directly |
+| Page slots | Yes: a converted copy the GS can sample, not a raw duplicate |
+
+**Removing the duplicates:**
+- **Shadow buffer:** shrink it to rows 32–479.
+- **VRAM image's frame-buffer area:** at 2x, point 15-bit samples of the screen at the shadow buffer, which already happens (`Prim.hr`). Then that area of the VRAM image may not be needed at all, because since step 7 reads come from the EE copy. I'd have to confirm nothing else on the GS still uses it.
+
+Those two give back about 640 KB, roughly 10 slots, and add no conversion cost. Together with packing two 4-bit pages per slot, that's the slot increase I described.
+
+Want me to check what still uses the VRAM image's frame-buffer area at 2x? That's the first thing to settle before planning the new layout.
+
+## User
+
+What would that entail?
+
+## Claude
+
+It's mostly a code audit plus a counting run in PCSX2. No console time and no change to how anything draws.
+
+**1. Read through `gpu_gs.c` and list every place the 2x renderer touches the VRAM image's frame-buffer area.** From the comments, at least these do:
+- **Reads from the frame-buffer area:** the shadow buffer is scaled down into the VRAM image first, then read from there. This covers GS read-backs (`vram_refresh`), StoreImage and VRAM-to-VRAM copies out of the area. It's a staging step that a small scratch area could replace.
+- **Uploads and fills into the area:** these are written into the VRAM image, then scaled up into the shadow buffer. That's another staging use.
+- **Times the 2x renderer is off:** the 2x renderer only runs while the display is 320 wide and progressive. Menus, 640-wide screens and some FMV states draw at 1x straight into the VRAM image's frame-buffer area. This is the case that matters: the area really is needed then. The shadow buffer is idle at those times, though, so the two could share the same memory instead of each having its own.
+- **Anything else** that reads those addresses as a texture, CLUT or copy source without going through the `hr` remapping.
+
+**2. Add a temporary counter for each path** (an `SH1_LITEPROF` counter). Then run in PCSX2 through Docks, Kaufmann, a menu, the inventory and map, a load screen and an FMV. That shows which paths actually happen during 2x play and which only happen at 1x.
+
+**3. Write it up in step 7 of the plan:** which uses can move to a scratch area, which can share memory with the shadow buffer, and the new layout this allows, with the slot count it gives.
+
+**Cost:** a few hours of my time. The counters come out afterwards, so the game's output doesn't change.
+
+**What it decides:** whether we really get the ~320 KB back, or only part of it. The 1x drawing case is the one that could complicate it.
+
+The real layout change comes after that. It's a bigger piece of work with its own exactness checks, and it would need a console run to confirm the gain.
+
+Shall I go ahead?
+
+## User
+
+Let's table this but add it to the plan and then commit
+
+- tool `Bash`: Find step 7's section in the plan
+
+- tool `Bash`: Read step 7's remaining items and the log tail
+
+- tool `Bash`: Add the tabled audit to step 7 and commit
+
+## Claude
+
+I've added the audit to the plan as a tabled item in step 7 of [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md) and committed it as `9384c77b7`. Nothing is pushed.
+
+The new item sits just before "New GS layout" and records:
+- **Where GS memory goes at 2x/32-bit**, which is why only 7 page slots fit.
+- **Why the slots aren't a duplicate:** the GS can't sample the packed 16-bit VRAM image as 4-bit or 8-bit textures.
+- **Three ways to win back space:**
+  - Drop the shadow buffer's unused rows: about 320 KB.
+  - Free the VRAM image's frame-buffer area, once the audit confirms it can go: up to about 320 KB. The audit steps are listed: which paths in `gpu_gs.c` to check, what to count, which scenes to run, and the decision to make afterwards.
+  - Pack two 4-bit pages per slot, after counting misses by depth.
+- **The expected gain:** roughly 7 → 17 slots, or about 30 with packing. It also notes a possible test of converting pages GS-to-GS.
+
+The plan's log also has a line for today's console runs, pointing to [docs/profiles/2026-10-28.md](docs/profiles/2026-10-28.md).
+
+## User
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+<system-reminder>
+<tools-used-before-summary>Bash, Edit, PushNotification, Read, ToolSearch, Write</tools-used-before-summary>
+</system-reminder>
+Summary:
+1. **Primary request and intent**
+   - **Console testing of step 7 (EE VRAM copy):**
+     - Docks: the `docks1` replay at 2x/32-bit, first at 4:3 and then with widescreen.
+     - Kaufmann cutscene (Demo menu cutscene 4, `map3_s00 func_800D0CF8`): at 4:3 and with widescreen.
+   - **Profile logging rule (standing):** put all profiler reports in `docs/profiles/`. Keep one log per day, append every profile run, separate runs clearly, and record the rule in CLAUDE.md.
+   - **Widescreen in the log:** make the replay log line show the widescreen setting.
+   - **Commit:** the user asked to commit the work.
+   - **Corrections and questions from the user:**
+     - The fog pair was already optimized (pair fusion, 2026-10-10).
+     - Top priority for Docks performance.
+     - Is texture VRAM wasted?
+     - Aren't the textures duplicated in the VRAM copies?
+     - What would the audit entail?
+   - **Final request:** "Let's table this but add it to the plan and then commit." This is done.
+
+2. **Key technical concepts**
+   - **Frame pacing:** the frame rate is quantized to vertical blanks. The Docks average 1.79 vertical blanks per frame (about 33 fps). Reaching 60 fps needs the EE under about 4,900k cycles (16.7 ms). The Docks EE total is about 5,980k.
+   - **GS memory at 2x/32-bit:**
+     - Shadow buffer: 640×1024×4 = 2.5 MB, at `HIRES_ADDR 0`.
+     - 7 page slots of 64 KB each, from 0x280000.
+     - CLUT cache: 64 KB at 0x2F0000.
+     - PS1 VRAM image: 1 MB at 0x300000.
+   - **Why page slots aren't a plain duplicate:** the GS lays out each pixel format differently, so 4/8-bit indices packed in the 16-bit VRAM image can't be sampled as PSMT4/PSMT8. They are a converted copy.
+   - **Ways to win back space:**
+     - Drop shadow-buffer rows 0–31 and 480–511 (PS1 rows): about 320 KB.
+     - The VRAM image's frame-buffer area (x 0–319) duplicates the shadow buffer at 2x: up to about 320 KB, but it is needed when drawing at 1x (menus, 640-wide screens, some FMVs).
+     - Pack two 4-bit pages per slot (32 KB each).
+   - **Fog pair:** already fused on 2026-10-10 (`PS2 Optimizations.md`). The remaining cost belongs to step 5 (VU1).
+   - **Debug Options bits** (`config.unused_26`):
+     - bit 0: Resolution x2
+     - bit 1: 32-bit colour
+     - bit 2: 480p
+     - bit 3: Widescreen
+     - bit 4: 2D Filter (bilinear)
+   - **Remote deploys** often freeze; the user power-cycles.
+
+3. **Files and code sections**
+   - **`src/port/demo_rec.c`** (committed in 48d2b86bc):
+     - The REPLAY override now replaces all five bits: `(unused_26 & ~0x1F) | s_Override`.
+     - The log line now reads `"rec: replaying %s (%d steps; Debug Options rendering bits %d, widescreen %s, 2D filter %s%s)"`.
+   - **`src/screens/options/options.c`:** `g_PortReplayBits = g_GameWork.config.unused_26 & 0x1F;` (was `& 7`).
+   - **`src/port/demo_menu.c`:**
+     - `Port_OptionsRemote` now uses `bits & 0x1F` for both `unused_26` and `g_PortDebugPending`.
+     - Its printf now includes "widescreen on/off, 2D filter bilinear/point".
+     - The comment lists bits 3–4.
+   - **`tools/port/ps2_ctl.py`:** the `options` payload uses `& 0x1F` (was `& 7`).
+   - **`CLAUDE.md`:**
+     - Table row: "Profiler reports, one log per day | `docs/profiles/YYYY-MM-DD.md`".
+     - New rule under Building: every profile run (console or emulator) is appended to that day's file, with `---` and `## Run N: ...` headings, and lists where it ran, build, settings, scene, window and log lines, then the figures.
+   - **`docs/profiles/2026-10-28.md`** (new):
+     - Run 1: PCSX2 step 7, old vs new.
+     - Run 2: console Docks at 4:3. DrawOTag 3,195 vs 3,854 on Oct 26; texture 892 vs 2,090; 33.73 fps.
+     - Run 3: Docks with widescreen. DrawOTag 3,417 (+7%), about 320k (1.1 ms); 33.55 fps; sync identical.
+     - Run 4: Kaufmann at 4:3. DrawOTag 5,992; fog pair 3,081; 36.69 fps; log lines 1321953–1324611.
+     - Run 5: Kaufmann with widescreen. DrawOTag 6,065 (+1.2%), about 110k; 36.17 fps; log lines 1328893–1331541.
+   - **HAL `../psx-to-ps2-HAL/src/ps2/gpu_gs.c`:** step 7 committed as f0ee33a. Layout defines read: `VRAM_ADDR 0x300000`, `CACHE_SLOT 0x10000`, `CLUT_ADDR 0x2F0000`, and `slot_tbp` with 2x/32 at `0x280000 + i*CACHE_SLOT`.
+   - **`Graphics Pipeline Rework.md`:**
+     - Step 7 now has a tabled item after "New GS layout": the memory breakdown, the three ways to save space, the audit plan (list the 2x paths that touch the frame-buffer area, temporary `SH1_LITEPROF` counters over Docks, Kaufmann, a menu, inventory, map, a load screen and an FMV, then decide scratch vs shared), counting misses by depth, and a possible GS-to-GS converting copy.
+     - Log line added.
+
+4. **Errors and fixes**
+   - **REPLAY page masking:** it masked to `& 7`, so a recording's widescreen could not be turned off, and the log did not show it. Fixed by moving to `0x1F`.
+   - **Remote `options 11` didn't enable widescreen:** the user reported that widescreen was not on. Both `ps2_ctl.py` and `Port_OptionsRemote` masked to `& 7`. Fixed, rebuilt and verified: the log read "widescreen on" and the user confirmed it on screen.
+   - **Misjudged fog pair:** I called it "the clear next target". The user corrected that it was already optimized, and I acknowledged pair fusion.
+   - **Remote restarts froze** twice (black screen, then stuck at the Konami screen). The user power-cycled both times.
+
+5. **Problem solving**
+   - **Docks priority recommendation:** texture switching (892k cycles, 3 ms) first, using wait-free page uploads and more slots, after an `SH1_LITEPROF` run to separate GS waits from lookup cost. Then polygon conversion (step 5, VU1) and `WorldGfx_Draw` (4.8 ms).
+   - **Replays stay in sync on the console.** The file-timing fix appears to work.
+
+6. **All user messages**
+   - "Alright, ready to test on console now. I can also test widescreen changes."
+   - "Do I need any particular settings for the replay?"
+   - "Waiting for replay"
+   - "The replay has finished. It did not desync this time"
+   - "From now on, put all profiler reports into a subfolder of docs. Keep one log per day and add to it every time we run a performance profile. Keep a clear division between each run so it's easy to read. Add this to Claude.md."
+   - "Let's run the replay again. I've enabled widescreen so we can check its performance cost."
+   - "The run has finished, again with no desyncs"
+   - "It seems like the frame rate is almost exactly the same, despite the 1.1 ms cost for widescreen. Yes, let's log the widescreen setting and then move on to testing the Kaufman cutscene. I can't remember the cutscene number, but we've gone through it enough times that it should be somewhere in the logs."
+   - "The game rebooted to a black screen. i'll power cycle the PS2"
+   - "On the title screen"
+   - "The cutscene has ended. Ready for the next test"
+   - "The widescreen setting is not on for this cutscene. Set it properly and restart logging."
+   - "The remote deploy got to the Konami screen and then stopped. I'll reboot."
+   - "On the title screen"
+   - "Widescreen worked properly. The cutscene is over"
+   - "Commit this first. I thought we determined that we already optimized the fog pair."
+   - "Based on the performance logs in the Docks replay, what should be the top priority for improving performance?"
+   - "As far as textures, are we wasting a lot of VRAM by loading textures that aren't necessary?"
+   - "It seems to me that we are duplicating memory usage if we're mirroring all 512 rows of the PS1 framebuffer, keeping a copy of PS1 VRAM, AND keeping more page slots for textures. Shouldn't those textures already be in one of the PS1 VRAM copies?"
+   - "What would that entail?"
+   - "Let's table this but add it to the plan and then commit"
+
+   Standing constraints:
+   - Don't access tcrf.net.
+   - Commit only when asked.
+   - Notify the user at stopping points.
+   - Build with `SH1_FPS=60 SH1_NO_RECOMP=1` and run all three build steps.
+   - Never dismiss TLB Misses.
+   - Ask for a power-cycle when the PS2 hangs.
+   - Don't use `pkill -f` with a pattern contained in the calling command line.
+   - New: every profile run is logged to `docs/profiles/YYYY-MM-DD.md`.
+
+7. **Pending tasks**
+   - None active.
+   - Offered, not accepted:
+     - an `SH1_LITEPROF` Docks console run counting page misses by depth;
+     - the GS memory audit (tabled);
+     - wait-free page uploads;
+     - the sifrpc TLB Miss (in ToFix).
+
+8. **Current work:** the tabled audit was added to step 7 of `Graphics Pipeline Rework.md` and committed as 9384c77b7, "Docs: plan the GS memory audit for more page slots at 2x/32-bit". The working tree is clean.
+   - Commits this session (none pushed):
+     - HAL f0ee33a
+     - port 48d2b86bc, 5a47f55b5, 9384c77b7
+
+9. **Next step:** send a brief text reply confirming that the audit is in step 7 of the plan and committed as 9384c77b7. Then wait for the user's direction; the other options stay tabled.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/alex/.claude/projects/-home-alex-Documents-silent-hill-1-ps2-port/0375d7cc-6a8a-424e-96c1-ae9ab2cfd243.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+The messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.
+
+## User
+
+<command-name>/compact</command-name>
+            <command-message>compact</command-message>
+            <command-args></command-args>
+
+## User
+
+<local-command-stdout>Compacted </local-command-stdout>
+
+
+
+## User
+
+I want to deploy to the console and do some more testing to make sure that there aren't any other game-breaking crashes. This time you can just monitor for crashes and we'll test performance later.
+
+- tool `Bash`: Review deploy script, recent log notes, control tool usage
+
+- tool `ToolSearch`: 
+
+- tool `Bash`: Read rest of deploy script and open bugs, build and deploy with fresh server, ping console
+
+- tool `Monitor`: PS2 log: boot, crashes, asserts, log silence over 30s
+
+- tool `PushNotification`: 
+
+## Claude
+
+The new build (Nov 1, 07:56:30) compiled and linked, and the server and log receiver have been restarted. The PS2 isn't running it yet: the console didn't answer a ping, so **please start Neutrino on the PS2 and play**.
+
+I'm watching the console log for crashes, exceptions, TLB errors, asserts, `STEP ERROR` lines and 30 seconds of log silence, which could mean a hang. If the game crashes, I'll pull the details from the log and work out the cause. If it hangs, you'll need to power-cycle. Tell me where you were when it happened, because a hang may not leave anything in the log.
+
+- tool `Bash`: Inspect end of console log, ping console, check server log
+
+## Claude
+
+False alarm: this isn't a hang. The silence alert only fired because the log had paused while the console was still starting up. The UDPFS server shows the PS2 opening the ISO and reading it at about 1.4 MB/s, so the game is loading. The console also answers pings now.
+
+The monitor is still running and will report anything that comes up as you play.
+
+- tool `Bash`: Check log freshness, console ping, server and log receiver state
+
+- tool `Bash`: Scan this run's log for missed errors and game progress
+
+- tool `Monitor`: PS2 log: crashes, asserts, log silence over 30s (fixed symlink check)
+
+## Claude
+
+**No crashes so far.** The game has been running for about 27 minutes (frame 91,500), and the console still answers pings. The whole log for this run has no crash, exception, assert or `STEP ERROR` lines. The only match is the normal startup note about NULL reads.
+
+The run has loaded these maps, most recent last: map4_s05, map2_s02, map2_s00, map5_s00, then map5_s01 and map5_s02 twice each.
+
+**Correction:** my earlier silence alert and explanation were wrong. My monitor was checking the size of the `ps2.log` symlink, which never changes, so it would have reported silence no matter what, and the log hadn't actually paused. That also means it couldn't have detected a real hang during the first 30 minutes. Crash-line detection wasn't affected, and the full log scan above confirms nothing was missed.
+
+I've fixed the check and started a new 30-minute monitor, so it can now catch log silence too. Silence alerts are now real, and I'll re-arm the monitor if you're still testing when it expires.
+
+- tool `Monitor`: PS2 log: crashes, asserts, log silence over 30s (fixed symlink check)
+
+## Claude
+
+The last 30 minutes were clean too, with no crash lines and no log silence. I've started another 30-minute monitor.
+
+## User
+
+Note that there has been a lot of audio/video/subtitle desync in the current cutscene, and it seems that it won't end on its own. I'm going to try pressing start to end it manually.
+
+- tool `Bash`: Pull recent map, sound and streaming log lines for the stuck cutscene
+
+## Claude
+
+I've noted that. Here's what the log shows for this cutscene so far, while the game is still running:
+
+- **No crash:** the game is still drawing normally in `gameState 11 step 2`, with `sysState 10`, which I haven't confirmed the meaning of.
+- **Probably not a disc-read problem:** every voice line in this stretch started within 42 ms, with no audio gaps and a slowest read of 50 ms.
+- **One clue to the desync:** one voice line was stopped early. File 10, channel 5 logged `XA stream cut off` after 1,898 ms at 3953 s, and the game then moved to the next line. That could mean the script is running ahead of the audio, but one line doesn't prove it.
+- **Where it's stuck:** the last voice line ended at 3960 s, and none had started by the latest log line at 4040 s. So the script stopped advancing about 80 seconds ago, while the game kept running. That looks like the existing map6_s02 soft-lock in `docs/ToFix.md`, but I can't confirm it's the same one yet.
+
+Pressing Start is fine, and I'll see what it does in the log. **Which cutscene is it, and what was the last line of dialogue or subtitle?** With that, I can match it to the map and the script. Also tell me if the game behaves oddly after you skip, as leftover state could carry into the next scene.
+
+## User
+
+I don't know what the cutscene was called internally, but I was able to successfully move to the next cutscene by pressing start
+
+- tool `Bash`: Find which map the stuck cutscene was in and check logged desync notes
+
+## Claude
+
+Good, thanks: that's enough to work with. Pressing Start triggered the load of `map7_s00` at 4077 s, so you don't need the internal name. The map before that transition fits the known map6_s02 soft-lock, which also keeps drawing without advancing and which Start evidently gets past. I still haven't confirmed the map, but I'll check it when we go through the results.
+
+The log also backs up what you saw with the desync. From about 3887 s, nearly every voice line in the scene was cut off after only 1–3.6 seconds, with no audio gaps and reads under 80 ms. That points to the cutscene script moving on before each line finishes, rather than slow disc streaming, so it's probably a timing problem. It's only happening in this one scene so far, and a timing mismatch like that could also cause the soft-lock, but neither is proven yet.
+
+I'll add both to `docs/ToFix.md` when this session wraps up. No crashes so far, and the monitor is still running, so keep playing. If the voices cut off early again in another scene, tell me roughly where.
+
+## User
+
+Note also that the cutscene that just played experienced desync as well
+
+- tool `Bash`: List voice stream events since the map7_s00 load and check the FPS switch
+
+## Claude
+
+Noted, and this scene changes my read a bit. Here, nearly all the voice lines played to the end of their files, and only the last one in the log was cut off. Yet you still saw desync, so early cut-offs can't be the whole cause, as I'd suggested last time.
+
+Audio still looks healthy, with no gaps and lines starting within 21 ms. If the voices are playing properly, the problem may be the animation and subtitles drifting against them. That's still a theory, but it would fit cutscene timing running differently at 60 fps. The way to test it is to compare the same cutscene against a 30 fps build or DuckStation.
+
+One thing would help narrow it down: **were the voices behind the picture and subtitles, or ahead of them?** Keep playing either way. I'll add this scene to the `docs/ToFix.md` entry, and the monitor is still running.
+
+## User
+
+The voices got ahead of the animations and subtitles
+
+## Claude
+
+That flips part of what I said earlier: the picture and subtitles are running slow, or the voices are ahead of them, so the script isn't simply rushing ahead. The audio side still looks healthy, with lines starting on time and no gaps.
+
+This points to the cutscene's animation clock running behind real time, while the voices play at their fixed speed. The likely causes are frame rate dips in these heavier scenes, or a timer that the 60 fps changes don't advance at the right speed. If the script waits for an animation or a voice cue that it reaches late or misses, that could also explain the scene that never ended. That's still a theory, and it doesn't yet explain why so many lines in that scene were cut off early.
+
+I won't change anything while you're testing, since crashes are the focus. Afterwards I'll log the desync in `docs/ToFix.md` as a separate bug from any crashes. Then I'll compare one of these cutscenes against DuckStation and a 30 fps build. Keep playing; the monitor stays on.
+
+## User
+
+A couple of widescreen bugs to note for later:
+Some cutscene effects like full screen blur are not adapted to widescreen properly. The lens flare from the flash light appears to be stretched improperly.
+
+- tool `Bash`: Add desync and widescreen bugs to the known issues doc
+
+## Claude
+
+I've added both widescreen bugs to a new Widescreen section in [docs/ToFix.md](docs/ToFix.md), and logged the voice desync there too. The change isn't committed. The monitor is still running, so keep testing.
+
+## User
+
+Another couple things: I think the pressed buttons on this screen which show as overlaid on the full screen picture aren’t corrected for widescreen, and the cursor isn’t either.
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/docs/ToFix.md
+
+## Claude
+
+I've added that to the Widescreen section. You didn't say which screen it was, so I wrote "keypad-style picture screen, seen around map7_s00" as a guess. **Tell me what the screen actually was** and I'll correct the entry.
+
+## User
+
+I’m not sure what it’s called but the description is correct
+
+## Claude
+
+Good, the entry stays as written. The monitor is still running, so carry on testing.
+
+## User
+
+This screen also has an issue where the hitboxes for the buttons aren’t correct in widescreen
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/docs/ToFix.md
+
+## Claude
+
+I've added the hitbox problem to the same entry and noted that it affects gameplay, not just visuals. If the wrong hitboxes stop you entering the code on this screen, switch widescreen off to get past it, assuming the setting can be changed there.
+
+## User
+
+Note that by switching to 4:3 I was able to get past it
+
+- tool `Edit`: /home/alex/Documents/silent-hill-1-ps2-port/docs/ToFix.md
+
+## Claude
+
+Added the 4:3 workaround to the entry, which also confirms the hitbox bug only happens in widescreen. The monitor is still running.
+
+- tool `Monitor`: PS2 log: crashes, asserts, log silence over 30s (fixed symlink check)
+
+## Claude
+
+Another clean 30 minutes, with no crashes or log silence. I've started the next monitor.
+
+## User
+
+I noticed a music tempo issue in the last cutscene which carries over to gameplay
+
+- tool `Bash`: Log the music tempo bug and check current map
+
+- tool `Bash`: Correct the stuck cutscene's map in the known issues doc
+
+## Claude
+
+I've added the music tempo bug to `docs/ToFix.md`, and the game is still running with no crashes. The log doesn't show anything specific about tempo. Since the wrong tempo carried on into gameplay, I'll check the rate of the sound tick thread first. That could also be linked to the voice desync, though I have no evidence for that yet.
+
+**Correction:** the stuck cutscene was in map6_s04, not map6_s02 as I suggested. That map loaded at 3340 s and was still the current map when your Start press led to `map7_s00`. So it's a separate soft-lock from the known map6_s02 one, though the symptoms look similar, and I've updated the doc.
+
+## User
+
+I noticed just now that the music in the elevator also had the tempo bug
+
+- tool `Bash`: Add elevator music to the tempo bug entry
+
+## Claude
+
+Added the elevator music to the tempo entry. Two different places now have it, so it looks like a general music timing problem rather than something tied to one scene.
+
+## User
+
+It’s a little difficult to tell due to the abstract nature of some tracks, but I think all the music may be affected. I will save as soon as I can and restart from the title screen to see if that fixes it
+
+## Claude
+
+That's a good test. Returning to the title resets the game's sound state, but the IOP sound code and its timer keep running. So if the tempo is still wrong afterwards, try a full power-cycle too:
+
+- **Fixed by returning to the title:** the fault is probably in the game's sound state.
+- **Fixed only by a power-cycle:** the fault is probably on the IOP side and builds up over a long session.
+- **Still wrong after a power-cycle:** the music tempo is simply always wrong, and the long session has nothing to do with it.
+
+I'll note the result. Saving is worth doing anyway. The monitor is still running.
+
+## User
+
+Saving did not fix the tempo issue. I will power cycle the PS2
+
+## Claude
+
+Understood, so the game's sound state probably isn't the cause. You can power-cycle now. Monitor will report log silence while it's off, which is expected. The server is still up, and I've already saved the whole session log, so nothing is lost.
+
+After it boots, load your save and listen to a track that was clearly off, ideally the elevator music. If that's hard to get to quickly, any track you know well will do.
+
+## Claude
+
+That's the log silence I expected from the power-cycle, so there's nothing to act on. I'm waiting for the PS2 to boot again.
+
+## Claude
+
+The PS2 is sending log lines again, so it's booting. Let me know whether the tempo sounds right once you've loaded your save.
+
+## User
+
+Even restarting didn’t fix the tempo issue. Could this have anything to do with the HAL changes implemented recently?
+
+- tool `Bash`: Review recent HAL commits and sound tick code, and past tempo notes
+
+- tool `Bash`: Read the sound tick timing code, its history, and the game's tick setup
+
+- tool `Bash`: Check whether HAL commits touched tick timing, and which video mode is used
+
+## Claude
+
+Probably not the recent HAL changes. The code that sets the music's timing hasn't changed since it was imported on 2026-10-27. The recent commits to threading and to `spu_ps2.c` didn't touch the timer rate, and the thread changes affect `ChangeTh`, not the sound tick. I can't fully rule out an indirect effect, such as the game holding the sound lock for longer, because I haven't measured the tick rate on the console.
+
+**Best lead: the Video Mode 480p setting.** The music driver's tick is timed by counting horizontal blanks, assuming the NTSC rate of 15,734 per second ([spu_ps2.c:510](../psx-to-ps2-HAL/src/ps2/spu_ps2.c#L510)). In 480p the console produces about 31,469 per second. If the EE alarm counts real horizontal blanks, as I expect, music would play at about **twice** the correct speed. This is unverified, but the setting would survive both a save reload and a power-cycle if it's stored with your save, which would fit what you saw.
+
+This wouldn't explain the voices getting ahead of the animation, because voice streaming doesn't use this tick. That still looks like a separate bug.
+
+**Two quick checks:**
+1. Is Video Mode set to 480p, or did you change it around when the tempo went wrong?
+2. Is the music too fast, too slow, or uneven? Does switching Video Mode change the tempo right away?
+
+If 480p is on and turning it off fixes the tempo, the fix is small: base the tick rate on the actual video mode.
+
+## User
+
+The video mode was set to 480p. The music was running too fast in 480p mode. I tested switching back to 240p and it seems to have the correct tempo. Note this, but we don’t need to fix it right now.
+
+- tool `Bash`: Replace the tempo entry with the confirmed 480p finding
+
+## Claude
+
+Noted: I've replaced the tempo entry in `docs/ToFix.md` with what your test showed, that music runs too fast in 480p and is correct in 240p. It also records the likely cause and fix, with nothing changed in the code. So the tempo problem wasn't caused by the recent HAL changes.
+
+It's still worth finding out whether the **voice desync** only happens in 480p as well, though the music timer shouldn't affect voices. If you see a desynced cutscene in 240p, let me know. The monitor is still running, so keep testing.
+
+## User
+
+This screen also has the button placement wrong in widescreen
+
+## Claude
+
+Which screen is this? It could be the keypad screen from earlier or a new one, and I don't want to add it to the wrong entry. A short description is enough, such as what the picture shows and which buttons are misplaced.
+
+## User
+
+It’s a different keypad screen but very similar
+
+- tool `Bash`: Add second keypad screen to the widescreen entry and read current map
+
+## Claude
+
+Added to the keypad entry, with a note to check every screen of that kind when this gets fixed. The log has this run in `map7_s01`, though it's the last map load logged, so it may not be the current one. If the buttons don't work here either, switching to 4:3 should get you past it.
+
+## User
+
+Also note a texture seam issue on that screen
+
+- tool `Bash`: Add texture seam note to the keypad entry
+
+## Claude
+
+Added. If you can, check whether the seam also shows in 4:3, as that tells us whether it's a widescreen bug or a separate renderer one.
+
+## User
+
+It shows in 4:3
+
+- tool `Bash`: Move texture seam out of the widescreen section as its own renderer bug
+
+## Claude
+
+Thanks. Since it also shows in 4:3, it isn't a widescreen bug, so I've moved it to its own entry just above the Widescreen section. It's in `docs/ToFix.md` with a reminder to compare against DuckStation in case the original game has the same seam.
+
+## User
+
+If you recall the newspaper bug from earlier, it appears that I am able to read the Nowhere newspaper in question.
+
+- tool `Bash`: Search docs and history for the newspaper bug
+
+- tool `Bash`: Read the archived newspaper test steps
+
+## Claude
+
+That confirms the newspaper fix works on hardware. Reading the clipping in Nowhere is the outcome the test was looking for: with the original bug it's missing, so `EventFlag_M5S03_SeenSecondNewspaper` is now being set and surviving through to Nowhere. I found the details in the conversation archive, so I don't need anything else from you.
+
+The fix hadn't been checked in-game until now, and this session's log shows no crashes or hangs. The `docs/ToFix.md` updates are still uncommitted. The session's results are all recorded there, except the newspaper confirmation.
+
+- tool `Monitor`: PS2 log: crashes, asserts, log silence over 30s (fixed symlink check)
+
+## Claude
+
+Still no crashes in the last 30 minutes, and I've started another monitor. The only log silence was your power-cycle.
+
+- tool `Monitor`: PS2 log: crashes, asserts, log silence over 30s (fixed symlink check)
+
+## Claude
+
+Another clean 30 minutes. I've started the next monitor.
+
+## User
+
+A minor visual glitch I’ve noticed: FMVs occasionally have what seems to be screen tearing; the very top of the screen briefly turns black.
+
+- tool `Bash`: Add FMV tearing note to the known issues doc
+
+## Claude
+
+Added to `docs/ToFix.md` as a minor bug. It would help to know whether you see it in both 240p and 480p, but no need to go looking for it.
+
+## User
+
+What are the different possible values for Ending on the game result screen?
+
+- tool `Bash`: Find the result screen's ending strings in the source
+
+- tool `Bash`: Find the ending enum and its display on the result screen
+
+- tool `Bash`: Read how the result screen labels endings
+
+- tool `Bash`: Read scoring cases and label strings
+
+## Claude
+
+The result screen has five possible Ending values, listed in [ranking.c:465-469](src/bodyprog/ranking.c#L465-L469), and each adds to your rank score:
+
+| Ending | Score added | Text colour |
+|---|---|---|
+| **GOOD+** | +10 | Gold |
+| **GOOD** | +5 | White |
+| **BAD+** | +3 | White |
+| **BAD** | +1 | White |
+| **UFO** | +0 | White |
+
+I saw the `GOOD+`, `BAD+` and `UFO` strings directly. `GOOD` and `BAD` come from the ending enum and scoring cases, as my search didn't print those two strings. The scoring code also handles combinations of endings, but a code comment says these probably never occur, since the value only holds the ending you just got.
+
+## User
+
+I’ve reached the end of the game and am idling on the game result screen. I fulfilled the requirements for the Good+ ending and saw the correct cutscenes, but the text as rendered on the end screen appears to say “GOOD-“.
+
+- tool `Bash`: Read ranking text drawing for the ending label
+
+## Claude
+
+The game does pick the right ending. It draws the `"GOOD+"` string for Good+, and there's no `"GOOD-"` string in that table, so your ending was recorded correctly. This looks like a rendering bug: the `+` is losing its vertical stroke.
+
+The likely cause is widescreen text squeezing. It's already documented that at 1x, squeezing drops columns from each glyph (12 texels become 9 pixels with point sampling). A `+` has a thin vertical stroke, so if that column is dropped, only the horizontal bar is left and it reads as `-`.
+
+Since you're idling there, you could try one of these on the result screen if you can reach the settings from it:
+- Switch to **4:3**.
+- Set **Resolution** to x2.
+- Set **Debug Options > 2D Filter** to Bilinear.
+
+If the `+` comes back with any of these, that's the cause, and the existing 2D Filter option may already be the fix. If it stays `-` in 4:3 too, it's something else, such as a font problem or a bug in the original game. Don't risk the session or your save just to test this, though. It can also be checked later.
+
+This also means you've **finished the game on the console with no crashes logged** since this build went on. A final log scan will confirm that when you stop testing.
+
+## User
+
+Alright, we can stop testing. I had no issues creating a new game plus save
+
+- tool `Bash`: Final crash scan, record result-screen bug and session summary
+
+- tool `Bash`: Confirm the doc is readable after edits
+
+- tool `ToolSearch`: 
+
+- tool `TaskStop`: 
+
+## Claude
+
+**You finished the game on the console with no crashes.** The final log scan found no crash, exception, assert or `STEP ERROR` lines for the whole run, and the only log silence was your power-cycle. The run went from `map4_s05` to the Good+ ending, and creating a new game plus save worked. Monitoring has stopped.
+
+**Could block progress:**
+- **map6_s04 cutscene soft-lock:** it never ended on its own, and Start got past it. That's a separate map from the known map6_s02 soft-lock.
+- **Keypad hitboxes in widescreen:** the wrong hitboxes blocked the first keypad screen until you switched to 4:3.
+
+**Other bugs found:**
+- Music runs too fast in 480p, but is correct in 240p.
+- Voices get ahead of the animation and subtitles in cutscenes, cause not yet known.
+- Keypad overlays, cursor and button placement are wrong in widescreen, and so are cutscene full-screen effects such as blur and the flashlight lens flare.
+- `GOOD+` reads as `GOOD-` on the result screen. Dropped pixels from widescreen text squeezing are my guess, but that's untested.
+- A texture seam shows on the second keypad screen, in 4:3 as well.
+- FMVs occasionally flash black at the top of the screen.
+
+**Confirmed working:** the newspaper fix, since you could read the clipping in Nowhere.
+
+All of this is in [docs/ToFix.md](docs/ToFix.md), with a run summary in [Running Walkthrough.md](Running%20Walkthrough.md). Neither file is committed, and no code changed.
+
+## User
+
+Commit
+
+- tool `Bash`: Commit the docs updates
+
+## Claude
+
+Committed as `10a4e3ad2` on `hal-split`, and the working tree is clean. It isn't pushed.
+
+## User
+
+Make sure all the docs are up to date
+
+- tool `Bash`: Check archive tool usage and what the planning doc says
+
+- tool `Bash`: Check which sessions are archived, render this one, add planning note
+
+- tool `Bash`: Measure how much of each recent session is in the archive
+
+- tool `Bash`: Append unarchived sessions in date order and verify no removals

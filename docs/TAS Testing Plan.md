@@ -1,0 +1,61 @@
+# TAS Testing Plan
+
+Use TASVideos submission #10742 (`~/Downloads/submission10742/Silent Hill (USA) NG Good+.bk2`) as a long, scripted
+regression test: replay its input in the port and check the game state against the PS1 game replaying the same
+movie. The method follows the MGS port's plan (`../mgs1_ps2/docs/TAS Testing Plan.md`, scripts in its
+`tools/port/tas/`).
+
+## What the movie is
+
+- berrimeow and arandomgameTASer, Silent Hill "Good+", 29:13 IGT, 51:37 real time. Sync verified on TASVideos
+  (2026-09-19, Tompa). Status at the time of saving: New, so the file may be replaced before publication.
+- BizHawk 2.11.1 (started on 2.9.1), Nymashock core, 185,305 frames at 59.83 fps, 62,291 rerecords.
+- Starts from power-on with no save data. Silent Hill (USA) 1.0. BizHawk's game hash is `F1B5EB6C`.
+- BIOS `ps-30a.bin` (SHA-1 `0555c6fae8906f3f09baf5988f00e55f88e9f30b`), in `~/Downloads/NOTps1bios/`.
+- One DualShock in port 1. First press at frame 1,452. Analog sticks off-centre on 113,646 frames, so the port's
+  analog path gets a real test. No resets or disc swaps.
+
+## Why a plain replay won't work
+
+Input is per video frame, and the port's load times and frame timing differ from the emulator's. So, as for MGS:
+record what the game read from the pad on each game loop, feed the port the same values on the same loops,
+and compare state on every loop to find the first difference.
+
+SH1 differs from MGS here:
+- Build at the PS1's frame rate. `SH1_FPS=60` changes game timing, so the replay build leaves it unset.
+- The game's delta time depends on measured vertical blanks, so the port must take each loop's delta time from
+  the trace as well as the pad.
+- Keep each loop's RNG in the trace. Things that advance it during loads or on time-dependent paths are the likely
+  first differences.
+- The port already has a recorder and a replay with the PS1's load timing (`replays.md`, `src/port/demo_rec.c`).
+  Extend these, rather than porting MGS's `pad_script.c` approach.
+
+## Phase 1: reference replay
+
+- [x] BizHawk 2.11.1 for Linux in `~/emu/bizhawk-2.11.1` (needs Mono), with `ps-30a.bin` in `Firmware/`; movie as `~/emu/sh-tas/sh.bk2`. Started by `tools/port/tas/run_bizhawk.sh`.
+- [x] Load `rom/image/SLUS-00707.cue`: BizHawk reports hash `F1B5EB6C` (2026-11-02). A plain CRC32 of the `.bin` is `1d4a3ff7`, which is not comparable.
+- [x] Unattended full run (2026-11-02, twice, about 30 min each; `tools/port/tas/synccheck.lua`, log in `~/emu/sh-tas/`). Good map order to the end (map index 42), final boss on screen at frame 185,300 and apparently dying. The movie stops while still firing at the boss. Resuming from a state 10 frames before its end, holding its last input (X, L2, R2) and then pressing Start (`tools/port/tas/to_results.lua`) reaches the ending, credits and result screen (`~/emu/sh-tas/results_screen.png`).
+
+## Phase 2: per-loop trace
+
+- [ ] `tools/port/tas/trace.lua`: one line per game loop: movie frame, pad as the game read it, delta time, RNG
+      state, game state, map, Harry's position, angle, health, and event flags. Addresses from the PS1 build's map.
+- [ ] Run twice and compare, to prove it's deterministic.
+- [ ] Full reference trace, compressed, in `tas/reference/`, with the movie in `tas/movie/`.
+
+## Phase 3: replay in the port
+
+- [ ] Replay input format from the trace, in a build with the same loop-by-loop state output.
+- [ ] Run in PCSX2 (software GS) to the first difference, fix, repeat. Collect any TLB Miss lines as well.
+- [ ] Compare tool (`tools/port/tas/compare_trace.py`), reporting the first differing loop and field.
+
+## Phase 4: console
+
+- [ ] Full replay on the console in 4:3, watching for crashes. The same replay in other modes (2x, 32-bit,
+      widescreen) checks that settings don't change gameplay.
+
+## Limits
+
+- Replaying the game's loops isn't a test of timing, so it won't find the cutscene voice desync. Run that
+  separately, at 60 fps, against the reference video.
+- The route skips optional areas (any% style glitches), so it complements a normal playthrough.

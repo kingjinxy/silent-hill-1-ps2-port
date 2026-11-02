@@ -58,14 +58,12 @@ Frame rate:
 
 Ranked by expected gain relative to risk. Each must keep output identical to the PS1, or prove its differences invisible, using the frame comparisons against DuckStation and the deterministic benchmark (tools/port/bench_frames.sh, compare_dumps.py).
 
-1. **Collapse the fog double polygons.** The GS's per-vertex fog (FOG in the vertex data, FOGCOL, FGE in PRIM) blends toward a fog colour, as DPCS does. One fogged, textured polygon instead of a textured one plus a fog overlay would roughly halve world primitives and end the state alternation. Accuracy question: the GS interpolates fog per pixel and rounds differently from the PS1's blend of the overlay. The plan is to measure, then compare frames.
-2. **Exact batched GTE work in the game's own mesh code.** (First written as "native C for libgs's model renderer". That was wrong: the game calls `GsSortObject4J`/`GsTMDfast*` only from the item screens. Characters and world are drawn by its own C code, Gfx_MeshDrawPort and helpers; see the 2026-10-10 log entry.) Replace per-command GTE emulation in the hot loops with exact batch functions (Gte_RtpBatch, Gte_NcBatch), the last command of each loop still on the GTE so its registers end up as on the PS1. Verified with SH_PORT_CHECK_BATCH builds.
-3. **Scratchpad on the EE's SPR.** `g_PsxScratch` is ordinary cached RAM today (0x8a2f40). At 0x70000000 every access is single-cycle and nothing is evicted. Watch out for any DMA straight from scratchpad memory: SPR needs its own DMA channel.
-4. **Texture page and CLUT cache.** Largely in place already: gpu_gs.c caches 4/8-bit pages (28 slots, PSMT4/PSMT8 uploaded from g_PortVram) and CLUTs (128 rows, CSM2). What's left: ~540 TEX0 changes and as many CLUT loads per frame in the Kaufmann cutscene. A CLUT load is skipped only when the GS still holds the same CLUT, so alternating textures reload every time. Possible: order or batch by texture within an OT bucket (not allowed: draw order is visible with semi-transparency), or make a reload cheaper. (PsyZ's PSP backend uses the same page/CLUT cache design.)
-5. **CPU/GS overlap with a double display list.** Build frame N+1's GIF packets while frame N's DMA runs, waiting only for the previous frame (PsyZ's PSP model). Async GIF sends were tried and reverted on 2026-10-09; those freezes were probably the ResetCallback bug. Retry on hardware.
-6. **Packet building with MMI and the SPR.** 128-bit `sq` stores of whole GIF qwords; packets built in SPR and sent with the fromSPR → GIF DMA.
-7. **Use the RAM.** Keep a map's files (and its neighbours') resident, cache XA headers, preload the next scene. Faster loads, and it supports a future movie mode.
-8. **VU1 for primitive conversion.** PS1 packets in, GIF packets out on PATH1. The largest potential gain and the largest job. GTE results stay exact on the EE; VU1 only does format conversion, which must be validated pixel by pixel. After items 1–5.
+The active plan is [Graphics Pipeline Rework.md](Graphics%20Pipeline%20Rework.md), steps 5-9 and the GS memory layout. Open here:
+
+1. **VU1 for primitive conversion.** The rework's step 5. PS1 packets in, GIF packets out on PATH1. The largest potential gain and the largest job. GTE results stay exact on the EE; VU1 only does format conversion, which must be validated pixel by pixel.
+2. **Use the RAM.** Keep a map's files (and its neighbours') resident, cache XA headers, preload the next scene. Faster loads, and it supports a future movie mode.
+
+Closed (details in §7 and the rework's steps): fog collapse (not exact; pair fusion kept instead), batched GTE work in the mesh code (done), the scratchpad on the SPR (done; console timing is in the rework's step 6), the texture page and CLUT caches (done; reordering draws isn't allowed), packet-level CPU/GS overlap (done, frame-level is step 9), MMI packet building (superseded by VU1).
 
 Not recommended: moving GTE maths to VU0 or VU1 (§5).
 

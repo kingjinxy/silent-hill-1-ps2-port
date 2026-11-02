@@ -254,6 +254,7 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [x] Snow particles measured in gameplay: 170-200k cycles a frame (6-8% of busy); a batched RTPS would save ~1.5% at most: not pursued
 - [ ] Hardware tests: `SH1_INTERLACE_FIELDS=1` (PS1-style field drawing for the 448i screens, broken in PCSX2) and `SH1_MODESWITCH=0/1/2` (video signal gaps on mode switches; film the TV)
 - [ ] 480p / 720p modes (2026-10-17 assessment: 480p fits in VRAM with a 2x render buffer and the 1:1 VRAM image; fill rate isn't the limit; the work is keeping the 2x image and the PS1 VRAM in step for effects that read the frame buffer; true 720p doesn't fit double-buffered)
+  - 2026-11-01: music runs too fast in 480p on hardware, the sound tick assumes NTSC horizontal blanks (docs/ToFix.md).
   - [x] Screen-read inventory for 2x rendering (2026-10-18): 16 feedback/motion-blur sites (15-bit pages over the frame buffers) and the lens-flare occlusion test; nothing else in cutscenes, attract demos and all maps (Running Walkthrough.md)
   - [x] Inventory of menus, title and FMVs (2026-10-18): menus none; the boot logo and title background are uploaded images inside the frame-buffer area (sample 1:1 VRAM); FMVs bypass the screen
   - [ ] Inventory: the credits
@@ -273,7 +274,6 @@ duplicate definitions. 193 undefined symbols remain — the HAL's exact scope:
 - [ ] Alley end (child ghosts) and onward: 34-55 fps with the EE fully busy for minutes; profile and optimise
 - [ ] `Gfx_EffectsUpdate` reads through a null pointer (address 8) at the start of map0_s00 (harmless in PCSX2)
 - [ ] Audit the whole codebase for decompiled code relying on the PS1 stack layout (one local array reached through another, out-of-bounds indexing into a neighbour: los.c, particle.c, split_head.c so far); try `-Warray-bounds` and a wider pattern search (tabled 2026-10-16)
-- [ ] VU0/VU1 GTE: an exact VU transform saves little over the EE batch (the UNR divide needs split-float maths and per-vertex table reads); revisit for other paths if the profile points there
 - [ ] map6_s00 (4-7% idle): other drawing paths (func_8005A900/func_8005AC50, likely world geometry); map5_s00 / map0_s00 drop frames with 30-50% idle (not EE-bound: loading or event pacing?)
 - [ ] Sweep: maps at a steady ~66% idle may be showing a fade/black screen rather than the map (the 7 maps that fail from the title demo "pass" by not crashing); 30 fps maps with idle left (map1_s06, map7_s00, map7_s03); heavy: map5_s00 (39 fps avg), map0_s00 (46), map6_s00 (4-7% idle)
 - [x] All-map 60 fps sweep (one boot): most maps 54-59 fps average; slowest map7_s03 (~43)
