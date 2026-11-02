@@ -2,7 +2,7 @@
 -- samples every video frame and writes a line when the game's loop counter or the map changes. Fields:
 --   movie frame, gameStateCounter, gameState, sysState, g_VBlanks, g_DeltaTime, RNG seed, map index,
 --   in-game timer (raw), controller 0 data (hex, 8 bytes), player position X Y Z (hex, 12 bytes),
---   eventFlags CRC-like sum.
+--   eventFlags CRC-like sum, g_FsQueue.postLoad.idx.
 -- Addresses: configs/USA/sym.*.txt. Ends with END at the movie's last frame.
 local LAST, RAM = 185305, "MainRAM"
 local home = os.getenv("HOME")
@@ -35,9 +35,9 @@ while true do
   local key = cnt .. ":" .. map .. ":" .. s32(GAME + 0x594)
   if key ~= prev then
     prev = key
-    out:write(string.format("%d %d %d %d %d %d %08x %d %d %s %s %08x\n", f, cnt, s32(GAME + 0x594), s32(SYS + 8),
+    out:write(string.format("%d %d %d %d %d %d %08x %d %d %s %s %08x %d\n", f, cnt, s32(GAME + 0x594), s32(SYS + 8),
       s32(0x800B5C34), s32(0x800B5CC0), u32(0x80022C90), map, igt,
-      (pad >= 0x80000000 and pad < 0x80200000) and hex(pad, 8) or "-", hex(PLAYER + 0x18, 12), sum))
+      (pad >= 0x80000000 and pad < 0x80200000) and hex(pad, 8) or "-", hex(PLAYER + 0x18, 12), sum, s32(0x800230A8)))
   end
   if f % 6000 == 0 then out:flush() end
   if f >= LAST - 1 then out:write("END\n"); out:close(); client.exit() end

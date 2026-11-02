@@ -56,6 +56,8 @@ Findings, 2026-11-02 (`tools/port/tas/trace_to_loops.py`):
 
 First replay in PCSX2 (2026-11-02, `tools/port/tas/trace_to_dem.py`, `compare_trace.py`, `Port_RecTas`): starts at frame 2,109 from a dumped savegame instead of power-on, one step per in-game loop, 66,898 steps. It ran 3,167 steps without a crash, then ended on STEP ERROR. It wasn't in sync: Harry was already about 1,500 units (under 0.4 m) off by step 30 and in the wrong map by the end. Open causes: step alignment in the map 0 opening, trace rows sampled at a different point of the loop than the port's lines, and file load timing, which the trace doesn't record (`g_FsQueue.postLoad.idx` to add). The steps cover in-game loops only, so inputs in menus and the item screen (game states 14, 19) aren't replayed yet.
 
+Second round (2026-11-02): the trace now records `g_FsQueue.postLoad.idx` (held to on replay, with a limit of 8 holds a step so a blocking load can't deadlock), and steps cover all of `Demo_StateGet`'s step states (69,185 steps). Result: worse. Harry was within 57 units at step 600, about 47,000 off at step 900 (the first round matched there exactly), and from step ~2,200 the replay crawled on "file loads still behind" waits until the run's time limit. Sampled file marks shouldn't be held to until steps line up exactly. Next: an exact loop signal (candidate: the pad data's `pulseTicks`, or re-tracing with a per-loop counter), then compare step by step from step 0.
+
 ## Phase 4: console
 
 - [ ] Full replay on the console in 4:3, watching for crashes. The same replay in other modes (2x, 32-bit,

@@ -139,13 +139,23 @@ static void file_sync(void)
     }
 }
 
+int Port_RecTas(void);
+
 /** Fs_QueueUpdate: 1 to hold a file's post-processing on playback (the recording hadn't loaded it yet
  * at the next step). */
 int Port_RecFileHold(void)
 {
-    int step = g_Demo_DemoStep;
-    return s_Active && s_Mode == 2 && step < s_Steps && s_Rec.frames[step].field_A[1] != 0 && file_delta(step) >= 0 &&
-           g_FsQueue.postLoadState == FsQueuePostLoadState_Init; /* between files, never part-way through one */
+    static int lastStep = -1, held;
+    int        step = g_Demo_DemoStep;
+    int        hold = s_Active && s_Mode == 2 && step < s_Steps && s_Rec.frames[step].field_A[1] != 0 && file_delta(step) >= 0 &&
+                      g_FsQueue.postLoadState == FsQueuePostLoadState_Init; /* between files, never part-way through one */
+    if (step != lastStep)
+    {
+        lastStep = step;
+        held     = 0;
+    }
+    /* The game may be waiting for this file inside a step (TAS marks are sampled, not exact): don't deadlock. */
+    return hold && !(Port_RecTas() && ++held > 8);
 }
 
 /** Streams the recording's bytes up to `end` through the log. */
