@@ -45,9 +45,16 @@ SH1 differs from MGS here:
 
 ## Phase 3: replay in the port
 
+Findings, 2026-11-02 (`tools/port/tas/trace_to_loops.py`):
+- Walking the trace by `g_VBlanks` gives about 107,500 loops. 99.2% of the 44,900 timer changes fall within one frame of a walked loop, 66% exactly: the walk drifts by a frame, so re-anchor it at each timer change.
+- The timer stops on about two thirds of in-game frames (cutscenes), where only the walk and RNG mark loops.
+- The port's recorder holds 65,536 steps and starts from a save. The TAS needs at least 107,504 steps and starts at power-on, so the replay needs a larger buffer and a start from boot.
+
 - [ ] Replay input format from the trace, in a build with the same loop-by-loop state output.
 - [ ] Run in PCSX2 (software GS) to the first difference, fix, repeat. Collect any TLB Miss lines as well.
 - [ ] Compare tool (`tools/port/tas/compare_trace.py`), reporting the first differing loop and field.
+
+First replay in PCSX2 (2026-11-02, `tools/port/tas/trace_to_dem.py`, `compare_trace.py`, `Port_RecTas`): starts at frame 2,109 from a dumped savegame instead of power-on, one step per in-game loop, 66,898 steps. It ran 3,167 steps without a crash, then ended on STEP ERROR. It wasn't in sync: Harry was already about 1,500 units (under 0.4 m) off by step 30 and in the wrong map by the end. Open causes: step alignment in the map 0 opening, trace rows sampled at a different point of the loop than the port's lines, and file load timing, which the trace doesn't record (`g_FsQueue.postLoad.idx` to add). The steps cover in-game loops only, so inputs in menus and the item screen (game states 14, 19) aren't replayed yet.
 
 ## Phase 4: console
 

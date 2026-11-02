@@ -179,6 +179,7 @@ bool g_Demo_Play = false;
 #ifdef SH_PORT
 // Port: play recorder (src/port/demo_rec.c), in the demo player's mode.
 extern int  Port_RecActive(void);
+extern int  Port_RecTas(void);
 extern int  Port_RecSteps(void);
 extern int  Port_RecController(void);
 extern int  Port_RecStep(s32 gameState);
@@ -388,6 +389,9 @@ bool Demo_Update(void) // 0x8008F5D8
         s_PortHeldFrames = 0;
     }
     s_PortHeldFrames++; /* frames at this step so far, this one included */
+#endif
+#ifdef SH_PORT
+    if (!Port_RecTas())
 #endif
     if (!Gfx_ScreenFadeIn_IsInProgress(prevScreenFadeCpy)   ||
         !Gfx_ScreenFadeIn_IsInProgress(g_ScreenFade_Status) ||

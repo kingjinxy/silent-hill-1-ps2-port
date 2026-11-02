@@ -55,7 +55,7 @@ extern int Rec_Write(const char* name, const void* buf, int size);
 extern s32 Port_DemoStepFrames(void);                         /* demo.c */
 extern int Display_FrameCount(void);                          /* src/port/ps2/display_ps2.c */
 
-#define REC_STEPS (1 << 16) /* 18 minutes at 60 fps */
+#define REC_STEPS (1 << 17) /* 36 minutes at 60 fps; the TAS replay needs over 100,000 */
 #define REC_FLUSH 3600      /* steps between writes while recording */
 #define REC_STOP  (ControllerFlag_Select | ControllerFlag_Start | ControllerFlag_L1 | ControllerFlag_R1)
 
@@ -264,6 +264,13 @@ void Port_RecContinue(void)
                s_Name, s_Steps, g_GameWork.config.unused_26 & 7, (g_GameWork.config.unused_26 & 8) ? "on" : "off",
                (g_GameWork.config.unused_26 & 0x10) ? "bilinear" : "point", s_Override >= 0 ? ", from the REPLAY screen" : "");
     }
+}
+
+/** Replay made from the TAS trace (tools/port/tas/trace_to_dem.py): every in-game loop is a step, as the trace
+ * can't see the fades and chunk loads that hold ordinary demo steps back. */
+int Port_RecTas(void)
+{
+    return s_Active && s_Mode == 2 && s_Rec.state.__pad_38[0] == 'T';
 }
 
 int Port_RecActive(void)
