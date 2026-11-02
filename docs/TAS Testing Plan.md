@@ -60,6 +60,8 @@ Second round (2026-11-02): the trace now records `g_FsQueue.postLoad.idx` (held 
 
 Loop signal (2026-11-02): `g_ActiveBufferIdx` is now in the trace (last field) and holds up. 103,171 flips, 58,393 of them in game state 11. Of 44,900 timer changes, 92.3% fall on a flip and 99.93% within one frame, against 66% and 99.2% for the `g_VBlanks` walk. Flip spacing matches a nearby `g_VBlanks` in 96.5% of state 11 loops; most mismatches are in the load state (10), where that isn't expected to match. Timer changes one frame off a flip show the timer and the flip aren't sampled at the same point of the loop.
 
+Pad offset test (2026-11-02, 60,519 steps from flips, file holds off, a line per step for the first 4,000): the row at the flip is best. Offset 0 stays within 2,000 units until step 737, +1 until step 48, -1 until step 50 and fails sooner. At offset 0 Harry follows the opening cutscene's path (within ~200-500 units) but its jump comes about 50 steps early (step 737, trace ~790), and the run ends on STEP ERROR at step 2,893 (expected inventory, still in game). The cutscene appears to advance on something other than steps, probably voice or real time. Seeds never match within 20 rows, so the RNG comparison is still not usable: to work out where in the loop each side samples it.
+
 ## Phase 4: console
 
 - [ ] Full replay on the console in 4:3, watching for crashes. The same replay in other modes (2x, 32-bit,

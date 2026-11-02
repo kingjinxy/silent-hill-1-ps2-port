@@ -340,7 +340,7 @@ int Port_RecStep(s32 gameState)
         // Dense trace (same when recording and replaying): the first step that differs, and the system
         // state (events, doors) around it.
         static s32 lastSysState = -1;
-        if (g_Demo_DemoStep % 30 == 0 || g_SysWork.sysState != lastSysState)
+        if (g_Demo_DemoStep % 30 == 0 || g_SysWork.sysState != lastSysState || (Port_RecTas() && g_Demo_DemoStep < 4000))
         {
             printf("rec step %d: sys %d/%d, Harry %d %d %d hp %d, delta %d, seed %08X, files %d queued, read %d\n",
                    (int)g_Demo_DemoStep, (int)g_SysWork.sysState, (int)g_SysWork.sysStateSteps[0],
