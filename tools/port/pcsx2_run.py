@@ -4,8 +4,8 @@
     python3 tools/port/pcsx2_run.py <file.elf|file.iso> [--seconds 15] [--until "text"] [--all]
 
 ps2sdk's printf reaches PCSX2's IOP console (via the IOP's tty), so the EE and IOP console logs are
-switched on in PCSX2.ini for the run and the original file restored afterwards (also on the next
-run if one was killed). Output is the PCSX2 log after the ELF starts, minus emulator noise.
+switched on in a copy of PCSX2.ini in a data folder private to the run (XDG_CONFIG_HOME), so several
+runs (this port's and the MGS port's) can share the machine; the user's PCSX2.ini isn't changed. Output is the PCSX2 log after the ELF starts, minus emulator noise.
 """
 import argparse
 import os
@@ -17,8 +17,8 @@ import sys
 import tempfile
 import time
 
-INI = os.path.expanduser("~/.config/PCSX2/inis/PCSX2.ini")
-BACKUP = INI + ".pcsx2_run.bak"
+USER_DIR = os.path.expanduser("~/.config/PCSX2")
+INI = os.path.join(USER_DIR, "inis", "PCSX2.ini")
 # OutputMuted: PCSX2's "Mute" (audio is still emulated, just not played). HostFs: lets the program
 # write to host: (= the ELF's folder, e.g. frame dumps from display_ps2.c).
 # For comparisons with DuckStation: native resolution (upscale 1), "Bilinear (Sharp)" output
@@ -38,20 +38,23 @@ def find_pcsx2():
     return shutil.which("pcsx2-qt") or shutil.which("pcsx2")
 
 
-def patch_ini():
-    if os.path.exists(BACKUP):
-        shutil.copy2(BACKUP, INI)
-    shutil.copy2(INI, BACKUP)
+def private_config(overrides=OVERRIDES):
+    """A PCSX2 data folder for this run only (passed as XDG_CONFIG_HOME), so runs in parallel (e.g. the MGS
+    port's) don't share or rewrite the user's PCSX2.ini. It holds a patched copy of PCSX2.ini; every other
+    entry of the user's folder (bios, memcards, gamesettings...) is a symlink to the real one, except the
+    cache. Returns the XDG_CONFIG_HOME folder."""
+    home = tempfile.mkdtemp(prefix="pcsx2_run_")
+    root = os.path.join(home, "PCSX2")
+    os.makedirs(os.path.join(root, "inis"))
+    for name in os.listdir(USER_DIR):
+        if name not in ("inis", "cache"):
+            os.symlink(os.path.join(USER_DIR, name), os.path.join(root, name))
     lines = []
     for line in open(INI):
         key = line.split("=", 1)[0].strip()
-        lines.append("%s = %s\n" % (key, OVERRIDES[key]) if key in OVERRIDES else line)
-    open(INI, "w").writelines(lines)
-
-
-def restore_ini():
-    shutil.copy2(BACKUP, INI)
-    os.remove(BACKUP)
+        lines.append("%s = %s\n" % (key, overrides[key]) if key in overrides else line)
+    open(os.path.join(root, "inis", "PCSX2.ini"), "w").writelines(lines)
+    return home
 
 
 def main():
@@ -76,6 +79,9 @@ def main():
                          "seconds (heartbeats), e.g. a game sitting on the title screen still draws frames")
     ap.add_argument("--progress-seconds", type=float, default=60)
     ap.add_argument("--heartbeat", action="store_true", help="keep the port's heartbeat lines in the output")
+    ap.add_argument("--renderer", choices=("sw", "null"), default="sw",
+                    help="GS renderer: sw (default, the software one) or null (draws nothing: faster, for runs that only "
+                         "check game state; no frame dumps)")
     ap.add_argument("--realtime", action="store_true", help="run at normal speed (default: unlimited)")
     ap.add_argument("--spu2-wav", action="store_true", help="PCSX2's SPU2 debug WAV dump of the emulated output "
                     "(Log_WAVE_Output; written in PCSX2's logs folder), independent of the host's audio output")
@@ -104,7 +110,7 @@ def main():
         args.realtime = True
         recorder = subprocess.Popen(["pw-record", "-P", "{ stream.capture.sink=true }", args.audio],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    patch_ini()
+    config_home = private_config(dict(OVERRIDES, Renderer="11") if args.renderer == "null" else OVERRIDES)  # 11: null
     proc = None
     stalled = False
     try:
@@ -113,7 +119,7 @@ def main():
         proc = subprocess.Popen([args.pcsx2, "-batch", "-slowboot" if args.slowboot else "-fastboot", "-nofullscreen",
                                  *speed, "-logfile", log, *boot],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-                                start_new_session=True)
+                                start_new_session=True, env=dict(os.environ, XDG_CONFIG_HOME=config_home))
         end = time.time() + args.seconds
         # Crash detection, from the port's heartbeat (one line per 60 vertical blanks, i.e. per emulated
         # second, with the presented frame count): the game is considered crashed when it presents no
@@ -161,7 +167,7 @@ def main():
         if recorder:
             recorder.send_signal(signal.SIGINT)
             recorder.wait(5)
-        restore_ini()
+        shutil.rmtree(config_home, ignore_errors=True)
 
     text = open(log, errors="replace").read().splitlines() if os.path.exists(log) else []
     os.remove(log)
