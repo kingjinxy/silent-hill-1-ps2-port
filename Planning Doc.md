@@ -402,6 +402,13 @@ new game crashes, and we can't see why.
 - [ ] Exit to the PS2 browser under Neutrino (LoadExecPS2 rom0:OSDSYS fails in its environment)
 - [ ] Phase 4: tool integration (`pcsx2_run.py --hardware`, sweeps and benchmarks on hardware, RAM
   dumps over the network).
+- [ ] Check the HAL's screen-range crop (2026-11-11, from the MGS port): `libgpu_port.c` PutDispEnv now
+  shows only `screen.h` lines of the display area (doubled when interlaced), as the PS1 does, instead of all
+  `disp.h`. SH1 screens whose `screen.h` is below `disp.h` (the movie player, `stream.c`, sets it from the
+  movie's height) will show fewer lines, centred. Check the framing in gameplay, menus and FMVs.
+- [ ] The heartbeat line now ends with `gap N ms at PC` (HAL `libetc_ps2.c`, 2026-11-11): the longest interval
+  between vertical blank interrupts in the last second and where the code was. Over 16.7 ms means interrupts
+  were off past a vertical blank and one was missed (the counter, and everything paced by it, falls behind).
 
 **Phases** (each ends with a test on the real PS2):
 - *0. Verify the building blocks.* Which modules exist (ps2sdk here has `smap.irx`, `udptty.irx`,
