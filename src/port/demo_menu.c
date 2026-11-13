@@ -394,19 +394,19 @@ void Port_DemoRemote(int idx)
 
 /** From the remote control agent's thread (ps2_ctl.py options N): the Debug Options rendering settings,
  * config.unused_26 (bit 0 Resolution x2, bit 1 Color Depth 32-bit, bit 2 Video Mode 480p, bit 3 Widescreen, bit 4 2D
- * Filter bilinear; options.c). Applied at the next
+ * Filter bilinear, bit 5 Video Mode 720p; options.c). Applied at the next
  * frame (libgpu_port.c). */
 int g_PortDebugPending = -1;
 
 void Port_OptionsRemote(int bits)
 {
-    g_GameWork.config.unused_26 = (s8)(bits & 0x1F);
+    g_GameWork.config.unused_26 = (s8)(bits & 0x3F);
     if (g_GameWork.gameState != GameState_InGame)
     {
-        g_PortDebugPending = bits & 0x1F;
+        g_PortDebugPending = bits & 0x3F;
     }
     printf("demo: options set remotely: %s, %s, %s, widescreen %s, 2D filter %s\n", (bits & 1) ? "x2" : "x1",
-           (bits & 2) ? "32-bit" : "16-bit", (bits & 4) ? "480p" : "480i", (bits & 8) ? "on" : "off",
+           (bits & 2) ? "32-bit" : "16-bit", (bits & 32) ? "720p" : (bits & 4) ? "480p" : "480i", (bits & 40) ? "on" : "off",
            (bits & 0x10) ? "bilinear" : "point");
 }
 

@@ -87,6 +87,7 @@ def main():
                     "(Log_WAVE_Output; written in PCSX2's logs folder), independent of the host's audio output")
     ap.add_argument("--audio", metavar="WAV", help="unmute PCSX2 and record what the default sound output plays "
                     "(PipeWire, pw-record) to WAV; implies --realtime")
+    ap.add_argument("--emu-log", metavar="FILE", help="write PCSX2's own stdout/stderr here (default: discarded)")
     ap.add_argument("--set", metavar="KEY=VALUE", action="append", default=[],
                     help="another PCSX2.ini setting for this run (repeatable), e.g. --set \"AspectRatio=16:9\"")
     args = ap.parse_args()
@@ -116,6 +117,7 @@ def main():
         recorder = subprocess.Popen(["pw-record", "-P", "{ stream.capture.sink=true }", args.audio],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     config_home = private_config(dict(OVERRIDES, Renderer="11") if args.renderer == "null" else OVERRIDES)  # 11: null
+    emu_out = open(args.emu_log, "w") if args.emu_log else subprocess.DEVNULL
     proc = None
     stalled = False
     try:
@@ -123,7 +125,8 @@ def main():
         speed = [] if args.realtime else ["-unlimited"]
         proc = subprocess.Popen([args.pcsx2, "-batch", "-slowboot" if args.slowboot else "-fastboot", "-nofullscreen",
                                  *speed, "-logfile", log, *boot],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                                stdout=emu_out, stderr=subprocess.STDOUT if args.emu_log else subprocess.DEVNULL,
+                                stdin=subprocess.DEVNULL,
                                 start_new_session=True, env=dict(os.environ, XDG_CONFIG_HOME=config_home))
         end = time.time() + args.seconds
         # Crash detection, from the port's heartbeat (one line per 60 vertical blanks, i.e. per emulated

@@ -12,7 +12,7 @@ sh1agent.irx (src/port/iop/sh1agent, UDP port 62968) and prints its answer.
     python3 tools/port/ps2_ctl.py newgame      # start a New Game (normal difficulty), from anywhere
     python3 tools/port/ps2_ctl.py rec route1   # record from the next save loaded (8 chars; "rec stop" stops)
     python3 tools/port/ps2_ctl.py replay docks1  # send rec/docks1.dem and play it (title: REPLAY, Start)
-    python3 tools/port/ps2_ctl.py options 3    # Debug Options rendering: bit 0 Resolution x2, bit 1 32-bit, bit 2 480p
+    python3 tools/port/ps2_ctl.py options 3    # Debug Options rendering: bit 0 Resolution x2, bit 1 32-bit, bit 2 480p, bit 3 widescreen, bit 5 720p
 
 md takes an address (hex) or a symbol of the running build (build/port/sh1.elf, e.g. g_WorldMapWork or
 g_WorldMapWork+0x138) and a length (at most 64 KB per command); it waits for the game's "md" lines in
@@ -172,7 +172,7 @@ def main():
             print("%08x  %s+0x%x" % (pc, syms[i][1], pc - syms[i][0]) if i >= 0 else "%08x" % pc)
         return 0
     if args.command == "options":
-        answer = send(args.ip, "options", payload=struct.pack("<II", int(args.addr or "0", 0) & 0x1F, 0), tries=1,
+        answer = send(args.ip, "options", payload=struct.pack("<II", int(args.addr or "0", 0) & 0x3F, 0), tries=1,
                       timeout=2.0)
         print(answer if answer is not None else "ps2_ctl: no answer from %s" % args.ip)
         sys.exit(0 if answer is not None else 1)

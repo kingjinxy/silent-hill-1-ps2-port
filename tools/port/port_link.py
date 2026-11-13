@@ -238,8 +238,6 @@ def main():
     # Video mode switch method (src/port/ps2/display_ps2.c): SH1_MODESWITCH=0 gsKit's full setup (GS
     # reset + SetGsCrt, the default), 1 SetGsCrt without the reset, 2 only SMODE2 and the display window.
     dump += ["-DSH_PORT_MODESWITCH=" + os.environ["SH1_MODESWITCH"]] if os.environ.get("SH1_MODESWITCH") else []
-    # 720p output test (display_ps2.c): the 480p setting outputs 720p, the 2x buffer doubled horizontally: SH1_720P_TEST=1.
-    dump += ["-DSH_PORT_720P_TEST"] if os.environ.get("SH1_720P_TEST") else []
     # Single-buffered interlaced screens drawn one field at a time as on the PS1 (SCANMSK) and shown
     # straight from VRAM, instead of a snapshot copy (src/port/ps2/gpu_gs.c): SH1_INTERLACE_FIELDS=1.
     # Broken in PCSX2 (2026-10-17); to test on hardware.

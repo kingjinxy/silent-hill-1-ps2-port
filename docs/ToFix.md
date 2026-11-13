@@ -38,7 +38,7 @@ Known issues, tabled for now (collected 2026-10-19, mostly from the console cuts
 - **TLB Miss in sifrpc `_request_end` during a bench frame dump (found 2026-10-28, PCSX2, not yet investigated).**
   - Kaufmann (demo cutscene 4) at 2x/32-bit, `SH1_BENCH=1 SH1_LITEPROF=1`, while `display_ps2.c` wrote `host:vram_3899.ppm`: `pc=0x447850 addr=0x10 [load]`, then stores at 0x18 and 0x10. The game carried on.
   - `_request_end` (ps2sdk `sifrpc.c:309`) reads `client->hdr.pkt_addr`, which was NULL: a reply for a request already ended, as if two callers used one RPC client at once (the frame dump's host file I/O against another fileio user; HAL threads are real since dfb22660e). On a console this faults in the SIF interrupt handler.
-  - Not seen at 1x in the same cutscene. Seen again 2026-10-28 in the `docks1` replay at 2x/32-bit (`SH1_BENCH=1 SH1_PROF=1`, step ~990, opening `host:frame_5012.ppm`), same PC: it comes with the bench frame dumps, not one scene.
+  - Not seen at 1x in the same cutscene. Seen again 2026-10-28 in the `docks1` replay at 2x/32-bit (`SH1_BENCH=1 SH1_PROF=1`, step ~990, opening `host:frame_5012.ppm`), same PC: it comes with the bench frame dumps, not one scene. Again 2026-11-13 in Kaufmann at 720p (opening `host:frame_3892.ppm`, pc 0x448ae0, the same `_request_end`).
 
 - **Cutscene voices run ahead of animation and subtitles (console, 2026-11-01, not yet investigated).**
   - Seen in a map6_s04 scene (just before map7_s00 loaded) and in the first map7_s00 cutscene; voices get ahead of the picture and subtitles.

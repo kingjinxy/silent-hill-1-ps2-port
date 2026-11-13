@@ -1,7 +1,7 @@
 /** @brief Frame capture for comparing with DuckStation (tools/port/compare_frames.py). `host:capture.txt`
  * (next to the disc image) lists frames of an attract demo (g_Demo_DemoStep values), plus optional
  * `demo=N` (the Nth demo played, from 1; default 1) and `mode=N` (the Debug Options rendering bits
- * forced, g_PortHiresOption: 1 2x, 2 32-bit, 4 480p; default: the saved options). With `load=F:D`,
+ * forced, g_PortHiresOption: 1 2x, 2 32-bit, 4 480p, 32 720p; default: the saved options). With `load=F:D`,
  * the save is loaded instead, file F's Data D on card 1 through Load Game (title.c, saveload.c), and frames are vertical blanks of gameplay
  * (g_SysWork.gameStateCounter in GameState_InGame), each captured at the first frame reaching it.
  * `walk` (with load=): Harry turns 90 degrees right and walks 1.5 s first (joy.c), and frames count

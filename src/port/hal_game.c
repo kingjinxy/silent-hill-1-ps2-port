@@ -92,7 +92,7 @@ static s32 widescreen_mode(void)
 #ifdef SH_PORT_WIDESCREEN
     on = 1;
 #else
-    on = (g_GameWork.config.unused_26 >> 3) & 1;
+    on = (g_GameWork.config.unused_26 & (8 | 32)) != 0; /* Debug Options: Widescreen, or 720p */
 #endif
     GpuGs_SetMovieXScale(on ? WS_SQUEEZE : Q12(1.0f));
     GpuGs_SetXScaleFilter((g_GameWork.config.unused_26 >> 4) & 1); /* Debug Options: 2D Filter */
@@ -222,7 +222,7 @@ int HalGame_DisplayMode(void)
     {
         return Capture_Mode(); /* compare_frames.py --mode */
     }
-    return g_GameWork.config.unused_26 & 7; /* Debug Options: Resolution, Color Depth, Video Mode (options.c) */
+    return g_GameWork.config.unused_26 & 0x27; /* Debug Options: Resolution, Color Depth, Video Mode (bits 2 and 5; options.c) */
 }
 
 void HalGame_Init(void)

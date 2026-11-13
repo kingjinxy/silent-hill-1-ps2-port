@@ -7,6 +7,11 @@
 #define HAL_GAME_NAME         "SH1"
 #define HAL_GAME_PSX_RAM_SIZE 0x200000 /* as PSX_RAM_SIZE (include/decomp/psx_mem.h) */
 
+/* 720p renderer (gpu_gs.c): the VRAM rows of the display buffers (320x224 at y 32 and 256; some screens
+ * 320x240, to row 495), the only rows drawn at 720p's 2x3 scale. */
+#define HAL_GAME_HR720_Y0 32
+#define HAL_GAME_HR720_Y1 512
+
 /* Disc (ps2/libcd_ps2.c): SILENT. (2048-byte sectors) from PS1 sector 64, HILL. (raw 2336-byte XA
  * sectors) right after it. */
 #define HAL_GAME_CD_DATA_FILE       "\\SILENT.;1"

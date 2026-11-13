@@ -65,7 +65,9 @@ static s32 g_ExtraOptionsMenu_BulletMultMax;
  * other options:
  *   Resolution: x1, or the GS renderer's 2x mode (libgpu_port.c, gpu_gs.c HIRES_ADDR); unused_26 bit 0.
  *   Color Depth: 16-bit, or 32-bit drawing (true colour: no 5-bit quantization or dithering); bit 1.
- *   Video Mode: how 2x screens are shown, 480i or 480p (display_ps2.c); bit 2.
+ *   Video Mode: how 2x screens are shown, 480i or 480p (display_ps2.c); bit 2. Or 720p (bit 5): 320-wide
+ *     screens drawn at 2x wide, 3x high, shown in 720p; overrides Resolution and Color Depth, and
+ *     widescreen is always on.
  *   Widescreen: anamorphic 16:9 (include/port/widescreen.h); bit 3.
  *   2D Filter: widescreen's squeezed 2D sprites (text) point-sampled or bilinear (gpu_gs.c); bit 4.
  * TEMPORARY: Triangle is also one of the default Cancel buttons; on the main options screen it now
@@ -124,8 +126,19 @@ static void Port_DebugEntryChange(s32 i)
             *bits ^= 2;
             break;
 
-        case 2: /* Video Mode */
-            *bits ^= 4;
+        case 2: /* Video Mode: 480i, 480p, 720p (bit 5), 480i */
+            if (*bits & 32)
+            {
+                *bits &= ~(4 | 32);
+            }
+            else if (*bits & 4)
+            {
+                *bits = (*bits & ~4) | 32;
+            }
+            else
+            {
+                *bits |= 4;
+            }
             break;
 
         case 3: /* Widescreen */
@@ -142,7 +155,7 @@ static void Port_DebugEntryChange(s32 i)
     }
     else if (g_GameWork.gameStatePrev != GameState_InGame)
     {
-        g_PortDebugPending = *bits & 0x1F; /* from the title: replaces the next loaded save's (memcard.c) */
+        g_PortDebugPending = *bits & 0x3F; /* from the title: replaces the next loaded save's (memcard.c) */
     }
 }
 
@@ -158,10 +171,10 @@ static const char* Port_DebugEntryValue(s32 i)
             return (*Port_DebugBits() & 2) ? "32-bit" : "16-bit";
 
         case 2:
-            return (*Port_DebugBits() & 4) ? "480p" : "480i";
+            return (*Port_DebugBits() & 32) ? "720p" : (*Port_DebugBits() & 4) ? "480p" : "480i";
 
         case 3:
-            return (*Port_DebugBits() & 8) ? "16:9" : "Off";
+            return (*Port_DebugBits() & (8 | 32)) ? "16:9" : "Off"; /* 720p: always widescreen */
 
         case 4:
             return (*Port_DebugBits() & 16) ? "Bilinear" : "Nearest";
@@ -290,7 +303,7 @@ void GameState_Options_Update(void) // 0x801E2D44
                 // REPLAY page: the debug list straight away (the fade-in above shows it).
                 if (g_PortReplayBits < 0)
                 {
-                    g_PortReplayBits = g_GameWork.config.unused_26 & 0x1F;
+                    g_PortReplayBits = g_GameWork.config.unused_26 & 0x3F;
                 }
                 s_PortDebugPage               = 1;
                 s_PortReplay                  = 1;

@@ -250,7 +250,7 @@ void Port_RecContinue(void)
         g_GameWork.savegame  = s_Rec.state.savegame;
         if (s_Override >= 0)
         {
-            g_GameWork.config.unused_26 = (g_GameWork.config.unused_26 & ~0x1F) | s_Override;
+            g_GameWork.config.unused_26 = (g_GameWork.config.unused_26 & ~0x3F) | s_Override;
         }
     }
     g_Demo_RandSeed             = s_Rec.state.randSeed;
