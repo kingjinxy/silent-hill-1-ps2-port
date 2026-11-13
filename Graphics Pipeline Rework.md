@@ -102,6 +102,7 @@ Steps 5-9 follow how Dark Cloud and ICO use the PS2 ([PS2 Decomps Analysis.md](P
 Not planned, as they change pixels or don't fit a PS1 game: a per-scene GS allocator or textures converted at load (the PS1 game writes VRAM at any time, so the LRU cache stays), Z buffers, mipmaps, float transforms, threads for speed (one EE core; steps 1-2 already hide the waits).
 
 ### 5. VU1 packet expansion
+**Tabled 2026-11-13.** PCSX2 split (docs/profiles/2026-11-03.md): emit, the part VU1 replaces, is ~16% of DrawOTag at 2x/32-bit (Kaufmann 619k of 3,794k, Docks 138k of 866k); state is 42-45%. Likely gain ≤ 0.3-0.5M cycles a frame. Before deciding: one console `SH1_LITEPROF` run of the same two scenes, since the console's DrawOTag is 1.6-3.7x PCSX2's and the extra isn't attributed. If emit's share stays small, texture/drawing state is the better target.
 The EE writes a compact record per primitive; a VU1 microprogram expands it into GS packets and sends them over PATH1. Integer moves only, so exact. The "emit" stage (~850 cycles a polygon in Kaufmann, the largest of parse/state/emit) mostly leaves the EE; VU1 is idle today.
 - [ ] Record format: vertices (screen XY, Z for the OT order only), colours, UVs, page cache slot / CLUT row, blend mode, kind. Measure its size against today's GS packets.
 - [ ] VU1 setup: microprogram upload at boot, double-buffered VU1 data memory (XTOP), records sent by VIF1 DMA, PATH1 output; PATH3 (uploads) ordering against PATH1 kept with the current GS commands' order.

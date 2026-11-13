@@ -71,6 +71,8 @@ python3 tools/port/ps2_ctl.py deploy
 ## Emulators
 
 - **PCSX2:** run through `tools/port/pcsx2_run.py`. It uses the software GS renderer (`Renderer = 13`); keep it.
+  - Each run gets a private PCSX2 data folder (`XDG_CONFIG_HOME`, a patched copy of `PCSX2.ini`), so runs can
+    go in parallel with the MGS port's (which uses this script too). Memory cards and BIOS are still shared.
   - 15 emulated seconds without a new frame means a crash; end the run instead of waiting for a timeout.
   - **Never dismiss "TLB Miss" lines.** A real PS2 faults where PCSX2 carries on (decompiled PS1 code reads
     through NULL freely). Collect the PCs and fix each.

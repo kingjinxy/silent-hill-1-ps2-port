@@ -87,8 +87,13 @@ def main():
                     "(Log_WAVE_Output; written in PCSX2's logs folder), independent of the host's audio output")
     ap.add_argument("--audio", metavar="WAV", help="unmute PCSX2 and record what the default sound output plays "
                     "(PipeWire, pw-record) to WAV; implies --realtime")
+    ap.add_argument("--set", metavar="KEY=VALUE", action="append", default=[],
+                    help="another PCSX2.ini setting for this run (repeatable), e.g. --set \"AspectRatio=16:9\"")
     args = ap.parse_args()
     elf = os.path.abspath(args.elf)
+    for kv in args.set:
+        key, value = kv.split("=", 1)
+        OVERRIDES[key.strip()] = value.strip()
     log = tempfile.NamedTemporaryFile(suffix=".log", delete=False).name
 
     stop = []  # SIGTERM: end the run as at its time limit, still printing the log (callers stopping it early)
