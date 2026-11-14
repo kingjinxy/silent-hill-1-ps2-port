@@ -1623,3 +1623,10 @@ stays 320 wide and a TV in 16:9 mode stretches it. Overview in `include/port/wid
 - Full run on hardware, build of Nov 1 07:56:30 (one power cycle partway), from map4_s05 through Nowhere to the Good+ ending and a new game plus save. No crash, exception or hang logged.
 - Newspaper fix confirmed: the clipping could be read in Nowhere.
 - Music runs too fast in Video Mode 480p, correct in 240p. Found by test; other bugs seen are in docs/ToFix.md.
+
+## 2026-11-14: warm-restart hang fixed (IOP reset before LoadExecPS2)
+
+- Read Neutrino v1.8.0's source (the user's binaries are in `neutrino-sh/`, source cloned to `../neutrino-src`). Second start of `ee_core` (from LoadExecPS2): WipeUserMemory, then `New_Reset_Iop2` → `services_start()` (`SifInitRpc`) on the *old* IOP, then the reboot (irm = [2, 2, 0], compat.toml). Neutrino's comment there: "some games hang here because the IOP is not responding".
+- Reproduced with a restart loop: restart 3 stopped after "quiescing"; ping answered by the old agent ("EE: restarting"), IOP ch10 CHCR 701 MADR 0001a3b0, 0 transfers to the EE in 100 ms. (A healthy boot also shows ch10 CHCR 701, so that value alone isn't a symptom.)
+- Fix in the HAL's Port_Restart: SifExitRpc, `SifIopReset("", 0)`, wait for SifIopSync (3 s timeout, red), then LoadExecPS2. Neutrino hooks the reset (New_SifSetDma → reboot with its modules), so the EE core then talks to a quiet IOP. Screen: green (0.5 s), cyan (IOP reset), blue (LoadExecPS2).
+- Result: 15/15 warm restarts and 5/5 rebuild-and-deploys came up (each to vblank 900, past the old Konami-logo hang at vblank 480).

@@ -28,3 +28,6 @@ Zone.Identifier
 # PS2 port build output
 /port/**/*.elf
 /port/**/*.o
+
+# Local reference copy of the Neutrino release on the USB stick (not part of the port)
+/neutrino-sh/

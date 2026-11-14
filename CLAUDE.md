@@ -59,7 +59,8 @@ python3 tools/port/ps2_ctl.py deploy
   `~/ps2serve/ps2.log`. The PS2 picks the game by the Neutrino folder started (`neutrino` boots `sh1_ps2.iso`,
   `neutrino_mgs` boots `mgs_ps2.iso`); a deploy restarts whichever game is running. When filtering the log, filter by line number, not timestamp:
   the file contains old runs.
-- Remote restarts (`ps2_ctl.py deploy`/restart) often freeze 5–8 s after boot. A cold boot works.
+- Tested with Neutrino **v1.8.0** (stock, `config/compat.toml` `eecore.irm = [2, 2, 0]`; a local copy in `neutrino-sh/`, git-ignored). The restart fix depends on how this version's EE core handles LoadExecPS2 (source: `ee/ee_core/src/main.c`, `iopmgr.c`); re-test restarts after changing the Neutrino version or its `irm`.
+- Remote restarts (`ps2_ctl.py deploy`/restart) used to freeze often; fixed 2026-11-14 by an IOP reset before LoadExecPS2 (docs/ToFix.md). If one hangs, note the screen colour (cyan: IOP reset, blue: LoadExecPS2).
 - **When the PS2 hangs, ask the user to power-cycle** (hold power, restart Neutrino from uLaunchELF). RESET
   never revives Neutrino on their console.
 - If Neutrino shows a black screen and drops to OSDSYS, the UDPFS server is stale:
