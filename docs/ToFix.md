@@ -45,9 +45,9 @@ Known issues, tabled for now (collected 2026-10-19, mostly from the console cuts
   - Log: XA streams had 0 gaps, started within 42 ms, slowest read 79 ms, so disc streaming looks fine. In the first scene nearly every line from 3887 s logged "XA stream cut off" after 1-3.6 s; in the map7_s00 scene almost all lines played to end of file.
   - The first scene never ended on its own (last voice line 3960 s, nothing by 4040 s, still drawing); Start skipped it. The map was map6_s04 (loaded 3340 s, next load map7_s00 at 4077 s), so it isn't the map6_s02 soft-lock above, though it looks alike.
   - Next: compare one of these scenes against DuckStation and a 30 fps build.
-- **Music too fast in Video Mode 480p (console, 2026-11-01, cause found by test, not fixed).**
-  - All music runs fast at 480p and is correct at 240p; switching the setting changes it. The setting outlives a return to the title and a power cycle.
-  - Likely cause: the sound tick's kernel alarm counts horizontal blanks, and the HAL's `spu_ps2.c` assumes NTSC's 15,734 a second; 480p has about 31,469. Fix: take the rate from the current video mode, including when the mode changes while the tick runs.
+- **Music that stopped resumes when leaving the area (low priority, seen for a while on console).**
+  - Clearest case: the Café. The music stops when the Air Screamer dies, then starts again as Harry leaves.
+  - Not investigated. Check against DuckStation first: is it the port, or does the PS1 game do it too?
 
 ## Renderer (gpu_gs.c)
 
