@@ -74,6 +74,11 @@ python3 tools/port/ps2_ctl.py deploy
   - Each run gets a private PCSX2 data folder (`XDG_CONFIG_HOME`, a patched copy of `PCSX2.ini`), so runs can
     go in parallel with the MGS port's (which uses this script too). Memory cards and BIOS are still shared.
   - 15 emulated seconds without a new frame means a crash; end the run instead of waiting for a timeout.
+  - **Try PINE when debugging in PCSX2.** PCSX2's IPC socket (`EnablePINE = true` in that run's
+    PCSX2.ini) reads EE memory from the host while the game runs or is hung, with no debugger or
+    extra output. Record state (callers, counters, thread ids) in globals, find their addresses with
+    `nm`, and read them. Reader: `tp-ps2/tools/ps2/pine_read.py <wait_s> <hex addr> <count>`. It
+    found the TP port's interrupt hang (2026-11-13) after logging kept changing the timing.
   - **Never dismiss "TLB Miss" lines.** A real PS2 faults where PCSX2 carries on (decompiled PS1 code reads
     through NULL freely). Collect the PCs and fix each.
   - Cutscene tests pass once they reach 30 emulated seconds of gameplay (`--gameplay 30`).
